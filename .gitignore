@@ -1,0 +1,54 @@
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+debug_logs/
+
+# Models and Cache
+models/
+semantic_cache/
+finetuned_models/
+
+# Database
+*.db
+*.sqlite
+
+# Backup files
+backup/
+
+# Node modules (for frontend)
+node_modules/
+human-review-ui/node_modules/
+human-review-ui/build/
+
+# Environment files with sensitive data
+.env
+*.env
+
+# Temporary files
+*.tmp
+*.temp

@@ -80,7 +80,12 @@ class InteractiveTrainer:
             try:
                 # Usa la prima conversazione rappresentativa per la proposta LLM
                 sample_text = representatives[0].get('testo_completo', representatives[0].get('conversation', ''))
-                llm_suggestion, llm_confidence, llm_motivation = self.llm_classifier.classify_with_motivation(sample_text)
+                
+                # Il metodo classify_with_motivation ritorna un oggetto ClassificationResult
+                llm_result = self.llm_classifier.classify_with_motivation(sample_text)
+                llm_suggestion = llm_result.predicted_label
+                llm_confidence = llm_result.confidence
+                llm_motivation = llm_result.motivation
                 
                 print(f"   Etichetta: '{llm_suggestion}' (confidenza: {llm_confidence:.3f})")
                 print(f"   Motivazione: {llm_motivation}")

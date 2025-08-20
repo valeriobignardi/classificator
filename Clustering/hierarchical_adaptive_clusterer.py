@@ -395,7 +395,11 @@ class HierarchicalAdaptiveClusterer:
                 try:
                     if self.llm_classifier and hasattr(self.llm_classifier, 'classify_conversation'):
                         # METODO PRIMARIO: classify_conversation
-                        prediction, confidence, motivation = self.llm_classifier.classify_conversation(rep_text)
+                        # Il metodo classify_conversation ritorna un dizionario
+                        llm_result = self.llm_classifier.classify_conversation(rep_text)
+                        prediction = llm_result['predicted_label']
+                        confidence = llm_result['confidence']
+                        motivation = llm_result['motivation']
                         self.llm_usage_stats['classify_conversation_calls'] += 1
                         
                         prediction_data = {

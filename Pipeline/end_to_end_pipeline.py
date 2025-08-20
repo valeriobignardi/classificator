@@ -658,7 +658,7 @@ class EndToEndPipeline:
         
         # Aggiungi statistiche del review interattivo
         if interactive_mode:
-            feedback_stats = self.interactive_trainer.get_feedback_statistics()
+            feedback_stats = self.interactive_trainer.get_feedback_summary()
             metrics.update({
                 'interactive_review': True,
                 'reviewed_clusters': len(reviewed_labels),

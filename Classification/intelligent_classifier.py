@@ -55,6 +55,15 @@ except ImportError:
     MistralFineTuningManager = None
     FINETUNING_AVAILABLE = False
 
+# Import per MySQL
+try:
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'MySql'))
+    from connettore import MySqlConnettore
+    MYSQL_AVAILABLE = True
+except ImportError:
+    MySqlConnettore = None
+    MYSQL_AVAILABLE = False
+
 # Import per MongoDB
 try:
     sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'MongoDB'))
@@ -193,6 +202,18 @@ class IntelligentClassifier:
                     print(f"⚠️ Fine-tuning manager non disponibile: {e}")
                 self.finetuning_manager = None
         
+        # MySQL connector per gestione TAG.tags
+        self.mysql_connector = None
+        if MYSQL_AVAILABLE:
+            try:
+                self.mysql_connector = MySqlConnettore()
+                if enable_logging:
+                    print(f"🗄️ MySQL connector inizializzato per TAG.tags")
+            except Exception as e:
+                if enable_logging:
+                    print(f"⚠️ MySQL connector non disponibile: {e}")
+                self.mysql_connector = None
+
         # MongoDB connector (se disponibile)
         self.mongo_connector = None
         if MONGODB_AVAILABLE:
@@ -225,6 +246,18 @@ class IntelligentClassifier:
         else:
             self.logger = logging.getLogger(__name__)
             self.logger.addHandler(logging.NullHandler())
+        
+        # INTEGRAZIONE MYSQL: Inizializzazione connector database
+        self.mysql_connector = None
+        try:
+            from TagDatabase.tag_database_connector import TagDatabaseConnector
+            self.mysql_connector = TagDatabaseConnector()
+            if enable_logging:
+                self.logger.info("✅ TagDatabaseConnector inizializzato con successo")
+        except Exception as e:
+            if enable_logging:
+                self.logger.error(f"❌ Errore inizializzazione TagDatabaseConnector: {e}")
+            self.mysql_connector = None
         
         # Cache per le predizioni
         self._prediction_cache = {}
@@ -259,28 +292,24 @@ class IntelligentClassifier:
             'response_times': []
         }
         
-        # Etichette predefinite del dominio ospedaliero
-        self.domain_labels = [
-            'ritiro_cartella_clinica_referti',
-            'prenotazione_esami',
-            'info_contatti',
-            'cambio_anagrafica',
-            'problema_accesso_portale',
-            'info_esami',
-            'info_interventi',
-            'info_certificati',
-            'info_ricovero',
-            'info_parcheggio',
-            'indicazioni_stradali',
-            'problema_prenotazione_portale',
-            'norme_di_preparazione',
-            'problema_amministrativo',
-            'strutture_convenzionate_alberghiere',
-            'convenzioni_viaggio',
-            'parere_medico',
-            'altro'
-        ]
+        # Carica etichette dinamicamente dal database TAG.tags
+        self.domain_labels = []
+        self.label_descriptions = {}  # Mappa tag_name -> tag_description
+        self._load_domain_labels_from_database()
         
+        # Fallback etichette di base se DB vuoto (prima esecuzione)
+        if not self.domain_labels:
+            self.domain_labels = ['altro']  # Solo etichetta base
+            if enable_logging:
+                print(f"⚠️ Nessuna etichetta trovata in TAG.tags - Prima esecuzione")
+        else:
+            if enable_logging:
+                print(f"✅ Caricate {len(self.domain_labels)} etichette da TAG.tags")
+
+
+
+
+
 
 
 
@@ -1214,7 +1243,7 @@ OUTPUT (SOLO JSON):"""
         
         return response
     
-    def _parse_llm_response(self, response_text: str) -> Tuple[str, float, str]:
+    def _parse_llm_response(self, response_text: str, conversation_text: str = "") -> Tuple[str, float, str, str]:
         """
         Parsa la risposta JSON del modello LLM con auto-validazione e correzione
         
@@ -1254,11 +1283,23 @@ OUTPUT (SOLO JSON):"""
             if not motivation:
                 motivation = f"Classificato come {predicted_label}"
             
-            # Normalizza etichetta
-            predicted_label = self._normalize_label(predicted_label)
+            # NUOVO: Risoluzione semantica intelligente
+            resolved_label, resolution_method, semantic_confidence = self._semantic_label_resolution(
+                predicted_label, conversation_text  # Passa il testo della conversazione
+            )
             
-            self.logger.debug(f"Parsing completato: {predicted_label} (conf: {confidence:.3f})")
-            return predicted_label, confidence, motivation
+            # Aggiorna confidence basandosi sulla qualità della risoluzione
+            if resolution_method == "DIRECT_MATCH":
+                final_confidence = confidence
+            elif resolution_method == "SEMANTIC_MATCH":
+                final_confidence = min(confidence, semantic_confidence + 0.1)
+            elif resolution_method == "BERTOPIC_NEW_CATEGORY":
+                final_confidence = min(confidence, semantic_confidence)
+            else:
+                final_confidence = max(0.1, confidence - 0.2)  # Penalizza fallback
+            
+            self.logger.debug(f"Risoluzione semantica: '{predicted_label}' → '{resolved_label}' via {resolution_method} (conf: {final_confidence:.3f})")
+            return resolved_label, final_confidence, motivation, predicted_label  # Include etichetta originale
             
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
             self.logger.warning(f"Errore parsing/validazione: {e}")
@@ -1542,8 +1583,8 @@ OUTPUT (SOLO JSON):"""
             
             raw_response = self._call_ollama_api_with_retry(prompt)
             
-            # Parsa la risposta
-            predicted_label, confidence, motivation = self._parse_llm_response(raw_response)
+            # Parsa la risposta con testo per risoluzione semantica
+            predicted_label, confidence, motivation, original_llm_label = self._parse_llm_response(raw_response, conversation_text)
             
             processing_time = time.time() - start_time
             
@@ -1589,8 +1630,8 @@ OUTPUT (SOLO JSON):"""
             if self.enable_embeddings and self.embedder is not None:
                 validated_result = self._validate_llm_classification_with_embedding(conversation_text, llm_result)
                 
-                # FASE 6: Rilevazione potenziali nuove categorie
-                final_result = self._detect_potential_new_category(conversation_text, validated_result)
+                # FASE 6: Rilevazione potenziali nuove categorie con etichetta originale
+                final_result = self._detect_potential_new_category(conversation_text, validated_result, original_llm_label)
             else:
                 final_result = llm_result
             
@@ -2163,7 +2204,9 @@ OUTPUT (SOLO JSON):"""
             self.logger.warning(f"Errore ricerca categoria simile: {e}")
             return None
     
-    def _detect_potential_new_category(self, conversation_text: str, llm_result: ClassificationResult) -> ClassificationResult:
+    def _detect_potential_new_category(self, conversation_text: str, 
+                                      llm_result: ClassificationResult,
+                                      original_llm_label: Optional[str] = None) -> ClassificationResult:
         """
         Rileva se il testo potrebbe richiedere una nuova categoria
         """
@@ -2171,7 +2214,27 @@ OUTPUT (SOLO JSON):"""
             return llm_result
         
         try:
-            # Solo se LLM ha classificato come "altro" con bassa confidence
+            # NUOVO CHECK: Verifica se LLM ha proposto una categoria non esistente
+            if (original_llm_label and 
+                original_llm_label not in self.domain_labels and
+                original_llm_label != 'altro' and
+                llm_result.predicted_label == 'altro'):  # Normalizzazione ha forzato "altro"
+                
+                # LLM ha proposto una categoria nuova che è stata normalizzata!
+                self.stats['new_categories_detected'] += 1
+                self.logger.info(f"🆕 LLM ha proposto categoria inesistente: '{original_llm_label}' → normalizzata ad 'altro'")
+                
+                return ClassificationResult(
+                    predicted_label="categoria_nuova_proposta",
+                    confidence=min(0.8, llm_result.confidence + 0.2),
+                    motivation=f"LLM ha proposto '{original_llm_label}' non presente nel dominio corrente. Potenziale nuova categoria.",
+                    method="LLM_NEW_CATEGORY_PROPOSAL",
+                    raw_response=llm_result.raw_response,
+                    processing_time=llm_result.processing_time + 0.01,
+                    timestamp=datetime.now().isoformat()
+                )
+            
+            # CHECK ORIGINALE: Solo se LLM ha classificato come "altro" con bassa confidence
             if llm_result.predicted_label == "altro" and llm_result.confidence < 0.4:
                 
                 # Genera embedding
@@ -2344,6 +2407,362 @@ OUTPUT (SOLO JSON):"""
         except Exception as e:
             self.logger.error(f"Errore switch al modello base: {e}")
             return False
+    
+    # ==================== METODI GESTIONE TAG DATABASE ====================
+    
+    def _load_domain_labels_from_database(self):
+        """
+        Carica etichette esistenti dalla tabella TAG.tags
+        """
+        if not self.mysql_connector:
+            self.logger.warning("TagDatabase connector non disponibile - skip caricamento etichette")
+            return
+        
+        try:
+            # Recupera tutti i tag dal database usando TagDatabaseConnector
+            tags_data = self.mysql_connector.get_all_tags()
+            
+            if tags_data:
+                self.domain_labels = []
+                self.label_descriptions = {}
+                
+                for tag_info in tags_data:
+                    tag_name = tag_info['tag_name']
+                    tag_description = tag_info.get('tag_description', '')
+                    
+                    self.domain_labels.append(tag_name)
+                    if tag_description:
+                        self.label_descriptions[tag_name] = tag_description
+                
+                self.logger.info(f"✅ Caricate {len(self.domain_labels)} etichette da TAG.tags")
+            else:
+                self.logger.info("📋 Nessuna etichetta trovata in TAG.tags (prima esecuzione)")
+            
+        except Exception as e:
+            self.logger.error(f"❌ Errore caricamento etichette: {e}")
+            # Non solleva eccezione - fallback gestito dal chiamante
+            self.mysql_connector.disconnetti()
+            
+        except Exception as e:
+            self.logger.error(f"Errore caricamento etichette da database: {e}")
+            try:
+                self.mysql_connector.disconnetti()
+            except:
+                pass
+
+    def _add_new_validated_label(self, tag_name: str, tag_description: str, 
+                                confidence: float, validation_method: str) -> bool:
+        """
+        Aggiunge una nuova etichetta validata alla tabella TAG.tags
+        
+        Args:
+            tag_name: Nome dell'etichetta
+            tag_description: Descrizione semantica dell'etichetta
+            confidence: Confidence della validazione
+            validation_method: Metodo di validazione utilizzato
+            
+        Returns:
+            True se inserimento riuscito
+        """
+        if not self.mysql_connector:
+            self.logger.warning("TagDatabase connector non disponibile - skip inserimento etichetta")
+            return False
+        
+        try:
+            # Aggiungi il tag usando TagDatabaseConnector
+            success = self.mysql_connector.add_tag_if_not_exists(
+                tag_name=tag_name,
+                tag_description=tag_description
+            )
+            
+            if success:
+                # Aggiungi anche alle strutture in memoria per uso immediato
+                if tag_name not in self.domain_labels:
+                    self.domain_labels.append(tag_name)
+                    self.label_descriptions[tag_name] = tag_description
+                
+                self.logger.info(f"✅ Nuova etichetta aggiunta: '{tag_name}' (confidence: {confidence:.2f})")
+                return True
+            else:
+                self.logger.warning(f"⚠️ Etichetta '{tag_name}' non aggiunta (potrebbe esistere già)")
+                return False
+            
+        except Exception as e:
+            self.logger.error(f"❌ Errore inserimento etichetta '{tag_name}': {e}")
+            return False
+
+    def _reload_domain_labels(self):
+        """
+        Ricarica le etichette dal database dopo un inserimento
+        """
+        self.logger.info("🔄 Ricaricamento etichette da TAG.tags...")
+        old_count = len(self.domain_labels)
+        self._load_domain_labels_from_database()
+        new_count = len(self.domain_labels)
+        
+        if new_count > old_count:
+            self.logger.info(f"📈 Etichette aggiornate: {old_count} → {new_count}")
+        
+    # ==================== METODI RISOLUZIONE SEMANTICA ====================
+    
+    def _semantic_label_resolution(self, proposed_label: str, 
+                                  conversation_text: str) -> Tuple[str, str, float]:
+        """
+        Risoluzione semantica dell'etichetta - ZERO hardcoding
+        
+        Args:
+            proposed_label: Etichetta proposta dall'LLM
+            conversation_text: Testo originale della conversazione
+            
+        Returns:
+            (final_label, resolution_method, confidence_score)
+        """
+        original_label = proposed_label.strip().lower().replace(' ', '_')
+        
+        # FASE 1: Verifica diretta (se è già nel dominio)
+        if original_label in self.domain_labels:
+            return original_label, "DIRECT_MATCH", 1.0
+        
+        # FASE 2: Risoluzione semantica con embeddings
+        if self.embedder is not None:
+            semantic_result = self._resolve_label_semantically(
+                original_label, conversation_text
+            )
+            if semantic_result['found_match']:
+                return (
+                    semantic_result['matched_label'], 
+                    "SEMANTIC_MATCH", 
+                    semantic_result['confidence']
+                )
+        
+        # FASE 3: Validazione con BERTopic per nuova categoria
+        if hasattr(self, 'bertopic_provider') and self.bertopic_provider:
+            bertopic_result = self._evaluate_new_category_with_bertopic(
+                original_label, conversation_text
+            )
+            if bertopic_result['is_valid_new_category']:
+                return (
+                    bertopic_result['refined_label'],
+                    "BERTOPIC_NEW_CATEGORY",
+                    bertopic_result['confidence']
+                )
+        
+        # FASE 4: Fallback intelligente
+        return self._intelligent_fallback(original_label, conversation_text)
+
+    def _resolve_label_semantically(self, proposed_label: str, 
+                                   conversation_text: str) -> Dict[str, Any]:
+        """
+        Risolve l'etichetta usando embedding similarity potenziata con descrizioni
+        """
+        try:
+            # Embedding dell'etichetta proposta
+            label_text = proposed_label.replace('_', ' ')
+            proposed_embedding = self.embedder.encode_single(label_text)
+            
+            # Embedding del testo originale
+            text_embedding = self.embedder.encode_single(conversation_text)
+            
+            best_match = None
+            best_score = 0.0
+            best_method = None
+            
+            # APPROCCIO POTENZIATO: Similarità con etichette + descrizioni esistenti
+            for existing_label in self.domain_labels:
+                if existing_label == 'altro':
+                    continue
+                    
+                # Embedding dell'etichetta esistente
+                existing_text = existing_label.replace('_', ' ')
+                existing_embedding = self.embedder.encode_single(existing_text)
+                
+                # Similarità etichetta-etichetta
+                label_similarity = self._cosine_similarity(proposed_embedding, existing_embedding)
+                
+                # Similarità testo-etichetta esistente
+                text_similarity = self._cosine_similarity(text_embedding, existing_embedding)
+                
+                # NUOVO: Similarità con descrizione se disponibile
+                description_similarity = 0.0
+                if existing_label in self.label_descriptions and self.label_descriptions[existing_label]:
+                    description_text = self.label_descriptions[existing_label]
+                    description_embedding = self.embedder.encode_single(description_text)
+                    
+                    # Similarità testo-descrizione e label-descrizione
+                    text_desc_sim = self._cosine_similarity(text_embedding, description_embedding)
+                    label_desc_sim = self._cosine_similarity(proposed_embedding, description_embedding)
+                    description_similarity = (text_desc_sim + label_desc_sim) / 2
+                
+                # Score combinato POTENZIATO con descrizione
+                if description_similarity > 0:
+                    # Con descrizione: peso maggiore alla semantica
+                    combined_score = (
+                        0.4 * label_similarity +           # Similarità nomi
+                        0.3 * text_similarity +            # Coerenza testo-etichetta
+                        0.3 * description_similarity       # Coerenza semantica profonda
+                    )
+                    method_detail = f"Label:{label_similarity:.2f}, Text:{text_similarity:.2f}, Desc:{description_similarity:.2f}"
+                else:
+                    # Senza descrizione: logica originale
+                    combined_score = 0.6 * label_similarity + 0.4 * text_similarity
+                    method_detail = f"Label:{label_similarity:.2f}, Text:{text_similarity:.2f}, NoDesc"
+                
+                if combined_score > best_score:
+                    best_score = combined_score
+                    best_match = existing_label
+                    best_method = method_detail
+            
+            # APPROCCIO 2: Similarità con esempi (se score ancora basso)
+            if best_score < 0.7:  # Se non trovato match diretto forte
+                example_match_result = self._find_best_match_via_examples(
+                    proposed_embedding, text_embedding, conversation_text
+                )
+                if example_match_result['score'] > best_score:
+                    best_score = example_match_result['score']
+                    best_match = example_match_result['label']
+                    best_method = f"Example-based: {example_match_result['method']}"
+            
+            # Soglia di confidenza per accettare il match (più alta per descrizioni)
+            confidence_threshold = 0.65
+            if best_score >= confidence_threshold:
+                return {
+                    'found_match': True,
+                    'matched_label': best_match,
+                    'confidence': best_score,
+                    'method': best_method,
+                    'original_label': proposed_label
+                }
+            else:
+                return {
+                    'found_match': False,
+                    'best_candidate': best_match,
+                    'best_score': best_score,
+                    'method': best_method
+                }
+                
+        except Exception as e:
+            self.logger.warning(f"Errore risoluzione semantica: {e}")
+            return {'found_match': False, 'error': str(e)}
+
+    def _find_best_match_via_examples(self, proposed_embedding: np.ndarray,
+                                     text_embedding: np.ndarray,
+                                     conversation_text: str) -> Dict[str, Any]:
+        """
+        Trova match migliore attraverso esempi rappresentativi
+        """
+        best_score = 0.0
+        best_label = None
+        best_method = ""
+        
+        try:
+            # Raggruppa esempi per categoria
+            examples_by_category = {}
+            for example in self.curated_examples:
+                category = example['label']
+                if category not in examples_by_category:
+                    examples_by_category[category] = []
+                examples_by_category[category].append(example)
+            
+            # Per ogni categoria, calcola similarità media
+            for category, examples in examples_by_category.items():
+                if category == 'altro':
+                    continue
+                
+                # Calcola embedding degli esempi
+                example_embeddings = []
+                for example in examples:
+                    ex_embedding = self.embedder.encode_single(example['text'])
+                    example_embeddings.append(ex_embedding)
+                
+                if not example_embeddings:
+                    continue
+                
+                # Similarità media del testo con esempi della categoria
+                text_similarities = [
+                    self._cosine_similarity(text_embedding, ex_emb) 
+                    for ex_emb in example_embeddings
+                ]
+                avg_text_similarity = np.mean(text_similarities)
+                max_text_similarity = np.max(text_similarities)
+                
+                # Similarità etichetta con categoria (usando nome categoria)
+                category_embedding = self.embedder.encode_single(category.replace('_', ' '))
+                label_similarity = self._cosine_similarity(proposed_embedding, category_embedding)
+                
+                # Score combinato con peso maggiore sulla similarità del testo
+                combined_score = (
+                    0.5 * avg_text_similarity +
+                    0.3 * max_text_similarity +
+                    0.2 * label_similarity
+                )
+                
+                if combined_score > best_score:
+                    best_score = combined_score
+                    best_label = category
+                    best_method = f"Avg:{avg_text_similarity:.2f}, Max:{max_text_similarity:.2f}, Label:{label_similarity:.2f}"
+            
+            return {
+                'score': best_score,
+                'label': best_label,
+                'method': best_method
+            }
+            
+        except Exception as e:
+            self.logger.warning(f"Errore match via esempi: {e}")
+            return {'score': 0.0, 'label': None, 'method': f"Error: {e}"}
+
+    def _evaluate_new_category_with_bertopic(self, proposed_label: str,
+                                           conversation_text: str) -> Dict[str, Any]:
+        """
+        Valuta se l'etichetta proposta rappresenta una categoria genuinamente nuova
+        """
+        try:
+            # Placeholder per integrazione BERTopic futura
+            # Attualmente ritorna sempre False per mantenere comportamento esistente
+            return {
+                'is_valid_new_category': False,
+                'reason': 'BERTopic integration not yet implemented',
+                'confidence': 0.0
+            }
+            
+        except Exception as e:
+            return {
+                'is_valid_new_category': False,
+                'reason': f"BERTopic evaluation error: {e}",
+                'confidence': 0.0
+            }
+
+    def _intelligent_fallback(self, original_label: str, 
+                             conversation_text: str) -> Tuple[str, str, float]:
+        """
+        Fallback intelligente quando nessun approccio funziona
+        """
+        # Se abbiamo embedding, verifica se il testo è davvero un outlier
+        if self.embedder:
+            try:
+                text_embedding = self.embedder.encode_single(conversation_text)
+                
+                # Calcola similarità massima con tutti gli esempi
+                max_similarity = 0.0
+                for example in self.curated_examples:
+                    example_embedding = self.embedder.encode_single(example['text'])
+                    similarity = self._cosine_similarity(text_embedding, example_embedding)
+                    max_similarity = max(max_similarity, similarity)
+                
+                # Se molto dissimilar da tutto, potrebbe essere nuova categoria
+                if max_similarity < 0.3:
+                    return (
+                        "categoria_emergente", 
+                        "OUTLIER_DETECTION", 
+                        0.6
+                    )
+            except:
+                pass
+        
+        # Fallback finale
+        return "altro", "FALLBACK", 0.2
+    
+    # ==================== METODI FINE-TUNING ====================
     
     def create_finetuned_model(self, 
                               min_confidence: float = 0.7,

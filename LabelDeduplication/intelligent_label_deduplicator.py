@@ -390,7 +390,11 @@ Poi spiega brevemente il motivo."""
             
             # Usa il metodo appropriato del classificatore LLM
             if hasattr(self.llm_classifier, 'classify_conversation'):
-                response, confidence, motivation = self.llm_classifier.classify_conversation(prompt)
+                # Il metodo classify_conversation ritorna un dizionario
+                llm_result = self.llm_classifier.classify_conversation(prompt)
+                response = llm_result['predicted_label']
+                confidence = llm_result['confidence'] 
+                motivation = llm_result['motivation']
             else:
                 # Fallback
                 response = "INCERTO"

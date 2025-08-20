@@ -49,7 +49,7 @@ class TagDatabaseConnector:
         """Chiude la connessione al database"""
     def get_all_tags(self):
         """
-        Recupera tutti i tag attivi dal database TAGS.tags
+        Recupera tutti i tag attivi dal database TAG.tags
         
         Returns:
             Lista di dizionari con informazioni sui tag
@@ -60,9 +60,9 @@ class TagDatabaseConnector:
         try:
             cursor = self.connection.cursor(dictionary=True)
             query = """
-            SELECT tag_name, tag_description, tag_color, created_at
-            FROM TAGS.tags
-            WHERE is_active = 1
+            SELECT tag_name, tag_description
+            FROM tags
+            WHERE tag_name IS NOT NULL
             ORDER BY tag_name
             """
             cursor.execute(query)
@@ -104,9 +104,9 @@ class TagDatabaseConnector:
         try:
             cursor = self.connection.cursor(dictionary=True)
             query = """
-            SELECT tag_name, tag_description, tag_color, created_at
-            FROM TAGS.tags
-            WHERE tag_name = %s AND is_active = 1
+            SELECT tag_name 
+            FROM tags
+            WHERE tag_name = %s
             """
             cursor.execute(query, (tag_name,))
             result = cursor.fetchone()
@@ -149,7 +149,7 @@ class TagDatabaseConnector:
             # Verifica se il tag esiste già (case-insensitive)
             check_query = """
             SELECT id, tag_name, is_active 
-            FROM TAGS.tags 
+            FROM tags 
             WHERE LOWER(tag_name) = LOWER(%s)
             """
             cursor.execute(check_query, (tag_name,))
@@ -163,7 +163,7 @@ class TagDatabaseConnector:
                 else:
                     # Riattiva tag esistente ma disattivato
                     update_query = """
-                    UPDATE TAGS.tags 
+                    UPDATE tags 
                     SET is_active = 1, tag_description = %s, tag_color = %s, updated_at = NOW()
                     WHERE id = %s
                     """
@@ -174,9 +174,10 @@ class TagDatabaseConnector:
             else:
                 # Inserisce nuovo tag
                 insert_query = """
-                INSERT INTO TAGS.tags (tag_name, tag_description, tag_color, is_active, created_at, updated_at) 
+                INSERT INTO tags (tag_name, tag_description, tag_color, is_active, created_at, updated_at) 
                 VALUES (%s, %s, %s, 1, NOW(), NOW())
                 """
+                
                 cursor.execute(insert_query, (tag_name, tag_description, tag_color))
                 self.connection.commit()
                 print(f"  ✅ Nuovo tag '{tag_name}' aggiunto")

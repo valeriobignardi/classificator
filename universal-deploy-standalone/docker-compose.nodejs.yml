@@ -1,0 +1,27 @@
+# Template Docker Compose per Progetti Node.js
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: myapp
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+# ISTRUZIONI:
+# 1. Sostituisci 'myapp' con il nome del tuo progetto
+# 2. Cambia la porta se necessario (default: 3000)
+# 3. Aggiungi variabili d'ambiente specifiche del tuo progetto

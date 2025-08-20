@@ -1,0 +1,118 @@
+nohup: ignoring input
+ * Serving Flask app 'server'
+ * Debug mode: on
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://172.31.41.139:5000
+[33mPress CTRL+C to quit[0m
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 749-557-138
+127.0.0.1 - - [20/Jul/2025 14:04:31] "GET /health HTTP/1.1" 200 -
+2025-07-20 14:05:17,516 - mistral_finetuning_manager.130159006546256 - INFO - MistralFineTuningManager inizializzato - Ollama: http://localhost:11434
+2025-07-20 14:05:17,516 - INFO - MistralFineTuningManager inizializzato - Ollama: http://localhost:11434
+2025-07-20 14:05:17,516 - mistral_finetuning_manager.130159006546256 - INFO - Models directory: /home/ubuntu/classificazione_b+++++_bck2/Classification/../FineTuning/../finetuned_models
+2025-07-20 14:05:17,516 - INFO - Models directory: /home/ubuntu/classificazione_b+++++_bck2/Classification/../FineTuning/../finetuned_models
+2025-07-20 14:05:17,536 - intelligent_classifier.130160075485024 - INFO - IntelligentClassifier inizializzato - Model: mistral:7b, URL: http://localhost:11434
+2025-07-20 14:05:17,536 - INFO - IntelligentClassifier inizializzato - Model: mistral:7b, URL: http://localhost:11434
+2025-07-20 14:05:17,536 - intelligent_classifier.130160075485024 - INFO - Embedding features: False, Validation: False
+2025-07-20 14:05:17,536 - INFO - Embedding features: False, Validation: False
+2025-07-20 14:05:17,538 - intelligent_classifier.130160075485024 - WARNING - Modello mistral_finetuned_humanitas_20250720_135148 non trovato. Disponibili: ['mistral_finetuned_humanitas_20250720_135148:latest', 'mistral_finetuned_humanitas_20250720_134856:latest', 'mistral_finetuned_humanitas_20250720_134723:latest', 'mistral_finetuned_humanitas_20250720_134249:latest', 'mistral_finetuned_humanitas_20250720_134045:latest', 'mistral_finetuned_humanitas_20250720_133740:latest', 'mistral_finetuned_humanitas_20250720_133728:latest', 'mistral_finetuned_humanitas_20250720_133327:latest', 'mistral:7b', 'llama3.3:70b-instruct-q2_K', 'bge-m3:latest']
+2025-07-20 14:05:17,538 - WARNING - Modello mistral_finetuned_humanitas_20250720_135148 non trovato. Disponibili: ['mistral_finetuned_humanitas_20250720_135148:latest', 'mistral_finetuned_humanitas_20250720_134856:latest', 'mistral_finetuned_humanitas_20250720_134723:latest', 'mistral_finetuned_humanitas_20250720_134249:latest', 'mistral_finetuned_humanitas_20250720_134045:latest', 'mistral_finetuned_humanitas_20250720_133740:latest', 'mistral_finetuned_humanitas_20250720_133728:latest', 'mistral_finetuned_humanitas_20250720_133327:latest', 'mistral:7b', 'llama3.3:70b-instruct-q2_K', 'bge-m3:latest']
+127.0.0.1 - - [20/Jul/2025 14:05:17] "POST /classify/new/humanitas HTTP/1.1" 200 -
+2025-07-20 14:05:17,828 - INFO - 127.0.0.1 - - [20/Jul/2025 14:05:17] "POST /classify/new/humanitas HTTP/1.1" 200 -
+127.0.0.1 - - [20/Jul/2025 14:05:32] "GET /health HTTP/1.1" 200 -
+2025-07-20 14:05:32,023 - INFO - 127.0.0.1 - - [20/Jul/2025 14:05:32] "GET /health HTTP/1.1" 200 -
+Connessione al database TAG stabilita con successo
+Connessione al database TAG chiusa
+🎯 RICHIESTA CLASSIFICAZIONE INCREMENTALE:
+   Cliente: humanitas
+   Timestamp: 2025-07-20T14:05:13.262939
+🔄 CLASSIFICAZIONE INCREMENTALE - Cliente: humanitas
+🔧 Inizializzazione pipeline per cliente: humanitas
+🔧 Inizializzazione embedder condiviso...
+🚀 Inizializzazione LaBSE embedder su device: cuda
+📥 Caricamento modello sentence-transformers/LaBSE...
+🚀 Caricamento diretto su GPU...
+✅ Modello caricato con successo!
+📊 Dimensione embedding: 768
+🔧 Device: cuda
+🎮 GPU: NVIDIA A10G
+💾 GPU Memory: 23.7 GB
+📈 GPU Memory utilizzata: 1.89 GB
+� Primo parametro su device: cuda:0
+🧪 Test del modello LaBSE...
+🔍 Encoding 3 testi su device cuda...
+✅ Embedding generati: shape (3, 768)
+✅ Test modello completato con successo!
+   Shape: (3, 768)
+   Norme: [1. 1. 1.]
+   Device: cuda
+🎯 Modello pronto per l'uso!
+✅ Embedder condiviso inizializzato
+🚀 Inizializzazione pipeline...
+   🎯 Confidence threshold: 0.7
+   🤖 Auto mode: True
+   🔄 Auto retrain: False
+🔄 Utilizzo embedder condiviso per evitare CUDA out of memory
+🔧 HDBSCANClusterer inizializzato con parametri:
+   min_cluster_size: 3
+   min_samples: 2
+   metric: cosine
+   cluster_selection_epsilon: 0.05
+🧠 Inizializzazione memoria semantica...
+🧠 SemanticMemoryManager inizializzato
+  🎯 Soglia riutilizzo etichette: 0.8
+  🔍 Soglia similarità semantica: 0.8
+  💾 Cache path: semantic_cache/
+🔗 Inizializzazione ensemble classifier avanzato...
+🎯 Uso modello fine-tuned per humanitas: mistral_finetuned_humanitas_20250720_135148
+⚠️ LLM non disponibile, ensemble userà solo ML
+🔗 Advanced Ensemble Classifier inizializzato
+   🧠 LLM weight: 0.60
+   🤖 ML weight: 0.40
+   🎯 Confidence threshold: 0.7
+   🔄 Adaptive weights: True
+   👤 Disaccordi gestiti da QualityGateEngine
+📥 Caricamento ultimo modello: humanitas_fallback_classifier_20250720_093229
+📥 Caricamento ensemble model...
+✅ ML ensemble caricato
+✅ Configurazione caricata
+🔗 Ensemble model caricato da models/humanitas_fallback_classifier_20250720_093229
+✅ Modello caricato con successo
+⏸️ Riaddestramento automatico disabilitato (modalità supervisione/API)
+   💡 Per abilitare, usare auto_retrain=True nell'inizializzazione
+⚠️ Classificatore LLM non disponibile, ensemble userà solo ML
+👤 Inizializzazione trainer interattivo...
+🧠 Inizializzazione dedupplicatore intelligente...
+🔄 Caricamento memoria semantica dal database...
+Connessione al database TAG stabilita con successo
+📭 Nessuna classificazione trovata nel database
+📭 Inizializzata memoria semantica vuota
+Connessione al database TAG chiusa
+✅ Memoria semantica caricata: 0 campioni, 0 tag
+✅ Pipeline inizializzata!
+✅ Pipeline humanitas inizializzata
+📊 Estrazione sessioni per humanitas...
+🔍 Parametri: giorni_indietro=30, limit=None
+🔄 Chiamata aggregator.estrai_sessioni_aggregate...
+📊 Estrazione sessioni aggregate dal schema 'humanitas'...
+🔍 Esecuzione query per leggere conversazioni dal schema 'humanitas'...
+Connessione al database MySQL stabilita con successo
+✅ Query eseguita con successo! Trovate 7067 righe
+✅ Trovate 7067 righe da aggregare
+✅ Aggregate 1350 sessioni uniche
+📥 Sessioni grezze estratte: 1350
+🔍 Filtraggio sessioni vuote/irrilevanti...
+🔍 Filtraggio sessioni vuote/irrilevanti...
+✅ Filtro completato:
+  📊 Sessioni originali: 1350
+  ❌ Sessioni scartate: 235
+  ✅ Sessioni valide: 1115
+✅ Estratte 1115 sessioni valide
+Connessione al database TAG stabilita con successo
+Connessione al database TAG chiusa
+📊 Cliente humanitas: 1115 sessioni già processate
+Connessione al database TAG stabilita con successo
+Connessione al database TAG chiusa

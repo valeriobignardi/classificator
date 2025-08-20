@@ -1,0 +1,28 @@
+# Template Docker Compose per Progetti Python
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: myapp-python
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONPATH=/app
+      - FLASK_ENV=production
+      - DJANGO_SETTINGS_MODULE=myapp.settings.production
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+# ISTRUZIONI:
+# 1. Sostituisci 'myapp-python' con il nome del tuo progetto
+# 2. Cambia la porta se necessario (default: 8000)
+# 3. Aggiorna le variabili d'ambiente per Flask/Django/FastAPI

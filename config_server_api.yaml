@@ -1,0 +1,24 @@
+# Configurazione per Server API e Supervisione Umana
+# Questo file può essere usato per sovrascrivere il config.yaml principale
+# quando si avvia il server per supervisione umana
+
+# Estende config.yaml principale  
+extends: "config.yaml"
+
+# Override per server API/supervisione
+pipeline:
+  # Disabilita riaddestramento per server API
+  auto_retrain_on_init: false     # DISABILITATO per server/supervisione
+  
+  # Modalità conservative per server
+  default_confidence_threshold: 0.7   # Soglia standard
+  default_auto_mode: true            # Auto mode per server
+  
+# Quality gate più restrittivo per supervisione
+quality_gate:
+  # Parametri restrittivi per supervisione accurata
+  confidence_threshold: 0.8       # Soglia alta per qualità
+  uncertainty_threshold: 0.3      # Più restrittivo per human review
+  
+  # Disabilita riaddestramento automatico anche qui
+  auto_retrain_enabled: false     # Nessun riaddestramento automatico

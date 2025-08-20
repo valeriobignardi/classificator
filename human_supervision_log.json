@@ -1,0 +1,789 @@
+[
+  {
+    "timestamp": "2025-06-27T14:55:51.649855",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "problemi_prenotazione",
+      "confidence": 0.9,
+      "motivation": "Domanda riguardante la prenotazione e l'arrivo a Humanitas"
+    },
+    "ml_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.763635945556627,
+      "probabilities": {
+        "altro": 0.763635945556627,
+        "assistenza_medica_specializzata": 0.10844505353369614,
+        "orari_orari_contatti": 0.022409366431008108,
+        "prenotazione_esami": 0.004032241142116251,
+        "preparazione_esami": 0.006151590666641542,
+        "problema_accesso_portale": 0.02250236591659476,
+        "problemi_prenotazione": 0.0030256427176255304,
+        "servizi_supporto": 0.06979779403569071
+      }
+    },
+    "human_decision": {
+      "predicted_label": "indicazioni_stradali",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "indicazioni_stradali",
+      "timestamp": "2025-06-27T14:55:51.649832"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T14:56:18.711706",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "orari_contatti",
+      "confidence": 0.9,
+      "motivation": "L'utente ha chiesto informazioni sui tempi di apertura dell'istituto clinico"
+    },
+    "ml_prediction": {
+      "predicted_label": "assistenza_medica_specializzata",
+      "confidence": 0.4785826201790999,
+      "probabilities": {
+        "altro": 0.3547224337177555,
+        "assistenza_medica_specializzata": 0.4785826201790999,
+        "orari_orari_contatti": 0.03426227832420665,
+        "prenotazione_esami": 0.009962523900573825,
+        "preparazione_esami": 0.005138034198705105,
+        "problema_accesso_portale": 0.0347680273084012,
+        "problemi_prenotazione": 0.005590526591978881,
+        "servizi_supporto": 0.07697355577927896
+      }
+    },
+    "human_decision": {
+      "predicted_label": "norma_preparazione",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "norma_preparazione",
+      "timestamp": "2025-06-27T14:56:18.711686"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T14:56:52.267351",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "fatturazione_pagamenti",
+      "confidence": 0.9,
+      "motivation": "Domanda sulle informazioni sui pagamenti"
+    },
+    "ml_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.7022959622495647,
+      "probabilities": {
+        "altro": 0.7022959622495647,
+        "assistenza_medica_specializzata": 0.15444143599937146,
+        "orari_orari_contatti": 0.031514179261920246,
+        "prenotazione_esami": 0.004604657691299487,
+        "preparazione_esami": 0.00312574508827148,
+        "problema_accesso_portale": 0.03683153480854062,
+        "problemi_prenotazione": 0.003288760064867665,
+        "servizi_supporto": 0.06389772483616436
+      }
+    },
+    "human_decision": {
+      "predicted_label": "norme_di_preparazione",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "norme_di_preparazione",
+      "timestamp": "2025-06-27T14:56:52.267334"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:02:50.123562",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "assistenza_medica_specializzata",
+      "confidence": 0.9,
+      "motivation": "L'utente ha richiesto informazioni su un trattamento specifico"
+    },
+    "ml_prediction": {
+      "predicted_label": "servizi_supporto",
+      "confidence": 0.5293796135964227,
+      "probabilities": {
+        "altro": 0.21368282727024498,
+        "assistenza_medica_specializzata": 0.14846508950350565,
+        "orari_orari_contatti": 0.04220053683220204,
+        "prenotazione_esami": 0.006551280133793779,
+        "preparazione_esami": 0.005295650335791109,
+        "problema_accesso_portale": 0.04936592042572011,
+        "problemi_prenotazione": 0.005059081902319628,
+        "servizi_supporto": 0.5293796135964227
+      }
+    },
+    "human_decision": {
+      "predicted_label": "norme_di_preparazione",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "norme_di_preparazione",
+      "timestamp": "2025-06-27T15:02:50.123543"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:03:09.505800",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "ritiro_referti",
+      "confidence": 0.9,
+      "motivation": "Domanda sul ritiro dei referti medici"
+    },
+    "ml_prediction": {
+      "predicted_label": "assistenza_medica_specializzata",
+      "confidence": 0.4387326571646137,
+      "probabilities": {
+        "altro": 0.35447181721075954,
+        "assistenza_medica_specializzata": 0.4387326571646137,
+        "orari_orari_contatti": 0.04924274910827425,
+        "prenotazione_esami": 0.007158520023093117,
+        "preparazione_esami": 0.0057900611965932755,
+        "problema_accesso_portale": 0.04277769097233142,
+        "problemi_prenotazione": 0.00514673713248899,
+        "servizi_supporto": 0.0966797671918458
+      }
+    },
+    "human_decision": {
+      "predicted_label": "ritiro_referti",
+      "confidence": 1.0,
+      "method": "HUMAN_LLM",
+      "human_intervention": true,
+      "human_choice": "llm",
+      "timestamp": "2025-06-27T15:03:09.505781"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:04:04.060099",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "assistenza_medica_specializzata",
+      "confidence": 0.9,
+      "motivation": "L'utente ha richiesto assistenza medica specializzata"
+    },
+    "ml_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.6818701134628186,
+      "probabilities": {
+        "altro": 0.6818701134628186,
+        "assistenza_medica_specializzata": 0.10988776484431072,
+        "orari_orari_contatti": 0.03532407419015055,
+        "prenotazione_esami": 0.004538965651371245,
+        "preparazione_esami": 0.0038641489781221067,
+        "problema_accesso_portale": 0.02653297376158409,
+        "problemi_prenotazione": 0.003052218623781624,
+        "servizi_supporto": 0.1349297404878612
+      }
+    },
+    "human_decision": {
+      "predicted_label": "prenotazione_esami",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "prenotazione_esami",
+      "timestamp": "2025-06-27T15:04:04.060080"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:08:58.714444",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.3,
+      "motivation": "La richiesta non è una delle etichette disponibili per la classificazione"
+    },
+    "ml_prediction": {
+      "predicted_label": "servizi_supporto",
+      "confidence": 0.5232226621695736,
+      "probabilities": {
+        "altro": 0.334876413407454,
+        "assistenza_medica_specializzata": 0.06478461266667924,
+        "orari_orari_contatti": 0.0292973185651407,
+        "prenotazione_esami": 0.004924185188657779,
+        "preparazione_esami": 0.0038277365787565912,
+        "problema_accesso_portale": 0.029010908916075284,
+        "problemi_prenotazione": 0.01005616250766277,
+        "servizi_supporto": 0.5232226621695736
+      }
+    },
+    "human_decision": {
+      "predicted_label": "ritiro_referti",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "ritiro_referti",
+      "timestamp": "2025-06-27T15:08:58.714422"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:09:14.045725",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "assistenza_medica_specializzata",
+      "confidence": 0.9,
+      "motivation": "L'utente ha introdotto il proprio nome e ha chiesto assistenza digitale dell'Istituto Clinico Humanitas"
+    },
+    "ml_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.544191834514672,
+      "probabilities": {
+        "altro": 0.544191834514672,
+        "assistenza_medica_specializzata": 0.06578479651094622,
+        "orari_orari_contatti": 0.03147819612584703,
+        "prenotazione_esami": 0.0037328921813667717,
+        "preparazione_esami": 0.002867561909354026,
+        "problema_accesso_portale": 0.03129636866869331,
+        "problemi_prenotazione": 0.006673483357323962,
+        "servizi_supporto": 0.31397486673179675
+      }
+    },
+    "human_decision": {
+      "predicted_label": "prenotazione_esami",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "prenotazione_esami",
+      "timestamp": "2025-06-27T15:09:14.045705"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:09:39.968565",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.3,
+      "motivation": "La domanda non è riconducibile a nessuna delle etichette fornite"
+    },
+    "ml_prediction": {
+      "predicted_label": "assistenza_medica_specializzata",
+      "confidence": 0.4655024998773633,
+      "probabilities": {
+        "altro": 0.27665348714360855,
+        "assistenza_medica_specializzata": 0.4655024998773633,
+        "orari_orari_contatti": 0.03126821531406193,
+        "prenotazione_esami": 0.009700140019374191,
+        "preparazione_esami": 0.004974345462630691,
+        "problema_accesso_portale": 0.03336200580239284,
+        "problemi_prenotazione": 0.004304287629870843,
+        "servizi_supporto": 0.17423501875069772
+      }
+    },
+    "human_decision": {
+      "predicted_label": "ritiro_referti",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "ritiro_referti",
+      "timestamp": "2025-06-27T15:09:39.968547"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:10:08.326666",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "servizi_supporto",
+      "confidence": 0.9,
+      "motivation": "L'utente chiede informazioni sui servizi supporto forniti dall'Istituto Clinico Humanitas"
+    },
+    "ml_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.7499101606560051,
+      "probabilities": {
+        "altro": 0.7499101606560051,
+        "assistenza_medica_specializzata": 0.08904991714687406,
+        "orari_orari_contatti": 0.03303923412062232,
+        "prenotazione_esami": 0.004848175442989481,
+        "preparazione_esami": 0.006426625618786062,
+        "problema_accesso_portale": 0.045738465809359606,
+        "problemi_prenotazione": 0.0035096961759373733,
+        "servizi_supporto": 0.06747772502942603
+      }
+    },
+    "human_decision": {
+      "predicted_label": "prenotazione_esami",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "prenotazione_esami",
+      "timestamp": "2025-06-27T15:10:08.326649"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:13:07.427772",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "orari_contatti",
+      "confidence": 0.8,
+      "motivation": "L'utente ha chiesto informazioni su come contattare l'istituto clinico"
+    },
+    "ml_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.8442934052637097,
+      "probabilities": {
+        "altro": 0.8442934052637097,
+        "assistenza_medica_specializzata": 0.03877134581898651,
+        "orari_orari_contatti": 0.022764829297640964,
+        "prenotazione_esami": 0.0033648924098030643,
+        "preparazione_esami": 0.0025153721040674774,
+        "problema_accesso_portale": 0.034237635570597676,
+        "problemi_prenotazione": 0.0029094331854392255,
+        "servizi_supporto": 0.0511430863497554
+      }
+    },
+    "human_decision": {
+      "predicted_label": "prenotazione_esami",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "prenotazione_esami",
+      "timestamp": "2025-06-27T15:13:07.427753"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:13:25.448254",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "servizi_supporto",
+      "confidence": 0.95,
+      "motivation": "L'utente ha richiesto ulteriore supporto"
+    },
+    "ml_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.6198831982939459,
+      "probabilities": {
+        "altro": 0.6198831982939459,
+        "assistenza_medica_specializzata": 0.028264934092186722,
+        "orari_orari_contatti": 0.01432095147116541,
+        "prenotazione_esami": 0.002962668871397473,
+        "preparazione_esami": 0.0023734731762477634,
+        "problema_accesso_portale": 0.01931943894131274,
+        "problemi_prenotazione": 0.01224392669255422,
+        "servizi_supporto": 0.3006314084611899
+      }
+    },
+    "human_decision": {
+      "predicted_label": "servizi_supporto",
+      "confidence": 1.0,
+      "method": "HUMAN_LLM",
+      "human_intervention": true,
+      "human_choice": "llm",
+      "timestamp": "2025-06-27T15:13:25.448233"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:14:20.983719",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "assistenza_medica_specializzata",
+      "confidence": 0.9,
+      "motivation": "Assistente digitale dell'Istituto Clinico Humanitas"
+    },
+    "ml_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.7135440998006074,
+      "probabilities": {
+        "altro": 0.7135440998006074,
+        "assistenza_medica_specializzata": 0.040844131783595826,
+        "orari_orari_contatti": 0.04375122202877385,
+        "prenotazione_esami": 0.004111212639692534,
+        "preparazione_esami": 0.006401471237579655,
+        "problema_accesso_portale": 0.042898145136989856,
+        "problemi_prenotazione": 0.006676004711133133,
+        "servizi_supporto": 0.1417737126616276
+      }
+    },
+    "human_decision": {
+      "predicted_label": "servizi_supporto",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "servizi_supporto",
+      "timestamp": "2025-06-27T15:14:20.983701"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:19:38.303900",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "assistenza_medica_specializzata",
+      "confidence": 0.9,
+      "motivation": "Assistente digitale per l'Istituto Clinico Humanitas"
+    },
+    "ml_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.7890064389613153,
+      "probabilities": {
+        "altro": 0.7890064389613153,
+        "assistenza_medica_specializzata": 0.07138403144817514,
+        "orari_orari_contatti": 0.022403064722552338,
+        "prenotazione_esami": 0.004364788499127195,
+        "preparazione_esami": 0.004150777891924814,
+        "problema_accesso_portale": 0.041367417094586405,
+        "problemi_prenotazione": 0.0032506075526036143,
+        "servizi_supporto": 0.06407287382971509
+      }
+    },
+    "human_decision": {
+      "predicted_label": "ritiro_referti",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "ritiro_referti",
+      "timestamp": "2025-06-27T15:19:38.303878"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:20:00.384240",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.8,
+      "motivation": "L'utente ha richiesto assistenza generale e non una specifica funzionalità dell'Istituto Clinico Humanitas"
+    },
+    "ml_prediction": {
+      "predicted_label": "problema_accesso_portale",
+      "confidence": 0.43578734368250344,
+      "probabilities": {
+        "altro": 0.2893996667625908,
+        "assistenza_medica_specializzata": 0.0990572658494644,
+        "orari_orari_contatti": 0.05101207260652147,
+        "prenotazione_esami": 0.013508423945785877,
+        "preparazione_esami": 0.01287719072222976,
+        "problema_accesso_portale": 0.43578734368250344,
+        "problemi_prenotazione": 0.011992110009874928,
+        "servizi_supporto": 0.0863659264210291
+      }
+    },
+    "human_decision": {
+      "predicted_label": "ritiro_referti",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "ritiro_referti",
+      "timestamp": "2025-06-27T15:20:00.384220"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:20:15.363563",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "orari_contatti",
+      "confidence": 0.9,
+      "motivation": "L'utente chiede informazioni sui tempi di contatto con l'assistente digitale dell'Istituto Clinico Humanitas"
+    },
+    "ml_prediction": {
+      "predicted_label": "orari_orari_contatti",
+      "confidence": 0.46009179754711776,
+      "probabilities": {
+        "altro": 0.3298749168808752,
+        "assistenza_medica_specializzata": 0.039857000319878176,
+        "orari_orari_contatti": 0.46009179754711776,
+        "prenotazione_esami": 0.014092773783793528,
+        "preparazione_esami": 0.013594858946915497,
+        "problema_accesso_portale": 0.04708979102635603,
+        "problemi_prenotazione": 0.010928734980413246,
+        "servizi_supporto": 0.08447012651465058
+      }
+    },
+    "human_decision": {
+      "predicted_label": "problema_accesso_portale",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "problema_accesso_portale",
+      "timestamp": "2025-06-27T15:20:15.363546"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:20:33.547427",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "preparazione_esami",
+      "confidence": 0.9,
+      "motivation": "L'utente ha richiesto informazioni per una procedura medica"
+    },
+    "ml_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.7885610288188785,
+      "probabilities": {
+        "altro": 0.7885610288188785,
+        "assistenza_medica_specializzata": 0.030585788910960008,
+        "orari_orari_contatti": 0.03398038863571514,
+        "prenotazione_esami": 0.0040387964387030425,
+        "preparazione_esami": 0.002702788016024759,
+        "problema_accesso_portale": 0.02287120433897771,
+        "problemi_prenotazione": 0.002880739131392756,
+        "servizi_supporto": 0.1143792657093482
+      }
+    },
+    "human_decision": {
+      "predicted_label": "problema_accesso_portale",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "problema_accesso_portale",
+      "timestamp": "2025-06-27T15:20:33.547408"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:20:44.244737",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "problema_accesso_portale",
+      "confidence": 0.8,
+      "motivation": "Domanda riguardante l'accesso al portale dell'Istituto Clinico Humanitas"
+    },
+    "ml_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.35433201921954843,
+      "probabilities": {
+        "altro": 0.35433201921954843,
+        "assistenza_medica_specializzata": 0.09148915033105025,
+        "orari_orari_contatti": 0.07022976324566978,
+        "prenotazione_esami": 0.009169462222004853,
+        "preparazione_esami": 0.00875912302881408,
+        "problema_accesso_portale": 0.3427735848936449,
+        "problemi_prenotazione": 0.007804389989138777,
+        "servizi_supporto": 0.11544250707012899
+      }
+    },
+    "human_decision": {
+      "predicted_label": "problema_accesso_portale",
+      "confidence": 1.0,
+      "method": "HUMAN_LLM",
+      "human_intervention": true,
+      "human_choice": "llm",
+      "timestamp": "2025-06-27T15:20:44.244719"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:21:06.852966",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "orari_contatti",
+      "confidence": 0.9,
+      "motivation": "L'utente ha chiesto informazioni su come contattare l'assistenza"
+    },
+    "ml_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.3427580278307511,
+      "probabilities": {
+        "altro": 0.3427580278307511,
+        "assistenza_medica_specializzata": 0.06653951269103885,
+        "orari_orari_contatti": 0.29571831288663614,
+        "prenotazione_esami": 0.007866848147593709,
+        "preparazione_esami": 0.005590760635278215,
+        "problema_accesso_portale": 0.047099049437448144,
+        "problemi_prenotazione": 0.009016052397490792,
+        "servizi_supporto": 0.22541143597376312
+      }
+    },
+    "human_decision": {
+      "predicted_label": "problema_accesso_portale",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "problema_accesso_portale",
+      "timestamp": "2025-06-27T15:21:06.852948"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:21:29.189003",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "problemi_prenotazione",
+      "confidence": 0.8,
+      "motivation": "Domanda riguardante l'aggiornamento del numero di telefono e l'accesso al profilo"
+    },
+    "ml_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.5079549158095238,
+      "probabilities": {
+        "altro": 0.5079549158095238,
+        "assistenza_medica_specializzata": 0.03207913554647427,
+        "orari_orari_contatti": 0.039498708445307486,
+        "prenotazione_esami": 0.004555128704054814,
+        "preparazione_esami": 0.003968117309842554,
+        "problema_accesso_portale": 0.05177010698302633,
+        "problemi_prenotazione": 0.20867894264602782,
+        "servizi_supporto": 0.15149494455574297
+      }
+    },
+    "human_decision": {
+      "predicted_label": "problema_accesso_portale",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "problema_accesso_portale",
+      "timestamp": "2025-06-27T15:21:29.188982"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:21:42.588402",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "prenotazione_esami",
+      "confidence": 0.9,
+      "motivation": "Utente richiede prenotazione per un esame"
+    },
+    "ml_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.350584026379907,
+      "probabilities": {
+        "altro": 0.350584026379907,
+        "assistenza_medica_specializzata": 0.1312920188258042,
+        "orari_orari_contatti": 0.0570391229578447,
+        "prenotazione_esami": 0.22666418575669345,
+        "preparazione_esami": 0.004464367534476053,
+        "problema_accesso_portale": 0.06795995461685571,
+        "problemi_prenotazione": 0.007992251941459774,
+        "servizi_supporto": 0.15400407198695917
+      }
+    },
+    "human_decision": {
+      "predicted_label": "prenotazione_esami",
+      "confidence": 1.0,
+      "method": "HUMAN_LLM",
+      "human_intervention": true,
+      "human_choice": "llm",
+      "timestamp": "2025-06-27T15:21:42.588384"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:21:59.477091",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "preparazione_esami",
+      "confidence": 0.8,
+      "motivation": "La domanda riguarda la preparazione per gli esami"
+    },
+    "ml_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.29653062165984795,
+      "probabilities": {
+        "altro": 0.29653062165984795,
+        "assistenza_medica_specializzata": 0.205860428695271,
+        "orari_orari_contatti": 0.050283927901707486,
+        "prenotazione_esami": 0.010665015768283723,
+        "preparazione_esami": 0.2282490046471571,
+        "problema_accesso_portale": 0.08080839678851119,
+        "problemi_prenotazione": 0.006181022543805777,
+        "servizi_supporto": 0.1214215819954159
+      }
+    },
+    "human_decision": {
+      "predicted_label": "servizi_supporto",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "servizi_supporto",
+      "timestamp": "2025-06-27T15:21:59.477070"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:22:23.049675",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "ritiro_referti",
+      "confidence": 0.9,
+      "motivation": "Domanda riguardante il ritiro dei referti medici"
+    },
+    "ml_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.639788042734511,
+      "probabilities": {
+        "altro": 0.639788042734511,
+        "assistenza_medica_specializzata": 0.17232732757169375,
+        "orari_orari_contatti": 0.031638277697165214,
+        "prenotazione_esami": 0.005304033722942376,
+        "preparazione_esami": 0.004109881832156377,
+        "problema_accesso_portale": 0.03171708355400511,
+        "problemi_prenotazione": 0.004157567242139831,
+        "servizi_supporto": 0.11095778564538643
+      }
+    },
+    "human_decision": {
+      "predicted_label": "ritiro_referti",
+      "confidence": 1.0,
+      "method": "HUMAN_LLM",
+      "human_intervention": true,
+      "human_choice": "llm",
+      "timestamp": "2025-06-27T15:22:23.049654"
+    },
+    "supervision_enabled": true
+  },
+  {
+    "timestamp": "2025-06-27T15:22:40.470039",
+    "text_preview": "[UTENTE] Ciao [ASSISTENTE] Ciao! Sono Giulia, l’assistente digitale dell’Istituto Clinico Humanitas....",
+    "llm_prediction": {
+      "predicted_label": "fatturazione_pagamenti",
+      "confidence": 0.9,
+      "motivation": "Domanda riguardo al pagamento della fattura"
+    },
+    "ml_prediction": {
+      "predicted_label": "altro",
+      "confidence": 0.6682463560462694,
+      "probabilities": {
+        "altro": 0.6682463560462694,
+        "assistenza_medica_specializzata": 0.11084850592138308,
+        "orari_orari_contatti": 0.03305186813532612,
+        "prenotazione_esami": 0.005033502175414622,
+        "preparazione_esami": 0.007094779254608086,
+        "problema_accesso_portale": 0.034323225670888864,
+        "problemi_prenotazione": 0.003482639144591898,
+        "servizi_supporto": 0.13791912365151787
+      }
+    },
+    "human_decision": {
+      "predicted_label": "prenotazione_esami",
+      "confidence": 1.0,
+      "method": "HUMAN_CUSTOM",
+      "human_intervention": true,
+      "human_choice": "custom",
+      "custom_label": "prenotazione_esami",
+      "timestamp": "2025-06-27T15:22:40.470022"
+    },
+    "supervision_enabled": true
+  }
+]

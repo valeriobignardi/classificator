@@ -1,0 +1,9 @@
+cd /home/ubuntu/classificazione && mysql -h localhost -u root -p'Valerio220693!' TAG -e "
+DELETE FROM session_classifications 
+WHERE tenant_name = 'humanitas';
+"
+
+
+curl -X POST http://localhost:5000/classify/all/humanitas \
+  -H 'Content-Type: application/json' \
+  -d '{"confidence_threshold": 0.7, "force_retrain": true}'

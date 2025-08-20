@@ -1,0 +1,35 @@
+{
+  "name": "@yourname/universal-deploy",
+  "version": "1.0.0",
+  "description": "Universal deployment tool for any project to EC2/servers",
+  "main": "index.js",
+  "bin": {
+    "universal-deploy": "./bin/universal-deploy.js",
+    "udeploy": "./bin/universal-deploy.js"
+  },
+  "scripts": {
+    "test": "echo \"No tests yet\"",
+    "publish": "npm publish --access public"
+  },
+  "keywords": [
+    "deployment",
+    "ec2",
+    "docker",
+    "devops",
+    "automation"
+  ],
+  "author": "Valerio Bignardi",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^9.0.0",
+    "inquirer": "^8.0.0",
+    "chalk": "^4.1.2",
+    "shelljs": "^0.8.5"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "templates",
+    "README.md"
+  ]
+}

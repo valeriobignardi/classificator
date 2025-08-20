@@ -1,0 +1,19 @@
+# Dockerfile per progetti Node.js
+FROM node:18-alpine AS builder
+
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+
+FROM node:18-alpine
+WORKDIR /app
+COPY --from=builder /app/node_modules ./node_modules
+COPY . .
+
+EXPOSE 3000
+CMD ["npm", "start"]
+
+# ISTRUZIONI:
+# 1. Assicurati che package.json abbia uno script "start"
+# 2. Cambia la porta se necessario (default: 3000)
+# 3. Modifica il comando CMD se usi un framework specifico

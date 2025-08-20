@@ -1,0 +1,20 @@
+# Configurazione per Pipeline Complete da Zero
+# Questo file può essere usato per sovrascrivere il config.yaml principale
+# quando si eseguono pipeline complete che necessitano di riaddestramento
+
+# Estende config.yaml principale
+extends: "config.yaml"
+
+# Override per pipeline complete
+pipeline:
+  # Abilita riaddestramento per pipeline complete da zero
+  auto_retrain_on_init: true      # ABILITATO per pipeline complete
+  
+  # Modalità più aggressive per pipeline complete
+  default_confidence_threshold: 0.6   # Soglia più bassa per permettere più training
+  
+# Quality gate più permissivo per accumulo dati di training
+quality_gate:
+  # Parametri più permissivi per pipeline complete
+  confidence_threshold: 0.6       # Soglia più bassa
+  uncertainty_threshold: 0.4      # Più permissivo per training

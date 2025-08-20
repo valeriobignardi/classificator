@@ -1,7 +1,0 @@
-2025-08-20 08:40:30,312 - INFO - MistralFineTuningManager inizializzato - Ollama: http://localhost:11434
-2025-08-20 08:40:30,313 - INFO - Models directory: /home/ubuntu/classificazione_discussioni/Classification/../FineTuning/../finetuned_models
-2025-08-20 08:40:30,344 - INFO - 🔗 Connessione a MongoDB: mongodb://localhost:27017
-2025-08-20 08:40:30,350 - INFO - ✅ Connesso a MongoDB database: classificazioni
-2025-08-20 08:40:30,351 - INFO - ✅ Indici MongoDB creati
-2025-08-20 08:40:30,384 - INFO - IntelligentClassifier inizializzato - Model: None, URL: None
-2025-08-20 08:40:30,384 - INFO - Embedding features: False, Validation: False

@@ -502,7 +502,7 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
 
                       {/* Reason */}
                       <Box mb={2}>
-                        {caseItem.reason.split(';').map((reason, index) => (
+                        {(caseItem.reason || '').split(';').map((reason, index) => (
                           <Chip
                             key={index}
                             label={reason.trim()}

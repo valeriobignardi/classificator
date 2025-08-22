@@ -8,6 +8,7 @@ import yaml
 import json
 import glob
 import traceback
+import hashlib
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 import numpy as np
@@ -663,6 +664,15 @@ class EndToEndPipeline:
                 'interactive_review': True,
                 'reviewed_clusters': len(reviewed_labels),
                 'human_feedback_stats': feedback_stats
+            })
+            
+            # IMPORTANTE: Propaga le etichette dai cluster a tutte le sessioni
+            print(f"🔄 Propagazione etichette da {len(reviewed_labels)} cluster a tutte le sessioni...")
+            propagation_stats = self._propagate_labels_to_sessions(
+                sessioni, cluster_labels, reviewed_labels
+            )
+            metrics.update({
+                'propagation_stats': propagation_stats
             })
         else:
             metrics['interactive_review'] = False
@@ -2153,5 +2163,156 @@ class EndToEndPipeline:
                     self.tag_db.disconnetti()
         
         return nuove_sessioni, updated_labels
+
+    def _propagate_labels_to_sessions(self, 
+                                    sessioni: Dict[str, Dict],
+                                    cluster_labels: np.ndarray,
+                                    reviewed_labels: Dict[int, str]) -> Dict[str, Any]:
+        """
+        Propaga le etichette dai rappresentanti di cluster a tutte le sessioni del cluster
+        e salva le classificazioni nel database MongoDB.
+        
+        Args:
+            sessioni: Dizionario delle sessioni {session_id: session_data}
+            cluster_labels: Array delle etichette cluster per ogni sessione
+            reviewed_labels: Dizionario {cluster_id: final_label} dalle review umane
+            
+        Returns:
+            Statistiche della propagazione
+        """
+        print(f"🔄 PROPAGAZIONE ETICHETTE DAI CLUSTER ALLE SESSIONI")
+        print(f"   📊 Sessioni totali: {len(sessioni)}")
+        print(f"   🏷️  Etichette da propagare: {len(reviewed_labels)}")
+        
+        stats = {
+            'total_sessions': len(sessioni),
+            'labeled_sessions': 0,
+            'unlabeled_sessions': 0,
+            'propagated_by_cluster': {},
+            'confidence_distribution': {},
+            'save_errors': 0,
+            'save_successes': 0,
+            'mongo_saves': 0  # Aggiungo contatore per MongoDB
+        }
+        
+        # Connetti al database TAG per il salvataggio
+        self.tag_db.connetti()
+        
+        try:
+            # Itera su tutte le sessioni
+            session_ids = list(sessioni.keys())
+            
+            for i, session_id in enumerate(session_ids):
+                session_data = sessioni[session_id]
+                
+                # Trova il cluster di questa sessione
+                cluster_id = cluster_labels[i] if i < len(cluster_labels) else -1
+                
+                # Determina l'etichetta da assegnare
+                if cluster_id in reviewed_labels:
+                    # Usa l'etichetta dal cluster
+                    final_label = reviewed_labels[cluster_id]
+                    confidence = 0.85  # Alta confidenza per propagazione da cluster
+                    method = 'CLUSTER_PROPAGATION'
+                    notes = f"Propagata da cluster {cluster_id}"
+                    stats['labeled_sessions'] += 1
+                    
+                    # Aggiorna statistiche per cluster
+                    if cluster_id not in stats['propagated_by_cluster']:
+                        stats['propagated_by_cluster'][cluster_id] = {
+                            'label': final_label,
+                            'count': 0
+                        }
+                    stats['propagated_by_cluster'][cluster_id]['count'] += 1
+                    
+                else:
+                    # Sessione outlier o cluster senza etichetta
+                    final_label = 'altro'
+                    confidence = 0.3  # Bassa confidenza per outlier
+                    method = 'OUTLIER_DEFAULT'
+                    notes = f"Outlier (cluster {cluster_id})" if cluster_id != -1 else "Outlier non clusterizzato"
+                    stats['unlabeled_sessions'] += 1
+                
+                # Aggiorna distribuzione confidenze
+                conf_range = f"{int(confidence*10)*10}%-{int(confidence*10)*10+10}%"
+                stats['confidence_distribution'][conf_range] = stats['confidence_distribution'].get(conf_range, 0) + 1
+                
+                # Salva nel database TAG (MySQL)
+                try:
+                    success = self.tag_db.classifica_sessione(
+                        session_id=session_id,
+                        tag_name=final_label,
+                        tenant_slug=self.tenant_slug,
+                        confidence_score=confidence,
+                        method=method,
+                        classified_by='cluster_propagation',
+                        notes=notes
+                    )
+                    
+                    if success:
+                        stats['save_successes'] += 1
+                    else:
+                        stats['save_errors'] += 1
+                        
+                    # Log progresso ogni 100 sessioni
+                    if (i + 1) % 100 == 0 or (i + 1) == len(session_ids):
+                        print(f"   💾 Propagazione: {i+1}/{len(session_ids)} ({((i+1)/len(session_ids)*100):.1f}%)")
+                        
+                except Exception as e:
+                    print(f"   ❌ Errore salvataggio sessione {session_id}: {e}")
+                    stats['save_errors'] += 1
+                
+                # Salva anche in MongoDB per l'interfaccia web
+                try:
+                    # Usa il connettore MongoDB esistente
+                    from MongoDB.connettore_mongo import MongoDBConnector
+                    
+                    # Genera tenant_id consistente
+                    tenant_id = hashlib.md5(self.tenant_slug.encode()).hexdigest()[:16]
+                    
+                    with MongoDBConnector() as mongo_connector:
+                        success = mongo_connector.save_session_classification(
+                            client=self.tenant_slug,
+                            session_id=session_id,
+                            tenant_id=tenant_id,
+                            tenant_name=self.tenant_slug,
+                            testo=session_data['testo_completo'],
+                            conversazione=session_data['testo_completo'],
+                            embedding=[],  # Embedding vuoto per propagazione
+                            embedding_model='cluster_propagation',
+                            classificazione=final_label,
+                            confidence=confidence,
+                            motivazione=notes,
+                            metadata={
+                                'method': method,
+                                'processing_time': 0.0,
+                                'timestamp': datetime.now().isoformat(),
+                                'cluster_id': int(cluster_id) if cluster_id != -1 else None,
+                                'propagation_source': 'cluster_representative'
+                            }
+                        )
+                    
+                    if success:
+                        stats['mongo_saves'] += 1
+                    
+                except Exception as e:
+                    print(f"   ⚠️ Warning salvataggio MongoDB per {session_id}: {e}")
+        
+        finally:
+            self.tag_db.disconnetti()
+        
+        # Mostra statistiche finali
+        print(f"✅ PROPAGAZIONE COMPLETATA!")
+        print(f"   💾 Salvate: {stats['save_successes']}/{stats['total_sessions']} sessioni")
+        print(f"   🏷️  Etichettate da cluster: {stats['labeled_sessions']}")
+        print(f"   🔍 Outlier assegnati a 'altro': {stats['unlabeled_sessions']}")
+        print(f"   ❌ Errori: {stats['save_errors']}")
+        
+        # Mostra distribuzione per cluster
+        print(f"   📊 Distribuzione per cluster:")
+        for cluster_id, cluster_info in stats['propagated_by_cluster'].items():
+            print(f"      Cluster {cluster_id}: {cluster_info['count']} sessioni → '{cluster_info['label']}'")
+        
+        return stats
 
 

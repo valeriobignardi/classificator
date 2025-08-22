@@ -24,6 +24,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'QualityGate'))
 from end_to_end_pipeline import EndToEndPipeline
 from tag_database_connector import TagDatabaseConnector
 from quality_gate_engine import QualityGateEngine
+from mongo_classification_reader import MongoClassificationReader
 
 app = Flask(__name__)
 CORS(app)  # Abilita CORS per permettere richieste dal frontend React
@@ -38,6 +39,7 @@ class ClassificationService:
         self.tag_db = TagDatabaseConnector()
         self.quality_gates = {}  # Cache dei QualityGateEngine per cliente
         self.shared_embedder = None  # Embedder condiviso per tutti i clienti per evitare CUDA OOM
+        self.mongo_reader = MongoClassificationReader()  # Reader per classificazioni MongoDB
         
         # SOLUZIONE ALLA RADICE: Lock per evitare inizializzazioni simultanee
         self._pipeline_locks = {}  # Lock per pipeline per cliente
@@ -1473,60 +1475,99 @@ def create_mock_cases(client_name: str):
 @app.route('/api/review/<client_name>/cases', methods=['GET'])
 def api_get_review_cases(client_name: str):
     """
-    API per ottenere i casi pending per la revisione umana.
+    API per ottenere tutte le sessioni classificate (non più solo pending).
+    Ora legge da MongoDB tutte le classificazioni esistenti.
     
     Query Parameters:
-        limit: Numero massimo di casi da restituire (default: 20)
+        limit: Numero massimo di casi da restituire (default: 100)
+        label: Filtra per etichetta specifica (opzionale)
         
     Returns:
         {
             "success": true,
             "cases": [...],
             "total": 5,
-            "client": "humanitas"
+            "client": "humanitas",
+            "labels": [...],
+            "statistics": {...}
         }
     """
     try:
-        limit = int(request.args.get('limit', 1000))  # Aumentato da 20 a 1000
+        limit = int(request.args.get('limit', 100))
+        label_filter = request.args.get('label', None)
         
-        # Ottieni il QualityGateEngine
-        quality_gate = classification_service.get_quality_gate(client_name)
+        # Ottieni reader MongoDB
+        mongo_reader = classification_service.mongo_reader
         
-        # Recupera casi pending
-        pending_cases = quality_gate.get_pending_reviews(tenant=client_name, limit=limit)
+        # Recupera sessioni (tutte o filtrate per etichetta)
+        if label_filter and label_filter != "Tutte le etichette":
+            sessions = mongo_reader.get_sessions_by_label(client_name, label_filter, limit)
+        else:
+            sessions = mongo_reader.get_all_sessions(client_name, limit)
         
-        # Converti ReviewCase in dict per JSON
-        cases_data = []
-        for case in pending_cases:
-            case_dict = {
-                'case_id': case.case_id,
-                'session_id': case.session_id,
-                'conversation_text': case.conversation_text,
-                'ml_prediction': case.ml_prediction,
-                'ml_confidence': round(case.ml_confidence, 3),
-                'llm_prediction': case.llm_prediction,
-                'llm_confidence': round(case.llm_confidence, 3),
-                'uncertainty_score': round(case.uncertainty_score, 3),
-                'novelty_score': round(case.novelty_score, 3),
-                'reason': case.reason,
-                'created_at': case.created_at.strftime('%Y-%m-%d %H:%M:%S') if hasattr(case.created_at, 'strftime') else str(case.created_at),
-                'tenant': case.tenant,
-                'cluster_id': int(case.cluster_id) if case.cluster_id is not None else None  # Converti numpy.int64 a int
-            }
-            cases_data.append(case_dict)
+        # Recupera etichette disponibili
+        available_labels = mongo_reader.get_available_labels(client_name)
+        
+        # Recupera statistiche
+        stats = mongo_reader.get_classification_stats(client_name)
         
         return jsonify({
             'success': True,
-            'cases': cases_data,
-            'total': len(cases_data),
-            'client': client_name
+            'cases': sessions,
+            'total': len(sessions),
+            'client': client_name,
+            'labels': available_labels,
+            'statistics': stats
         }), 200
         
     except Exception as e:
+        traceback.print_exc()
         return jsonify({
             'success': False,
             'error': str(e),
-            'client': client_name
+            'client': client_name,
+            'labels': [],
+            'statistics': {}
+        }), 500
+
+@app.route('/api/review/<client_name>/labels', methods=['GET'])
+def api_get_available_labels(client_name: str):
+    """
+    API per ottenere tutte le etichette/classificazioni disponibili per un cliente.
+    
+    Returns:
+        {
+            "success": true,
+            "labels": ["altro", "info_esami_prestazioni", ...],
+            "client": "humanitas",
+            "statistics": {...}
+        }
+    """
+    try:
+        # Ottieni reader MongoDB
+        mongo_reader = classification_service.mongo_reader
+        
+        # Recupera etichette disponibili
+        available_labels = mongo_reader.get_available_labels(client_name)
+        
+        # Recupera statistiche dettagliate
+        stats = mongo_reader.get_classification_stats(client_name)
+        
+        return jsonify({
+            'success': True,
+            'labels': available_labels,
+            'client': client_name,
+            'statistics': stats
+        }), 200
+        
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'client': client_name,
+            'labels': [],
+            'statistics': {}
         }), 500
 
 @app.route('/api/review/<client_name>/cases/<case_id>', methods=['GET'])

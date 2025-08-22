@@ -158,8 +158,8 @@ pipeline:
                                   # - false: Per server di produzione con modello stabile
                                   # - true: Solo per pipeline da zero con nuovi dati
   
-  # Modalità operative
-  default_auto_mode: false        # Modalità automatica di default
+  # Modalità operative - FORZATA REVIEW UMANA
+  default_auto_mode: false        # Modalità automatica DISABILITATA
   default_confidence_threshold: 0.7  # Soglia di confidenza di default
   
   # Parametri clustering di default
@@ -422,10 +422,10 @@ quality_gate:
   # Soglia di riaddestramento automatico (ogni N decisioni umane)
   retraining_threshold: 5   # RIDOTTO da 10 a 5 per testing più frequente
   
-  # Soglie per quality gate
-  uncertainty_threshold: 0.3      # Soglia di incertezza per human review
-  novelty_threshold: 0.7          # Soglia di novità per human review  
-  confidence_threshold: 0.8       # Soglia di confidenza minima
+  # Soglie per quality gate - ABBASSATE PER PIÙ REVIEW UMANA
+  uncertainty_threshold: 0.2      # Soglia di incertezza per human review (abbassata da 0.3)
+  novelty_threshold: 0.6          # Soglia di novità per human review (abbassata da 0.7)
+  confidence_threshold: 0.9       # Soglia di confidenza minima (alzata da 0.8 a 0.9)
   
   # Configurazione training automatico
   auto_retrain_enabled: true      # Abilita riaddestramento automatico

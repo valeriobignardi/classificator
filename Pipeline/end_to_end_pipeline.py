@@ -9,6 +9,7 @@ import json
 import glob
 import traceback
 import hashlib
+import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 import numpy as np
@@ -49,6 +50,10 @@ from intelligent_label_deduplicator import IntelligentLabelDeduplicator
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Classification'))
 from advanced_ensemble_classifier import AdvancedEnsembleClassifier
 
+# Import per gestione tenant-aware naming
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from mongo_classification_reader import MongoClassificationReader
+
 # Import BERTopic provider
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'TopicModeling'))
 try:
@@ -87,9 +92,15 @@ class EndToEndPipeline:
         """
         self.tenant_slug = tenant_slug
         
+        # Inizializza helper per naming tenant-aware
+        self.mongo_reader = MongoClassificationReader()
+        
         # Carica configurazione
         if config_path is None:
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
+        
+        # Salva il percorso del config come attributo dell'istanza
+        self.config_path = config_path
         
         with open(config_path, 'r', encoding='utf-8') as file:
             config = yaml.safe_load(file)
@@ -148,8 +159,12 @@ class EndToEndPipeline:
         print("🧠 Inizializzazione memoria semantica...")
         self.semantic_memory = SemanticMemoryManager(
             config_path=config_path,
-            embedder=self.embedder
+            embedder=self.embedder,
+            tenant_name=self.tenant_slug  # Passa il tenant per cache isolation
         )
+        
+        # Inizializza attributi per BERTopic pre-addestrato
+        self._bertopic_provider_trained = None
         
         # Inizializza l'ensemble classifier avanzato PRIMA (questo creerà il suo LLM internamente)
         print("🔗 Inizializzazione ensemble classifier avanzato...")
@@ -286,12 +301,77 @@ class EndToEndPipeline:
             
         return sessioni_filtrate
     
+    def _addestra_bertopic_anticipato(self, sessioni: Dict[str, Dict], embeddings: np.ndarray) -> Optional[Any]:
+        """
+        Addestra BERTopic sui testi completi PRIMA del clustering per ottimizzare le features.
+        
+        Args:
+            sessioni: Dizionario con le sessioni complete
+            embeddings: Embedding LaBSE pre-generati
+            
+        Returns:
+            BERTopicFeatureProvider addestrato o None se non abilitato/disponibile
+        """
+        if not self.bertopic_config.get('enabled', False):
+            print("🔄 BERTopic non abilitato, salto training anticipato")
+            return None
+            
+        if not _BERTopic_AVAILABLE:
+            print("❌ BERTopic SALTATO: Dipendenze non installate")
+            print("   💡 Installare: pip install bertopic umap hdbscan")
+            return None
+            
+        try:
+            testi = [dati['testo_completo'] for dati in sessioni.values()]
+            
+            print(f"\n🚀 TRAINING BERTOPIC ANTICIPATO (NUOVO FLUSSO OTTIMIZZATO):")
+            print(f"   📊 Dataset completo: {len(testi)} sessioni")
+            print(f"   📊 Embeddings shape: {embeddings.shape}")
+            print(f"   🎯 Addestramento su TUTTO il dataset per features ottimali")
+            
+            bertopic_provider = BERTopicFeatureProvider(
+                use_svd=self.bertopic_config.get('use_svd', False),
+                svd_components=self.bertopic_config.get('svd_components', 32)
+            )
+            
+            print("   🔥 Esecuzione bertopic_provider.fit() su dataset completo...")
+            start_bertopic = time.time()
+            bertopic_provider.fit(testi, embeddings=embeddings)
+            fit_time = time.time() - start_bertopic
+            print(f"   ✅ BERTopic FIT completato in {fit_time:.2f} secondi")
+            
+            print("   🔄 Esecuzione bertopic_provider.transform() per features extraction...")
+            start_transform = time.time()
+            tr = bertopic_provider.transform(
+                testi,
+                embeddings=embeddings,
+                return_one_hot=self.bertopic_config.get('return_one_hot', False),
+                top_k=self.bertopic_config.get('top_k', None)
+            )
+            transform_time = time.time() - start_transform
+            print(f"   ✅ BERTopic TRANSFORM completato in {transform_time:.2f} secondi")
+            
+            topic_probas = tr.get('topic_probas')
+            one_hot = tr.get('one_hot')
+            
+            print(f"   📊 Topic probabilities shape: {topic_probas.shape if topic_probas is not None else 'None'}")
+            print(f"   📊 One-hot shape: {one_hot.shape if one_hot is not None else 'None'}")
+            print(f"   ✅ BERTopic provider addestrato con successo su {len(testi)} sessioni")
+            
+            return bertopic_provider
+            
+        except Exception as e:
+            print(f"❌ ERRORE Training BERTopic anticipato: {e}")
+            print(f"   🔍 Traceback: {traceback.format_exc()}")
+            return None
+
     def esegui_clustering(self, sessioni: Dict[str, Dict]) -> tuple:
         """
         Esegue il clustering delle sessioni con approccio intelligente multi-livello:
-        1. LLM per comprensione linguaggio naturale (primario)
-        2. Pattern regex per fallback veloce (secondario)  
-        3. Validazione umana per casi ambigui (terziario)
+        1. BERTopic training anticipato su dataset completo (NUOVO)
+        2. LLM per comprensione linguaggio naturale (primario)
+        3. Pattern regex per fallback veloce (secondario)  
+        4. Validazione umana per casi ambigui (terziario)
         
         Args:
             sessioni: Dizionario con le sessioni
@@ -306,6 +386,16 @@ class EndToEndPipeline:
         testi = [dati['testo_completo'] for dati in sessioni.values()]
         embeddings = self.embedder.encode(testi, show_progress_bar=True)
         print(f"✅ Embedding generati: shape {embeddings.shape}")
+        
+        # 🆕 NUOVO: Training BERTopic anticipato su dataset completo
+        print(f"\n📊 FASE 2A: TRAINING BERTOPIC ANTICIPATO")
+        self._bertopic_provider_trained = self._addestra_bertopic_anticipato(sessioni, embeddings)
+        if self._bertopic_provider_trained:
+            print(f"   ✅ BERTopic provider disponibile per augmentation features")
+        else:
+            print(f"   ⚠️ BERTopic provider non disponibile, proseguo con sole embeddings")
+        
+        print(f"\n📊 FASE 2B: CLUSTERING HDBSCAN")
         
         # Carica configurazione clustering
         with open(self.clusterer.config_path, 'r', encoding='utf-8') as file:
@@ -602,60 +692,117 @@ class EndToEndPipeline:
             print("⚠️ Troppo pochi dati dal clustering. Uso classificazione basata su tag predefiniti...")
             return self._allena_classificatore_fallback(sessioni)
         
-        # Augment features con BERTopic se abilitato
+        # 🆕 NUOVO FLUSSO: Usa BERTopic pre-addestrato per feature augmentation
         ml_features = train_embeddings
-        bertopic_provider = None
-        if self.bertopic_config.get('enabled', False):
-            if not _BERTopic_AVAILABLE:
-                print("⚠️ BERTopic abilitato da config ma dipendenze non installate; proseguo senza augmentation")
-            else:
-                try:
-                    print("🌐 BERTopic attivo: fit+transform per feature augmentation...")
-                    bertopic_provider = BERTopicFeatureProvider(
-                        use_svd=self.bertopic_config.get('use_svd', False),
-                        svd_components=self.bertopic_config.get('svd_components', 32)
-                    )
-                    bertopic_provider.fit(session_texts, embeddings=train_embeddings)
-                    tr = bertopic_provider.transform(
-                        session_texts,
-                        embeddings=train_embeddings,
-                        return_one_hot=self.bertopic_config.get('return_one_hot', False),
-                        top_k=self.bertopic_config.get('top_k', None)
-                    )
-                    topic_probas = tr.get('topic_probas')
-                    one_hot = tr.get('one_hot')
-                    parts = [train_embeddings]
-                    if topic_probas is not None and topic_probas.size > 0:
-                        parts.append(topic_probas)
-                    if one_hot is not None and one_hot.size > 0:
-                        parts.append(one_hot)
-                    ml_features = np.concatenate(parts, axis=1)
-                    # Inietta provider nell'ensemble per coerenza in inference
-                    self.ensemble_classifier.set_bertopic_provider(
-                        bertopic_provider,
-                        top_k=self.bertopic_config.get('top_k', 15),
-                        return_one_hot=self.bertopic_config.get('return_one_hot', False)
-                    )
-                    print(f"✅ Feature ML con BERTopic: {train_embeddings.shape[1]} -> {ml_features.shape[1]}")
-                except Exception as e:
-                    print(f"⚠️ Errore BERTopic augmentation: {e}; proseguo con sole embeddings")
-                    bertopic_provider = None
+        bertopic_provider = getattr(self, '_bertopic_provider_trained', None)
+        
+        print(f"\n🔧 UTILIZZO BERTOPIC PRE-ADDESTRATO:")
+        print(f"   📋 BERTopic provider disponibile: {bertopic_provider is not None}")
+        
+        if bertopic_provider is not None:
+            try:
+                print(f"   🚀 Utilizzo BERTopic provider pre-addestrato per feature augmentation")
+                print(f"   📊 Testi da processare: {len(session_texts)}")
+                print(f"   📊 Training embeddings shape: {train_embeddings.shape}")
+                
+                print("   � Esecuzione bertopic_provider.transform() sui training data...")
+                start_transform = time.time()
+                tr = bertopic_provider.transform(
+                    session_texts,
+                    embeddings=train_embeddings,
+                    return_one_hot=self.bertopic_config.get('return_one_hot', False),
+                    top_k=self.bertopic_config.get('top_k', None)
+                )
+                transform_time = time.time() - start_transform
+                print(f"   ✅ Transform completato in {transform_time:.2f} secondi")
+                
+                topic_probas = tr.get('topic_probas')
+                one_hot = tr.get('one_hot')
+                
+                print(f"   📊 Topic probabilities shape: {topic_probas.shape if topic_probas is not None else 'None'}")
+                print(f"   📊 One-hot shape: {one_hot.shape if one_hot is not None else 'None'}")
+                
+                # Concatena features
+                parts = [train_embeddings]
+                if topic_probas is not None and topic_probas.size > 0:
+                    parts.append(topic_probas)
+                    print(f"   ✅ Topic probabilities aggiunte alle features")
+                if one_hot is not None and one_hot.size > 0:
+                    parts.append(one_hot)
+                    print(f"   ✅ One-hot encoding aggiunto alle features")
+                    
+                ml_features = np.concatenate(parts, axis=1)
+                print(f"   📊 Features finali shape: {ml_features.shape}")
+                print(f"   ✅ Feature enhancement: {train_embeddings.shape[1]} -> {ml_features.shape[1]}")
+                
+                # Inietta provider nell'ensemble per coerenza in inference
+                self.ensemble_classifier.set_bertopic_provider(
+                    bertopic_provider,
+                    top_k=self.bertopic_config.get('top_k', 15),
+                    return_one_hot=self.bertopic_config.get('return_one_hot', False)
+                )
+                print(f"   ✅ BERTopic provider iniettato nell'ensemble classifier")
+                
+            except Exception as e:
+                print(f"⚠️ Errore nell'utilizzo BERTopic pre-addestrato: {e}")
+                print(f"   🔄 Proseguo con sole embeddings LaBSE")
+                bertopic_provider = None
+        else:
+            print(f"   ⚠️ Nessun BERTopic provider pre-addestrato disponibile")
+            print(f"   🔄 Proseguo con sole embeddings LaBSE")
         
         # Allena l'ensemble ML con le feature (augmentate o raw)
         print("🎓 Training ensemble ML avanzato...")
         metrics = self.ensemble_classifier.train_ml_ensemble(ml_features, train_labels)
         
         # Salva il modello ensemble e l'eventuale provider BERTopic
-        model_name = f"{self.tenant_slug}_classifier_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        model_name = self.mongo_reader.generate_model_name(self.tenant_slug, "classifier")
         self.ensemble_classifier.save_ensemble_model(f"models/{model_name}")
         
+        # 🆕 SALVATAGGIO E CARICAMENTO IMMEDIATO BERTOPIC
         if bertopic_provider is not None:
             try:
+                print(f"\n💾 SALVATAGGIO BERTOPIC PRE-ADDESTRATO:")
                 provider_dir = os.path.join("models", f"{model_name}_{self.bertopic_config.get('model_subdir', 'bertopic')}")
+                print(f"   📁 Directory target: {provider_dir}")
+                
+                # Crea directory se non esiste
+                os.makedirs(provider_dir, exist_ok=True)
+                print(f"   📁 Directory creata/verificata")
+                
+                print(f"   💾 Avvio salvataggio bertopic_provider.save()...")
+                start_save = time.time()
                 bertopic_provider.save(provider_dir)
-                print(f"💾 BERTopic provider salvato in {provider_dir}")
+                save_time = time.time() - start_save
+                print(f"   ✅ BERTopic provider salvato con successo in {save_time:.2f} secondi")
+                print(f"   📊 Path completo: {os.path.abspath(provider_dir)}")
+                
+                # Verifica file salvati
+                saved_files = [f for f in os.listdir(provider_dir) if os.path.isfile(os.path.join(provider_dir, f))]
+                print(f"   📄 File salvati: {len(saved_files)} -> {saved_files}")
+                
+                # 🚀 CARICAMENTO IMMEDIATO DEL BERTOPIC NEL ENSEMBLE
+                print(f"\n🚀 CARICAMENTO IMMEDIATO BERTOPIC NELL'ENSEMBLE:")
+                try:
+                    # Imposta il path nel classificatore per il caricamento automatico
+                    if hasattr(self.ensemble_classifier, 'llm_classifier') and hasattr(self.ensemble_classifier.llm_classifier, 'bertopic_provider'):
+                        print(f"   📁 Configurazione path BERTopic: {provider_dir}")
+                        # Se l'ensemble ha già il provider iniettato, è già pronto
+                        print(f"   ✅ BERTopic provider già iniettato nell'ensemble durante il training")
+                        print(f"   🎯 Sistema di fallback intelligente immediatamente operativo")
+                    else:
+                        print(f"   ⚠️ Ensemble non supporta BERTopic injection, salvataggio solo per restart")
+                        
+                except Exception as load_e:
+                    print(f"❌ ERRORE CARICAMENTO IMMEDIATO: {load_e}")
+                    print(f"   🔄 BERTopic sarà disponibile solo dopo restart del server")
+                
             except Exception as e:
-                print(f"⚠️ Errore nel salvataggio del BERTopic provider: {e}")
+                print(f"❌ ERRORE SALVATAGGIO BERTOPIC: {e}")
+                print(f"   🔍 Traceback: {traceback.format_exc()}")
+        else:
+            print(f"\n⚠️ NESSUN BERTOPIC DA SALVARE: bertopic_provider è None")
+            print(f"   💡 Verifica configurazione BERTopic nel config.yaml")
         
         # Aggiungi statistiche del review interattivo
         if interactive_mode:
@@ -776,7 +923,7 @@ class EndToEndPipeline:
         metrics = self.ensemble_classifier.train_ml_ensemble(embeddings, labels_array)
         
         # Salva il modello ensemble
-        model_name = f"{self.tenant_slug}_fallback_classifier_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        model_name = self.mongo_reader.generate_model_name(self.tenant_slug, "fallback_classifier")
         self.ensemble_classifier.save_ensemble_model(f"models/{model_name}")
         
         print(f"✅ Classificatore fallback allenato e salvato come '{model_name}'")
@@ -1611,13 +1758,13 @@ class EndToEndPipeline:
             print(f"⏱️  Durata: {duration.total_seconds():.1f} secondi")
             print(f"📊 Dataset: {len(sessioni)} sessioni totali")
             print(f"🧩 Clustering: {n_clusters} cluster su dataset completo")
-            print(f"👤 Review: {selection_stats['total_sessions_for_review']} sessioni riviste dall'umano")
+            print(f"� Sessioni selezionate per review: {selection_stats['total_sessions_for_review']}")
             
             if 'human_feedback_stats' in training_metrics:
                 feedback = training_metrics['human_feedback_stats']
-                print(f"👤 Review umane: {feedback.get('total_reviews', 0)}")
-                print(f"✅ Etichette approvate: {feedback.get('approved_labels', 0)}")
-                print(f"📝 Nuove etichette: {feedback.get('new_labels', 0)}")
+                print(f"👤 Review umane effettuate: {feedback.get('total_reviews', 0)}")
+                print(f"✅ Etichette approvate dall'umano: {feedback.get('approved_labels', 0)}")
+                print(f"📝 Nuove etichette create dall'umano: {feedback.get('new_labels', 0)}")
             
             return results
             
@@ -2005,20 +2152,51 @@ class EndToEndPipeline:
             # Carica eventuale provider BERTopic accoppiato
             subdir = self.bertopic_config.get('model_subdir', 'bertopic')
             provider_dir = f"{model_base_name}_{subdir}"
+            
+            print(f"\n🔍 VERIFICA BERTOPIC LOADING:")
+            print(f"   📋 BERTopic enabled: {self.bertopic_config.get('enabled', False)}")
+            print(f"   📋 BERTopic available: {_BERTopic_AVAILABLE}")
+            print(f"   📁 Provider directory: {provider_dir}")
+            print(f"   📁 Directory exists: {os.path.isdir(provider_dir)}")
+            
+            if os.path.isdir(provider_dir):
+                provider_files = [f for f in os.listdir(provider_dir) if os.path.isfile(os.path.join(provider_dir, f))]
+                print(f"   � File trovati: {len(provider_files)} -> {provider_files}")
+            
             if self.bertopic_config.get('enabled', False) and _BERTopic_AVAILABLE and os.path.isdir(provider_dir):
                 try:
+                    print(f"\n🔄 CARICAMENTO BERTOPIC:")
+                    print(f"   📁 Path completo: {os.path.abspath(provider_dir)}")
+                    
+                    start_load = time.time()
                     provider = BERTopicFeatureProvider().load(provider_dir)
-                    self.ensemble_classifier.set_bertopic_provider(
-                        provider,
-                        top_k=self.bertopic_config.get('top_k', 15),
-                        return_one_hot=self.bertopic_config.get('return_one_hot', False)
-                    )
-                    print(f"🔗 BERTopic provider caricato da {provider_dir}")
+                    load_time = time.time() - start_load
+                    
+                    print(f"   ⏱️ Caricamento completato in {load_time:.2f} secondi")
+                    
+                    # Verifica se il provider è stato caricato correttamente
+                    if provider is not None:
+                        print(f"   ✅ BERTopic provider caricato con successo")
+                        self.ensemble_classifier.set_bertopic_provider(
+                            provider,
+                            top_k=self.bertopic_config.get('top_k', 15),
+                            return_one_hot=self.bertopic_config.get('return_one_hot', False)
+                        )
+                        print(f"   ✅ BERTopic provider configurato nell'ensemble")
+                    else:
+                        print(f"   ⚠️ BERTopic provider restituito None - modello corrotto o incompatibile")
+                        print(f"   💡 Suggerimento: eseguire training per ricreare il modello")
+                        
                 except Exception as e:
-                    print(f"⚠️ Errore caricamento BERTopic provider: {e}")
+                    print(f"❌ ERRORE CARICAMENTO BERTOPIC: {e}")
+                    print(f"   🔍 Tipo errore: {type(e).__name__}")
+                    print(f"   🔍 Stack trace: {traceback.format_exc()}")
+                    print("   💡 Continuando senza BERTopic provider...")
             else:
                 if self.bertopic_config.get('enabled', False) and not _BERTopic_AVAILABLE:
                     print("⚠️ BERTopic abilitato ma non disponibile in runtime; proseguo senza provider")
+                elif self.bertopic_config.get('enabled', False):
+                    print(f"⚠️ Directory BERTopic provider non trovata: {provider_dir}")
         except Exception as e:
             print(f"⚠️ Errore nel caricamento del modello: {e}")
             print("   Il sistema continuerà con modelli non addestrati")

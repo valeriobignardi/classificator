@@ -129,19 +129,37 @@ class SessionAggregator:
             sessioni_aggregate[session_id]['ultimo_messaggio'] = created_at
         
         # Genera il testo completo per ogni sessione
+        messaggi_saltati = 0
+        sessioni_vuote = 0
+        
         for session_id, dati in sessioni_aggregate.items():
             testo_parti = []
             
             # Ordina i messaggi per timestamp
             messaggi_ordinati = sorted(dati['messaggi'], key=lambda x: x['created_at'])
             
-            for msg in messaggi_ordinati:
+            # Conta i messaggi che salterei (per statistiche)
+            messaggi_che_salto = min(2, len(messaggi_ordinati))
+            messaggi_saltati += messaggi_che_salto
+            
+            if len(messaggi_ordinati) <= 2:
+                # Se ci sono solo i messaggi di benvenuto, segna come sessione vuota
+                dati['testo_completo'] = ""
+                sessioni_vuote += 1
+                continue
+            
+            # MODIFICA: Salta i primi 2 messaggi (benvenuto utente + assistente)
+            messaggi_da_processare = messaggi_ordinati[2:]
+            
+            for msg in messaggi_da_processare:
                 prefisso = "[UTENTE]" if msg['said_by'] == 'USER' else "[ASSISTENTE]"
                 testo_parti.append(f"{prefisso} {msg['message']}")
             
             dati['testo_completo'] = " ".join(testo_parti)
         
         print(f"✅ Aggregate {len(sessioni_aggregate)} sessioni uniche")
+        print(f"🔄 Saltati {messaggi_saltati} messaggi di benvenuto (primi 2 per sessione)")
+        print(f"🔄 Sessioni vuote (solo benvenuto): {sessioni_vuote}")
         return sessioni_aggregate
     
     def filtra_sessioni_vuote(self, sessioni: Dict[str, Dict]) -> Dict[str, Dict]:

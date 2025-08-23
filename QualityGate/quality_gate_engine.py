@@ -68,7 +68,6 @@ class QualityGateEngine:
     
     def __init__(self, 
                  tenant_name: str,
-                 review_db_path: str = None,
                  training_log_path: str = None,
                  config: Dict[str, Any] = None):
         """
@@ -76,12 +75,10 @@ class QualityGateEngine:
         
         Args:
             tenant_name: Nome del tenant (cliente)
-            review_db_path: Percorso del database per la coda di revisione (opzionale)
             training_log_path: Percorso del file di log per le decisioni di training (opzionale)
             config: Configurazione aggiuntiva (opzionale)
         """
         self.tenant_name = tenant_name
-        self.review_db_path = review_db_path or f"human_review_{tenant_name}.db"
         self.training_log_path = training_log_path or f"training_decisions_{tenant_name}.jsonl"
         
         # Usa config fornito o default
@@ -95,15 +92,17 @@ class QualityGateEngine:
         self.uncertainty_threshold = self.quality_config.get('uncertainty_threshold', 0.5)
         self.novelty_threshold = self.quality_config.get('novelty_threshold', 0.8)
         
-        # Storage per casi in revisione
-        self.pending_reviews: Dict[str, ReviewCase] = {}
+        # Inizializza MongoReader per gestire review cases
+        from mongo_classification_reader import MongoClassificationReader
+        self.mongo_reader = MongoClassificationReader()
+        self.mongo_reader.connect()
         
         # Inizializza SemanticMemoryManager per novelty detection
         try:
             if SemanticMemoryManager is not None:
-                self.semantic_memory = SemanticMemoryManager()
+                self.semantic_memory = SemanticMemoryManager(tenant_name=self.tenant_name)
                 self.semantic_memory.load_semantic_memory()
-                self.logger.info("SemanticMemoryManager inizializzato per novelty detection")
+                self.logger.info(f"SemanticMemoryManager inizializzato per novelty detection - Tenant: {self.tenant_name}")
             else:
                 self.semantic_memory = None
                 self.logger.info("SemanticMemoryManager non disponibile, novelty detection disabilitata")
@@ -114,7 +113,6 @@ class QualityGateEngine:
         self.logger.info(f"QualityGate inizializzato per tenant {tenant_name} con soglie: "
                         f"confidence={self.confidence_threshold}, disagreement={self.disagreement_threshold}, "
                         f"uncertainty={self.uncertainty_threshold}")
-        self.logger.info(f"Database revisioni: {self.review_db_path}")
         self.logger.info(f"Log training: {self.training_log_path}")
 
     def evaluate_classification(self, 
@@ -182,6 +180,49 @@ class QualityGateEngine:
                 }
             })
 
+            # Determina la decisione finale basata su confidenza e disaccordo
+            if needs_review:
+                # Se necessita review, la decisione finale è incerta
+                final_decision = {
+                    "predicted_label": ml_label if ml_confidence > llm_confidence else llm_label,
+                    "confidence": overall_confidence,
+                    "method": "quality_gate_review_needed",
+                    "reasoning": reason
+                }
+            else:
+                # Auto-classificazione: usa la predizione con confidenza maggiore
+                if ml_confidence >= llm_confidence:
+                    final_decision = {
+                        "predicted_label": ml_label,
+                        "confidence": ml_confidence,
+                        "method": "ensemble_ml_primary",
+                        "reasoning": f"ML prediction selected (conf: {ml_confidence:.3f} vs LLM: {llm_confidence:.3f})"
+                    }
+                else:
+                    final_decision = {
+                        "predicted_label": llm_label,
+                        "confidence": llm_confidence,
+                        "method": "ensemble_llm_primary",
+                        "reasoning": f"LLM prediction selected (conf: {llm_confidence:.3f} vs ML: {ml_confidence:.3f})"
+                    }
+
+            # NUOVO: Salva SEMPRE il risultato completo in MongoDB
+            mongo_saved = self.mongo_reader.save_classification_result(
+                session_id=session_id,
+                client_name=tenant,
+                ml_result=ml_result,
+                llm_result=llm_result,
+                final_decision=final_decision,
+                conversation_text=conversation_text,
+                needs_review=needs_review,
+                review_reason=reason if needs_review else None
+            )
+            
+            if mongo_saved:
+                self.logger.debug(f"✅ Risultato classificazione salvato in MongoDB: {session_id} -> {final_decision['predicted_label']}")
+            else:
+                self.logger.warning(f"⚠️ Impossibile salvare risultato in MongoDB per {session_id}")
+
             decision = QualityDecision(
                 needs_review=decision_data['needs_review'],
                 confidence_score=decision_data['confidence_score'],
@@ -193,7 +234,7 @@ class QualityGateEngine:
                 metadata=decision_data['metadata']
             )
             
-            # Se necessita revisione, crea il caso
+            # Se necessita revisione, crea anche il caso di review legacy (per backward compatibility)
             if needs_review:
                 self._create_review_case(session_id, conversation_text, ml_result, llm_result,
                                        uncertainty_score, novelty_score, reason, tenant,
@@ -400,76 +441,109 @@ class QualityGateEngine:
             embedding=embedding
         )
         
-        self.pending_reviews[case_id] = review_case
+        # MODIFICATO: Non salviamo più in memory, tutto va in MongoDB tramite il nuovo save_classification_result
+        # Il caso è già stato creato dal calling method evaluate_classification()
         self.logger.info(f"Creato caso di revisione {case_id} per sessione {session_id}: {reason}")
 
-    def get_pending_reviews(self, tenant: Optional[str] = None, limit: int = 1000) -> List[ReviewCase]:
-        """Ottieni i casi in attesa di revisione"""
-        cases = list(self.pending_reviews.values())
+    def get_pending_reviews(self, tenant: Optional[str] = None, limit: int = 1000) -> List[Dict[str, Any]]:
+        """
+        Scopo: Ottiene i casi in attesa di revisione da MongoDB
         
-        if tenant:
-            cases = [case for case in cases if case.tenant == tenant]
-        
-        # Ordina per priorità (alta incertezza e disaccordo prima)
-        cases.sort(key=lambda x: (x.uncertainty_score + 
-                                 (1.0 if x.ml_prediction != x.llm_prediction else 0.0)),
-                  reverse=True)
-        
-        return cases[:limit]
+        Parametri input:
+            - tenant: Nome del tenant (opzionale)
+            - limit: Numero massimo di casi da recuperare
+            
+        Output:
+            - Lista di dizionari con i casi pending review
+            
+        Ultimo aggiornamento: 2025-08-21
+        """
+        try:
+            client_name = tenant or self.tenant_name
+            sessions = self.mongo_reader.get_pending_review_sessions(client_name, limit)
+            
+            # Converte in formato compatibile con ReviewCase per l'API
+            review_cases = []
+            for session in sessions:
+                review_case = {
+                    'case_id': session['case_id'],
+                    'session_id': session['session_id'],
+                    'tenant': client_name,
+                    'conversation_text': session['conversation_text'],
+                    'ml_prediction': session.get('classification', ''),
+                    'ml_confidence': session.get('confidence', 0.0),
+                    'llm_prediction': session.get('classification', ''),
+                    'llm_confidence': session.get('confidence', 0.0),
+                    'uncertainty_score': 0.8,  # Default per ora
+                    'novelty_score': 0.5,      # Default per ora  
+                    'reason': session.get('review_reason', 'manual_review'),
+                    'created_at': session.get('timestamp'),
+                    'review_status': session.get('review_status', 'pending')
+                }
+                review_cases.append(review_case)
+            
+            return review_cases
+            
+        except Exception as e:
+            self.logger.error(f"Errore nel recupero pending reviews: {e}")
+            return []
 
     def resolve_review_case(self, case_id: str, human_decision: str, 
                           human_confidence: float = 1.0, notes: str = "") -> bool:
         """
-        Risolve un caso di revisione con la decisione umana.
+        Scopo: Risolve un caso di revisione con la decisione umana usando MongoDB
         
-        Args:
-            case_id: ID del caso
-            human_decision: Etichetta scelta dall'umano
-            human_confidence: Confidenza della decisione umana
-            notes: Note aggiuntive
+        Parametri input:
+            - case_id: ID del caso (MongoDB _id)
+            - human_decision: Etichetta scelta dall'umano
+            - human_confidence: Confidenza della decisione umana
+            - notes: Note aggiuntive
             
-        Returns:
-            bool: True se risolto con successo
+        Output:
+            - True se risolto con successo
+            
+        Ultimo aggiornamento: 2025-08-21
         """
-        if case_id not in self.pending_reviews:
+        
+        # Risolvi il caso direttamente in MongoDB
+        success = self.mongo_reader.resolve_review_session(
+            case_id=case_id,
+            client_name=self.tenant_name,
+            human_decision=human_decision,
+            human_confidence=human_confidence,
+            human_notes=notes
+        )
+        
+        if not success:
             self.logger.warning(f"Caso di revisione {case_id} non trovato")
             return False
         
-        case = self.pending_reviews[case_id]
-        
-        # Log della decisione per training futuro
+        # Log della decisione per training futuro (manteniamo il log file)
         decision_log = convert_numpy_types({
             'case_id': case_id,
-            'session_id': case.session_id,
-            'tenant': case.tenant,
-            'ml_prediction': case.ml_prediction,
-            'ml_confidence': case.ml_confidence,
-            'llm_prediction': case.llm_prediction,
-            'llm_confidence': case.llm_confidence,
+            'session_id': case_id,  # Per ora usiamo case_id come session_id
+            'tenant': self.tenant_name,
+            'ml_prediction': '',  # Recupereremo dai dati MongoDB se necessario
+            'ml_confidence': 0.0,
+            'llm_prediction': '',
+            'llm_confidence': 0.0,
             'human_decision': human_decision,
             'human_confidence': human_confidence,
-            'uncertainty_score': case.uncertainty_score,
-            'novelty_score': case.novelty_score,
-            'reason': case.reason,
+            'uncertainty_score': 0.8,  # Default
+            'novelty_score': 0.5,      # Default
+            'reason': 'mongo_review',
             'notes': notes,
             'resolved_at': datetime.now().isoformat()
         })
         
-        self.logger.info(f"Risolto caso {case_id}: umano sceglie '{human_decision}' "
-                        f"(ML: '{case.ml_prediction}', LLM: '{case.llm_prediction}')")
+        self.logger.info(f"Risolto caso {case_id}: umano sceglie '{human_decision}'")
         
         # Log in JSON per training futuro
         with open(self.training_log_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(decision_log, ensure_ascii=False) + '\n')
         
-        # NUOVO: Salva anche nella tabella session_classifications per coerenza
-        self._save_human_decision_to_database(case, human_decision, human_confidence, notes)
-        
         # Aggiorna cache dei tag umani
         self._update_human_tags_cache(human_decision)
-        
-        # Rimuovi dalla coda pending
-        del self.pending_reviews[case_id]
         
         self.logger.info(f"Caso {case_id} risolto: {human_decision} (confidenza: {human_confidence})")
         return True
@@ -717,7 +791,7 @@ class QualityGateEngine:
     def _prepare_training_data(self, decisions: List[Dict[str, Any]]) -> Tuple[np.ndarray, np.ndarray]:
         """
         Prepara i dati di training dalle decisioni umane.
-        Se i session_id sono mock, usa campioni di dati reali dal database per quella categoria.
+        Se i session_id sono mock, usa campioni di dati reali dal database MongoDB per quella categoria.
         
         Args:
             decisions: Lista di decisioni umane dal log
@@ -730,54 +804,58 @@ class QualityGateEngine:
             conversations = []
             labels = []
             
-            # USA IL SESSION AGGREGATOR per ottenere conversazioni aggregate correttamente
-            from MySql.connettore import MySqlConnettore
-            from Preprocessing.session_aggregator import SessionAggregator
+            # USA MONGODB CLASSIFICATION READER per ottenere conversazioni classificate
+            from mongo_classification_reader import MongoClassificationReader
             
-            # Prima prova a cercare le conversazioni originali usando SessionAggregator
-            aggregator = SessionAggregator(schema='humanitas')
-            sessioni_aggregate = aggregator.estrai_sessioni_aggregate()
+            # Inizializza il reader MongoDB
+            mongo_reader = MongoClassificationReader()
+            mongo_reader.connect()
             
-            db_connector = None
             try:
-                db_connector = MySqlConnettore()
-                db_connector.connetti()
+                # Ottieni tutte le sessioni classificate dal MongoDB per il cliente 'humanitas'
+                all_sessions = mongo_reader.get_all_sessions("humanitas")
+                
+                # Crea un dizionario per accesso rapido alle sessioni per session_id
+                sessions_dict = {}
+                for session in all_sessions:
+                    session_id = session.get('session_id', '')
+                    if session_id:
+                        sessions_dict[session_id] = session
+                
+                self.logger.info(f"Caricate {len(sessions_dict)} sessioni classificate da MongoDB")
                 
                 for decision in decisions:
                     session_id = decision['session_id']
                     human_label = decision['human_decision']
                     
-                    # Prima prova a ottenere la conversazione aggregata correttamente
-                    if session_id in sessioni_aggregate:
-                        # Trovata conversazione originale con aggregazione corretta
-                        conversation_text = sessioni_aggregate[session_id]['testo_completo']
+                    # Prima prova a trovare la conversazione originale per session_id
+                    if session_id in sessions_dict:
+                        # Trovata conversazione originale
+                        session_data = sessions_dict[session_id]
+                        conversation_text = session_data['conversation_text']
                         conversations.append(conversation_text)
                         labels.append(human_label)
-                        self.logger.debug(f"Usata conversazione aggregata correttamente per {session_id}")
+                        self.logger.debug(f"Usata conversazione originale per {session_id}")
                     else:
                         # Session_id non trovato (probabilmente mock), usa campione reale per questa categoria
                         self.logger.debug(f"Session_id {session_id} non trovato, cerco campione reale per categoria {human_label}")
                         
                         # Cerca conversazioni reali già classificate con questa etichetta
-                        real_sample_query = """
-                        SELECT ca.conversation_text
-                        FROM conversazioni_aggregate ca
-                        JOIN session_classifications sc ON ca.session_id = sc.session_id
-                        WHERE sc.tag_name = %s 
-                        AND sc.tenant_name = 'humanitas'
-                        AND ca.conversation_text IS NOT NULL
-                        AND LENGTH(ca.conversation_text) > 20
-                        ORDER BY RAND()
-                        LIMIT 1
-                        """
+                        sample_sessions = mongo_reader.get_sessions_by_label("humanitas", human_label, limit=1)
                         
-                        real_results = db_connector.esegui_query(real_sample_query, (human_label,))
-                        
-                        if real_results and len(real_results) > 0 and real_results[0][0]:
+                        if sample_sessions and len(sample_sessions) > 0:
                             # Trovato campione reale per questa categoria
-                            conversations.append(real_results[0][0])
-                            labels.append(human_label)
-                            self.logger.info(f"Usato campione reale per categoria {human_label}")
+                            sample_conversation = sample_sessions[0]['conversation_text']
+                            if sample_conversation and len(sample_conversation.strip()) > 20:
+                                conversations.append(sample_conversation)
+                                labels.append(human_label)
+                                self.logger.info(f"Usato campione reale per categoria {human_label}")
+                            else:
+                                # Testo troppo corto, usa testo sintetico
+                                synthetic_text = self._create_synthetic_conversation_for_label(human_label)
+                                conversations.append(synthetic_text)
+                                labels.append(human_label)
+                                self.logger.info(f"Campione reale troppo corto, creato testo sintetico per {human_label}")
                         else:
                             # Nessun campione reale trovato, crea testo sintetico
                             synthetic_text = self._create_synthetic_conversation_for_label(human_label)
@@ -786,8 +864,7 @@ class QualityGateEngine:
                             self.logger.info(f"Creato testo sintetico per categoria {human_label}")
                 
             finally:
-                if db_connector:
-                    db_connector.disconnetti()
+                mongo_reader.disconnect()
             
             if not conversations:
                 self.logger.warning("Nessuna conversazione preparata per il training")
@@ -1216,12 +1293,20 @@ class QualityGateEngine:
                     tenant=self.tenant_name
                 )
                 
-                self.pending_reviews[case_id] = review_case
-                created_case_ids.append(case_id)
+                # Per i casi mock, crea direttamente in MongoDB per realismo
+                success = self.mongo_reader.mark_session_for_review(
+                    session_id=f"mock_session_{i+1}",
+                    client_name=self.tenant_name,
+                    review_reason=reason
+                )
                 
-                self.logger.info(f"Creato caso mock {case_id}: {reason}")
+                if success:
+                    created_case_ids.append(case_id)
+                    self.logger.info(f"Creato caso mock {case_id} in MongoDB: {reason}")
+                else:
+                    self.logger.warning(f"Impossibile creare caso mock {case_id} in MongoDB")
             
-            self.logger.info(f"Creati {len(created_case_ids)} casi mock per testing")
+            self.logger.info(f"Creati {len(created_case_ids)} casi mock in MongoDB per testing")
             return created_case_ids
             
         except Exception as e:
@@ -1260,6 +1345,17 @@ class QualityGateEngine:
             from EmbeddingEngine.labse_embedder import LaBSEEmbedder
             from Preprocessing.session_aggregator import SessionAggregator
 
+            # ⚠️ IMPORTANTE: Aggiorna le soglie con i valori dell'utente
+            old_confidence_threshold = self.confidence_threshold
+            old_disagreement_threshold = self.disagreement_threshold
+            
+            self.confidence_threshold = min_confidence
+            self.disagreement_threshold = disagreement_threshold
+            
+            self.logger.info(f"🎯 Soglie aggiornate con valori utente:")
+            self.logger.info(f"  📊 Confidence: {old_confidence_threshold} -> {self.confidence_threshold}")
+            self.logger.info(f"  ⚖️ Disagreement: {old_disagreement_threshold} -> {self.disagreement_threshold}")
+
             self.logger.info(f"🔍 WORKFLOW UNIFICATO - Analisi classificazioni dal database {self.tenant_name}")
             self.logger.info(f"Parametri: batch_size={batch_size}, min_confidence={min_confidence}")
             self.logger.info(f"Modalità richiesta: {analyze_all_or_new_only}")
@@ -1286,8 +1382,9 @@ class QualityGateEngine:
             self.logger.info(f"🎯 MODALITÀ SELEZIONATA: {analysis_mode}")
             
             # Dispatching alla funzione appropriata
+            result = None
             if analysis_mode == 'optimized_representatives':
-                return self._analyze_with_optimized_representatives(
+                result = self._analyze_with_optimized_representatives(
                     batch_size=batch_size,
                     min_confidence=min_confidence,
                     disagreement_threshold=disagreement_threshold,
@@ -1296,7 +1393,7 @@ class QualityGateEngine:
                     model_files=model_files
                 )
             elif analysis_mode == 'full_analysis':
-                return self._analyze_with_full_analysis(
+                result = self._analyze_with_full_analysis(
                     batch_size=batch_size,
                     min_confidence=min_confidence,
                     disagreement_threshold=disagreement_threshold,
@@ -1305,7 +1402,7 @@ class QualityGateEngine:
                     model_files=model_files
                 )
             elif analysis_mode == 'new_only':
-                return self._analyze_new_sessions_only(
+                result = self._analyze_new_sessions_only(
                     batch_size=batch_size,
                     min_confidence=min_confidence,
                     disagreement_threshold=disagreement_threshold,
@@ -1315,8 +1412,20 @@ class QualityGateEngine:
                 )
             else:
                 raise ValueError(f"Modalità di analisi non supportata: {analysis_mode}")
+            
+            # Ripristina soglie originali prima di ritornare
+            self.confidence_threshold = old_confidence_threshold
+            self.disagreement_threshold = old_disagreement_threshold
+            self.logger.info(f"🔄 Soglie ripristinate ai valori originali:")
+            self.logger.info(f"  📊 Confidence: {self.confidence_threshold}")
+            self.logger.info(f"  ⚖️ Disagreement: {self.disagreement_threshold}")
+            
+            return result
 
         except Exception as e:
+            # Ripristina soglie originali in caso di errore
+            self.confidence_threshold = old_confidence_threshold
+            self.disagreement_threshold = old_disagreement_threshold
             self.logger.error(f"Errore nell'analisi classificazioni: {e}")
             self.logger.error(traceback.format_exc())
             return {
@@ -1542,10 +1651,23 @@ class QualityGateEngine:
                     created_at=datetime.now(),
                     tenant=self.tenant_name
                 )
-                self.pending_reviews[case_id] = review_case
-                self.logger.debug(f"📝 Aggiunta a review: {session_id} -> confidenza {confidence:.3f}")
+                
+                # Aggiunge a MongoDB invece che alla memoria locale
+                success = self.mongo_reader.mark_session_for_review(
+                    session_id=session_id,
+                    client_name=self.tenant_name,
+                    review_reason=f"rappresentanti_bassa_confidenza (conf: {confidence:.3f})"
+                )
+                
+                if success:
+                    self.logger.debug(f"📝 Aggiunta a review MongoDB: {session_id} -> confidenza {confidence:.3f}")
+                else:
+                    self.logger.warning(f"⚠️ Impossibile aggiungere {session_id} a review MongoDB")
+                    needs_review_count -= 1  # Decrementa se non è stato aggiunto
 
-        self._cache_auto_classifications(auto_classified_sessions)
+        # Recupera statistiche review da MongoDB
+        review_stats = self.mongo_reader.get_review_statistics(self.tenant_name)
+        current_queue_size = review_stats.get('pending', 0)
 
         return {
             'success': True,
@@ -1556,7 +1678,7 @@ class QualityGateEngine:
             'representatives_analyzed': len(rappresentanti_analizzati),
             'auto_classified': auto_classified_count,
             'needs_review': needs_review_count,
-            'current_queue_size': len(self.pending_reviews),
+            'current_queue_size': current_queue_size,
             'message': f'Analisi rappresentanti - {len(rappresentanti_analizzati)} rappresentanti → {auto_classified_count} auto-classificate, {needs_review_count} in review',
             'auto_classified_sessions': len(auto_classified_sessions),
             'pending_save': True,
@@ -1716,21 +1838,17 @@ class QualityGateEngine:
                         # INVIA A REVIEW
                         needs_review_count += 1
                         case_id = f"{self.tenant_name}_{session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                        review_case = ReviewCase(
-                            case_id=case_id,
+                        
+                        # Aggiunge a MongoDB invece che alla memoria locale
+                        success = self.mongo_reader.mark_session_for_review(
                             session_id=session_id,
-                            conversation_text=conversation_text,
-                            ml_prediction="",
-                            ml_confidence=0.0,
-                            llm_prediction=llm_label,
-                            llm_confidence=llm_confidence,
-                            uncertainty_score=1.0 - llm_confidence,
-                            novelty_score=0.5,
-                            reason=f"full_analysis_bassa_confidenza (LLM conf: {llm_confidence:.3f})",
-                            created_at=datetime.now(),
-                            tenant=self.tenant_name
+                            client_name=self.tenant_name,
+                            review_reason=f"full_analysis_bassa_confidenza (LLM conf: {llm_confidence:.3f})"
                         )
-                        self.pending_reviews[case_id] = review_case
+                        
+                        if not success:
+                            self.logger.warning(f"⚠️ Impossibile aggiungere {session_id} a review MongoDB")
+                            needs_review_count -= 1  # Decrementa se non è stato aggiunto
                     
             except Exception as e:
                 self.logger.error(f"Errore classificazione sessione {session_id}: {e}")
@@ -1740,6 +1858,10 @@ class QualityGateEngine:
         # Salva auto-classificazioni in cache temporanea
         self._cache_auto_classifications(auto_classified_sessions)
 
+        # Recupera statistiche review da MongoDB
+        review_stats = self.mongo_reader.get_review_statistics(self.tenant_name)
+        current_queue_size = review_stats.get('pending', 0)
+
         return {
             'success': True,
             'analysis_mode': 'full_analysis',
@@ -1748,7 +1870,7 @@ class QualityGateEngine:
             'analyzed_count': analyzed_count,
             'auto_classified': auto_classified_count,
             'needs_review': needs_review_count,
-            'current_queue_size': len(self.pending_reviews),
+            'current_queue_size': current_queue_size,
             'message': f'Analisi completa - {analyzed_count} sessioni analizzate individualmente: {auto_classified_count} auto-classificate, {needs_review_count} in review',
             'auto_classified_sessions': len(auto_classified_sessions),
             'pending_save': True,
@@ -1950,21 +2072,17 @@ class QualityGateEngine:
                     else:
                         needs_review_count += 1
                         case_id = f"{self.tenant_name}_{session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                        review_case = ReviewCase(
-                            case_id=case_id,
+                        
+                        # Aggiunge a MongoDB invece che alla memoria locale
+                        success = self.mongo_reader.mark_session_for_review(
                             session_id=session_id,
-                            conversation_text=conversation_text,
-                            ml_prediction="",
-                            ml_confidence=0.0,
-                            llm_prediction=llm_label,
-                            llm_confidence=llm_confidence,
-                            uncertainty_score=1.0 - llm_confidence,
-                            novelty_score=0.5,
-                            reason=f"new_only_bassa_confidenza (LLM conf: {llm_confidence:.3f})",
-                            created_at=datetime.now(),
-                            tenant=self.tenant_name
+                            client_name=self.tenant_name,
+                            review_reason=f"new_only_bassa_confidenza (LLM conf: {llm_confidence:.3f})"
                         )
-                        self.pending_reviews[case_id] = review_case
+                        
+                        if not success:
+                            self.logger.warning(f"⚠️ Impossibile aggiungere {session_id} a review MongoDB")
+                            needs_review_count -= 1  # Decrementa se non è stato aggiunto
                     
             except Exception as e:
                 self.logger.error(f"Errore classificazione sessione {session_id}: {e}")
@@ -1972,6 +2090,10 @@ class QualityGateEngine:
 
         # Salva auto-classificazioni in cache temporanea
         self._cache_auto_classifications(auto_classified_sessions)
+
+        # Recupera statistiche review da MongoDB
+        review_stats = self.mongo_reader.get_review_statistics(self.tenant_name)
+        current_queue_size = review_stats.get('pending', 0)
 
         result = {
             'success': True,
@@ -1981,7 +2103,7 @@ class QualityGateEngine:
             'analyzed_count': analyzed_count,
             'auto_classified': auto_classified_count,
             'needs_review': needs_review_count,
-            'current_queue_size': len(self.pending_reviews),
+            'current_queue_size': current_queue_size,
             'message': f'Analisi nuove sessioni - {analyzed_count} sessioni non classificate analizzate: {auto_classified_count} auto-classificate, {needs_review_count} in review',
             'auto_classified_sessions': len(auto_classified_sessions),
             'pending_save': True,

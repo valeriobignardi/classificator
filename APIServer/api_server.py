@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 # Aggiunge path per importare i moduli
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Pipeline'))
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'HumanReview'))
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
 
 # Inizializza FastAPI
 app = FastAPI(
@@ -94,10 +95,47 @@ class OptimizationRequest(BaseModel):
     optimization_type: str = Field(..., description="Tipo ottimizzazione (threshold/weights/clustering)")
     parameters: Dict[str, Any] = Field({}, description="Parametri per l'ottimizzazione")
 
+# === MODELLI PYDANTIC PER PROMPT MANAGEMENT ===
+class PromptModel(BaseModel):
+    id: Optional[int] = Field(None, description="ID del prompt")
+    tenant_id: str = Field(..., description="ID del tenant")
+    engine: str = Field(..., description="Engine (LLM, ML, FINETUNING)")
+    prompt_type: str = Field(..., description="Tipo prompt (SYSTEM, TEMPLATE, SPECIALIZED)")
+    prompt_name: str = Field(..., description="Nome identificativo del prompt")
+    content: str = Field(..., description="Contenuto del prompt")
+    variables: Optional[Dict[str, Any]] = Field({}, description="Variabili dinamiche")
+    is_active: bool = Field(True, description="Se il prompt è attivo")
+    created_at: Optional[str] = Field(None, description="Data creazione")
+    updated_at: Optional[str] = Field(None, description="Data ultimo aggiornamento")
+
+class CreatePromptRequest(BaseModel):
+    tenant_id: str = Field(..., description="ID del tenant")
+    engine: str = Field(..., description="Engine (LLM, ML, FINETUNING)")
+    prompt_type: str = Field(..., description="Tipo prompt (SYSTEM, TEMPLATE, SPECIALIZED)")
+    prompt_name: str = Field(..., description="Nome identificativo del prompt")
+    content: str = Field(..., description="Contenuto del prompt")
+    variables: Optional[Dict[str, Any]] = Field({}, description="Variabili dinamiche")
+    is_active: bool = Field(True, description="Se il prompt è attivo")
+
+class UpdatePromptRequest(BaseModel):
+    content: Optional[str] = Field(None, description="Nuovo contenuto del prompt")
+    variables: Optional[Dict[str, Any]] = Field(None, description="Nuove variabili dinamiche")
+    is_active: Optional[bool] = Field(None, description="Nuovo stato attivo")
+
+class PromptListResponse(BaseModel):
+    prompts: List[PromptModel] = Field(..., description="Lista prompt del tenant")
+    total_count: int = Field(..., description="Numero totale prompt")
+
+class PromptPreviewResponse(BaseModel):
+    prompt_id: int = Field(..., description="ID del prompt")
+    content: str = Field(..., description="Contenuto processato con variabili")
+    variables_resolved: Dict[str, Any] = Field(..., description="Variabili risolte")
+
 # Variabili globali per la pipeline
 pipeline = None
 ensemble_classifier = None
 threshold_optimizer = None
+prompt_manager = None
 start_time = datetime.now()
 classification_stats = {
     'total_today': 0,
@@ -121,7 +159,7 @@ async def startup_event():
     """
     Inizializzazione dell'applicazione
     """
-    global pipeline, ensemble_classifier, threshold_optimizer
+    global pipeline, ensemble_classifier, threshold_optimizer, prompt_manager
     
     logger.info("🚀 Inizializzazione API Humanitas...")
     
@@ -146,6 +184,15 @@ async def startup_event():
         sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'OptimizationEngine'))
         from advanced_threshold_optimizer import AdvancedThresholdOptimizer
         threshold_optimizer = AdvancedThresholdOptimizer()
+        
+        # Inizializza PromptManager per gestione prompt database-driven
+        try:
+            from prompt_manager import PromptManager
+            prompt_manager = PromptManager()
+            logger.info("✅ PromptManager inizializzato")
+        except Exception as e:
+            logger.warning(f"⚠️ PromptManager non disponibile: {e}")
+            prompt_manager = None
         
         logger.info("✅ API inizializzata con successo")
         
@@ -462,6 +509,220 @@ async def perform_optimization(request: OptimizationRequest):
         
     except Exception as e:
         logger.error(f"❌ Errore nell'ottimizzazione: {e}")
+
+# =====================================================================
+# PROMPT MANAGEMENT ENDPOINTS - CRUD OPERATIONS
+# =====================================================================
+
+@app.get("/api/prompts/{tenant_id}", response_model=PromptListResponse)
+async def get_tenant_prompts(
+    tenant_id: str,
+    api_key: str = Depends(get_api_key)
+):
+    """
+    Recupera tutti i prompt di un tenant specifico
+    """
+    global prompt_manager
+    
+    try:
+        if not prompt_manager:
+            raise HTTPException(
+                status_code=503, 
+                detail="PromptManager non disponibile"
+            )
+        
+        # Recupera prompt dal database
+        prompt_data = prompt_manager.get_all_prompts_for_tenant(tenant_id)
+        
+        # Converte in modelli Pydantic
+        prompts = []
+        for p in prompt_data:
+            prompts.append(PromptModel(**p))
+        
+        logger.info(f"📋 Recuperati {len(prompts)} prompt per tenant {tenant_id}")
+        
+        return PromptListResponse(
+            prompts=prompts,
+            total_count=len(prompts)
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Errore recupero prompt per tenant {tenant_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/prompts", response_model=PromptModel)
+async def create_prompt(
+    request: CreatePromptRequest,
+    api_key: str = Depends(get_api_key)
+):
+    """
+    Crea un nuovo prompt per un tenant
+    """
+    global prompt_manager
+    
+    try:
+        if not prompt_manager:
+            raise HTTPException(
+                status_code=503,
+                detail="PromptManager non disponibile"
+            )
+        
+        # Crea prompt nel database
+        prompt_id = prompt_manager.create_prompt(
+            tenant_id=request.tenant_id,
+            engine=request.engine,
+            prompt_type=request.prompt_type,
+            prompt_name=request.prompt_name,
+            content=request.content,
+            variables=request.variables,
+            is_active=request.is_active
+        )
+        
+        if not prompt_id:
+            raise HTTPException(
+                status_code=500,
+                detail="Errore creazione prompt nel database"
+            )
+        
+        # Recupera il prompt appena creato
+        prompt_data = prompt_manager.get_prompt_by_id(prompt_id)
+        if not prompt_data:
+            raise HTTPException(
+                status_code=500,
+                detail="Errore recupero prompt creato"
+            )
+        
+        logger.info(f"➕ Creato nuovo prompt {request.prompt_name} per tenant {request.tenant_id}")
+        
+        return PromptModel(**prompt_data)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Errore creazione prompt: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/prompts/{prompt_id}", response_model=PromptModel)
+async def update_prompt(
+    prompt_id: int,
+    request: UpdatePromptRequest,
+    api_key: str = Depends(get_api_key)
+):
+    """
+    Aggiorna un prompt esistente
+    """
+    global prompt_manager
+    
+    try:
+        if not prompt_manager:
+            raise HTTPException(
+                status_code=503,
+                detail="PromptManager non disponibile"
+            )
+        
+        # Aggiorna prompt nel database
+        success = prompt_manager.update_prompt(
+            prompt_id=prompt_id,
+            content=request.content,
+            variables=request.variables,
+            is_active=request.is_active
+        )
+        
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Prompt {prompt_id} non trovato o errore aggiornamento"
+            )
+        
+        # Recupera prompt aggiornato
+        prompt_data = prompt_manager.get_prompt_by_id(prompt_id)
+        if not prompt_data:
+            raise HTTPException(
+                status_code=500,
+                detail="Errore recupero prompt aggiornato"
+            )
+        
+        logger.info(f"✏️ Aggiornato prompt {prompt_id}")
+        
+        return PromptModel(**prompt_data)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Errore aggiornamento prompt {prompt_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/prompts/{prompt_id}")
+async def delete_prompt(
+    prompt_id: int,
+    api_key: str = Depends(get_api_key)
+):
+    """
+    Elimina un prompt
+    """
+    global prompt_manager
+    
+    try:
+        if not prompt_manager:
+            raise HTTPException(
+                status_code=503,
+                detail="PromptManager non disponibile"
+            )
+        
+        # Elimina (disattiva) prompt nel database
+        success = prompt_manager.delete_prompt(prompt_id)
+        
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Prompt {prompt_id} non trovato o già eliminato"
+            )
+        
+        logger.info(f"🗑️ Eliminato prompt {prompt_id}")
+        
+        return {"message": f"Prompt {prompt_id} eliminato con successo"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Errore eliminazione prompt {prompt_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/prompts/{prompt_id}/preview", response_model=PromptPreviewResponse)
+async def preview_prompt(
+    prompt_id: int,
+    api_key: str = Depends(get_api_key)
+):
+    """
+    Genera anteprima di un prompt con variabili risolte
+    """
+    global prompt_manager
+    
+    try:
+        if not prompt_manager:
+            raise HTTPException(
+                status_code=503,
+                detail="PromptManager non disponibile"
+            )
+        
+        # Genera anteprima con variabili risolte
+        preview_data = prompt_manager.preview_prompt_with_variables(prompt_id)
+        
+        if not preview_data:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Prompt {prompt_id} non trovato"
+            )
+        
+        logger.info(f"👀 Anteprima generata per prompt {prompt_id}")
+        
+        return PromptPreviewResponse(**preview_data)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Errore anteprima prompt {prompt_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     # Configurazione per sviluppo

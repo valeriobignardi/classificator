@@ -33,14 +33,19 @@ class SemanticMemoryManager:
     
     def __init__(self, 
                  config_path: str = None,
-                 embedder: Optional[LaBSEEmbedder] = None):
+                 embedder: Optional[LaBSEEmbedder] = None,
+                 tenant_name: str = None):
         """
         Inizializza il gestore della memoria semantica
         
         Args:
             config_path: Percorso del file di configurazione
             embedder: Embedder per generare rappresentazioni semantiche
+            tenant_name: Nome del tenant per cache isolation
         """
+        # Salva tenant per naming tenant-aware
+        self.tenant_name = tenant_name
+        
         # Carica configurazione
         if config_path is None:
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
@@ -56,7 +61,11 @@ class SemanticMemoryManager:
         
         # Configurazione memoria
         self.max_samples_per_label = self.memory_config.get('max_samples_per_label', 50)
-        self.cache_path = self.memory_config.get('cache_path', 'semantic_cache/')
+        
+        # Cache path tenant-aware
+        base_cache_path = self.memory_config.get('cache_path', 'semantic_cache/')
+        self.cache_path = self._get_tenant_cache_path(base_cache_path)
+        
         self.enable_logging = self.memory_config.get('enable_detailed_logging', True)
         
         # Componenti
@@ -92,6 +101,40 @@ class SemanticMemoryManager:
         except Exception as e:
             print(f"⚠️ Errore caricamento config: {e}. Uso valori default.")
             return {}
+    
+    def _get_tenant_cache_path(self, base_path: str) -> str:
+        """
+        Genera percorso cache tenant-aware
+        
+        Args:
+            base_path: Percorso base della cache
+            
+        Returns:
+            Percorso cache tenant-specifico nel formato: base_path/{tenant_name}_{tenant_id}/
+        """
+        try:
+            if not self.tenant_name:
+                # Se non c'è tenant, usa percorso standard
+                return base_path
+                
+            # Importa MongoClassificationReader per ottenere tenant_id
+            import sys
+            sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+            from mongo_classification_reader import MongoClassificationReader
+            
+            # Usa la funzione helper per generare il percorso
+            mongo_reader = MongoClassificationReader()
+            tenant_cache_path = mongo_reader.generate_semantic_cache_path(self.tenant_name, "memory")
+            
+            return tenant_cache_path
+            
+        except Exception as e:
+            print(f"⚠️ Errore nella generazione cache path tenant-aware: {e}")
+            # Fallback: usa percorso base con nome tenant
+            if self.tenant_name:
+                safe_tenant = self.tenant_name.replace(' ', '_').replace('-', '_').lower()
+                return os.path.join(base_path, safe_tenant)
+            return base_path
     
     def _setup_logging(self):
         """Configura il logging dettagliato"""

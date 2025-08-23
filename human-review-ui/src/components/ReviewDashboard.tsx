@@ -281,15 +281,18 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
   }, [handleRefreshCases]);
 
   const getReasonColor = (reason: string) => {
-    if (reason.toLowerCase().includes('disagreement')) return 'warning';
-    if (reason.toLowerCase().includes('confidence')) return 'info';
-    if (reason.toLowerCase().includes('uncertainty')) return 'secondary';
+    if (!reason) return 'default';
+    const lowerReason = reason.toLowerCase();
+    if (lowerReason.includes('disagreement')) return 'warning';
+    if (lowerReason.includes('confidence')) return 'info';
+    if (lowerReason.includes('uncertainty')) return 'secondary';
     return 'default';
   };
 
   const getConfidenceColor = (confidence: number) => {
-    if (confidence >= 0.8) return 'success';
-    if (confidence >= 0.6) return 'warning';
+    const conf = confidence || 0;
+    if (conf >= 0.8) return 'success';
+    if (conf >= 0.6) return 'warning';
     return 'error';
   };
 
@@ -493,7 +496,7 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
                       {/* Header */}
                       <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
                         <Typography variant="h6" component="div">
-                          Sessione: {caseItem.session_id.substring(0, 12)}...
+                          Sessione: {(caseItem.session_id || '').substring(0, 12)}...
                         </Typography>
                         <Typography variant="body2" color="text.secondary">
                           {caseItem.created_at}
@@ -564,8 +567,8 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
                               {caseItem.ml_prediction || 'N/A'}
                             </Typography>
                             <Chip
-                              label={`Confidenza: ${(caseItem.ml_confidence * 100).toFixed(1)}%`}
-                              color={getConfidenceColor(caseItem.ml_confidence)}
+                              label={`Confidenza: ${((caseItem.ml_confidence || 0) * 100).toFixed(1)}%`}
+                              color={getConfidenceColor(caseItem.ml_confidence || 0)}
                               size="small"
                               sx={{ fontWeight: 'bold' }}
                             />
@@ -591,8 +594,8 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
                               {caseItem.llm_prediction || 'N/A'}
                             </Typography>
                             <Chip
-                              label={`Confidenza: ${(caseItem.llm_confidence * 100).toFixed(1)}%`}
-                              color={getConfidenceColor(caseItem.llm_confidence)}
+                              label={`Confidenza: ${((caseItem.llm_confidence || 0) * 100).toFixed(1)}%`}
+                              color={getConfidenceColor(caseItem.llm_confidence || 0)}
                               size="small"
                               sx={{ fontWeight: 'bold' }}
                             />
@@ -600,13 +603,13 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
                         </Box>
 
                         {/* Best Prediction Indicator */}
-                        {caseItem.ml_confidence !== caseItem.llm_confidence && (
+                        {(caseItem.ml_confidence || 0) !== (caseItem.llm_confidence || 0) && (
                           <Box mt={1} textAlign="center">
                             <Typography variant="caption" color="text.secondary">
                               💡 Miglior confidenza: {
-                                caseItem.ml_confidence > caseItem.llm_confidence 
-                                  ? `ML (${(caseItem.ml_confidence * 100).toFixed(1)}%)`
-                                  : `LLM (${(caseItem.llm_confidence * 100).toFixed(1)}%)`
+                                (caseItem.ml_confidence || 0) > (caseItem.llm_confidence || 0) 
+                                  ? `ML (${((caseItem.ml_confidence || 0) * 100).toFixed(1)}%)`
+                                  : `LLM (${((caseItem.llm_confidence || 0) * 100).toFixed(1)}%)`
                               }
                             </Typography>
                           </Box>

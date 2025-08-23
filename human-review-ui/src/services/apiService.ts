@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { ReviewCase, ReviewStats } from '../types/ReviewCase';
+import { Tenant } from '../types/Tenant';
 
 // Usa URL relativi in development con proxy, URL assoluti in production
 const API_BASE_URL = process.env.NODE_ENV === 'development' 
@@ -76,6 +77,14 @@ class ApiService {
     return this.handleRequest(
       axios.get(`${API_BASE_URL}/stats/tenants`)
     );
+  }
+
+  // Metodo per recuperare l'elenco dei tenant dal server
+  async getTenants(): Promise<Tenant[]> {
+    const response = await this.handleRequest<{ tenants: Tenant[] }>(
+      axios.get(`${API_BASE_URL}/tenants`)
+    );
+    return response.tenants;
   }
 
   async getLabelStatistics(tenant: string): Promise<any> {

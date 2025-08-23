@@ -85,15 +85,18 @@ class MistralFineTuningManager:
     
     def __init__(self, 
                  config_path: Optional[str] = None,
-                 ollama_url: str = None):
+                 ollama_url: str = None,
+                 tenant_slug: Optional[str] = None):
         """
         Inizializza il manager per fine-tuning
         
         Args:
             config_path: Percorso file configurazione (opzionale)
             ollama_url: URL server Ollama (se None, legge da config)
+            tenant_slug: Nome tenant per naming convention
         """
         self.config_path = config_path or os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
+        self.tenant_slug = tenant_slug
         
         # Carica configurazione PRIMA di tutto
         with open(self.config_path, 'r', encoding='utf-8') as file:
@@ -110,19 +113,62 @@ class MistralFineTuningManager:
         # Setup logging
         self.logger = self._setup_logger()
         
+        # Initialize MongoClassificationReader for tenant-aware naming
+        if tenant_slug:
+            sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+            from mongo_classification_reader import MongoClassificationReader
+            self.mongo_reader = MongoClassificationReader()
+        else:
+            self.mongo_reader = None
+        
         # Database connector
         self.tag_db = TagDatabaseConnector()
         
-        # Directory per modelli fine-tuned
-        self.models_dir = os.path.join(os.path.dirname(__file__), '..', 'finetuned_models')
+        # Directory per modelli fine-tuned (tenant-aware)
+        if tenant_slug and self.mongo_reader:
+            # Use tenant-aware model directory structure
+            base_models_dir = os.path.join(os.path.dirname(__file__), '..', 'finetuned_models')
+            tenant_id_short = self.mongo_reader.get_tenant_id_from_name(tenant_slug)[:8] if self.mongo_reader.get_tenant_id_from_name(tenant_slug) else 'unknown'
+            self.models_dir = os.path.join(base_models_dir, f"{tenant_slug.lower()}_{tenant_id_short}_models")
+        else:
+            self.models_dir = os.path.join(os.path.dirname(__file__), '..', 'finetuned_models')
+        
         os.makedirs(self.models_dir, exist_ok=True)
         
-        # Registry dei modelli per cliente
-        self.model_registry_path = os.path.join(self.models_dir, 'model_registry.json')
+        # Registry dei modelli per cliente (tenant-aware)
+        registry_name = f"model_registry_{tenant_slug.lower()}.json" if tenant_slug else "model_registry.json"
+        self.model_registry_path = os.path.join(self.models_dir, registry_name)
         self.model_registry = self._load_model_registry()
         
         self.logger.info(f"MistralFineTuningManager inizializzato - Ollama: {self.ollama_url}")
         self.logger.info(f"Models directory: {self.models_dir}")
+        if tenant_slug:
+            self.logger.info(f"Tenant-aware mode: {tenant_slug}")
+    
+    def generate_model_name(self, 
+                           client_name: str, 
+                           model_type: str = 'finetuned',
+                           base_model: str = 'mistral') -> str:
+        """
+        Generate tenant-aware model name using naming convention
+        
+        Args:
+            client_name: Nome del cliente/tenant
+            model_type: Tipo di modello ('finetuned', 'specialized', etc.)
+            base_model: Modello base utilizzato
+            
+        Returns:
+            Nome modello con convenzione tenant-aware: {tenant_name}_{tenant_id}_{type}_{timestamp}
+        """
+        if self.mongo_reader and self.tenant_slug:
+            return self.mongo_reader.generate_model_name(
+                tenant_name=client_name, 
+                model_type=f"{base_model}_{model_type}"
+            )
+        else:
+            # Fallback to legacy naming
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            return f"{client_name}_{model_type}_{timestamp}"
     
     def _setup_logger(self) -> logging.Logger:
         """Setup del logger"""
@@ -219,9 +265,14 @@ class MistralFineTuningManager:
             else:
                 self.logger.warning("⚠️ Auto-sync fallito, procedo con dati esistenti")
             
-            # FASE 1: Recupera decisioni umane dal file JSONL
+            # FASE 1: Recupera decisioni umane dal file JSONL (tenant-aware)
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            training_decisions_path = os.path.join(project_root, f"training_decisions_{client_name}.jsonl")
+            
+            # Use tenant-aware filename if available
+            if self.tenant_slug:
+                training_decisions_path = os.path.join(project_root, f"training_decisions_{self.tenant_slug.lower()}.jsonl")
+            else:
+                training_decisions_path = os.path.join(project_root, f"training_decisions_{client_name}.jsonl")
             
             self.logger.info(f"🔍 Leggendo decisioni umane da: {training_decisions_path}")
             
@@ -536,9 +587,12 @@ IMPORTANTE: Usa ESATTAMENTE i nomi delle etichette sopra elencate."""
             config.min_training_samples = finetuning_config.get('min_training_samples', 50)
             config.max_training_samples = finetuning_config.get('max_training_samples', 1000)
             
-            # Genera nome modello output con timestamp
-            model_base_name = config.base_model.split(':')[0] if ':' in config.base_model else config.base_model
-            config.output_model_name = f"{model_base_name}_finetuned_{client_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            # Generate tenant-aware model name
+            config.output_model_name = self.generate_model_name(
+                client_name=client_name,
+                model_type='finetuned',
+                base_model=config.base_model.split(':')[0] if ':' in config.base_model else config.base_model
+            )
         
         self.logger.info(f"🚀 AVVIO FINE-TUNING per cliente: {client_name}")
         self.logger.info(f"📋 Modello base: {config.base_model}")

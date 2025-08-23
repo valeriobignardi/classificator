@@ -15,19 +15,87 @@ from datetime import datetime
 from datetime import datetime
 import traceback
 from typing import Dict, List, Any, Optional
+import numpy as np
 
 # Aggiungi path per i moduli
 sys.path.append(os.path.join(os.path.dirname(__file__), 'Pipeline'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'TagDatabase'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'QualityGate'))
+sys.path.append(os.path.join(os.path.dirname(__file__), 'Utils'))
 
 from end_to_end_pipeline import EndToEndPipeline
 from tag_database_connector import TagDatabaseConnector
 from quality_gate_engine import QualityGateEngine
 from mongo_classification_reader import MongoClassificationReader
+from prompt_manager import PromptManager
 
 app = Flask(__name__)
-CORS(app)  # Abilita CORS per permettere richieste dal frontend React
+# Configurazione CORS generica per sviluppo
+CORS(app, 
+     origins="*",  # Permetti tutte le origini in sviluppo
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+     allow_headers=["Content-Type", "Authorization"],
+     supports_credentials=False)
+
+
+def sanitize_for_json(obj):
+    """
+    Converte ricorsivamente oggetti non serializzabili in JSON in tipi serializzabili.
+    
+    Scopo: Risolve errore "keys must be str, int, float, bool or None, not int64"
+    causato da tipi NumPy (int64, float64, array) nei risultati di training.
+    
+    Args:
+        obj: Oggetto da sanitizzare
+        
+    Returns:
+        Oggetto con tutti i tipi convertiti in tipi Python nativi serializzabili
+        
+    Data ultima modifica: 2025-08-21
+    """
+    if isinstance(obj, dict):
+        # Converte chiavi e valori ricorsivamente
+        sanitized_dict = {}
+        for key, value in obj.items():
+            # Converte chiavi NumPy in tipi Python nativi
+            if isinstance(key, np.integer):
+                key = int(key)
+            elif isinstance(key, np.floating):
+                key = float(key)
+            elif isinstance(key, np.ndarray):
+                key = str(key)  # Array come chiave -> stringa
+            
+            # Converte valore ricorsivamente
+            sanitized_dict[key] = sanitize_for_json(value)
+        return sanitized_dict
+    
+    elif isinstance(obj, (list, tuple)):
+        # Converte elementi della lista/tupla ricorsivamente
+        return [sanitize_for_json(item) for item in obj]
+    
+    elif isinstance(obj, np.integer):
+        # NumPy integers -> int Python
+        return int(obj)
+    
+    elif isinstance(obj, np.floating):
+        # NumPy floats -> float Python
+        return float(obj)
+    
+    elif isinstance(obj, np.ndarray):
+        # NumPy array -> lista Python
+        return obj.tolist()
+    
+    elif isinstance(obj, np.bool_):
+        # NumPy bool -> bool Python
+        return bool(obj)
+    
+    elif isinstance(obj, (np.str_,)):
+        # NumPy string -> str Python (np.unicode_ rimosso in NumPy 2.0)
+        return str(obj)
+    
+    else:
+        # Tipi già serializzabili (str, int, float, bool, None)
+        return obj
 
 class ClassificationService:
     """
@@ -901,7 +969,12 @@ def classify_all_sessions(client_name: str):
         # Determina status code
         status_code = 200 if results.get('success') else 500
         
-        return jsonify(results), status_code
+        # 🛠️ SANITIZZAZIONE PER JSON SERIALIZATION
+        print(f"🧹 Sanitizzazione risultati classificazione per JSON...")
+        sanitized_results = sanitize_for_json(results)
+        print(f"✅ Risultati classificazione sanitizzati")
+        
+        return jsonify(sanitized_results), status_code
         
     except Exception as e:
         error_response = {
@@ -938,7 +1011,12 @@ def classify_new_sessions(client_name: str):
         # Determina status code
         status_code = 200 if results.get('success') else 500
         
-        return jsonify(results), status_code
+        # 🛠️ SANITIZZAZIONE PER JSON SERIALIZATION
+        print(f"🧹 Sanitizzazione risultati classificazione incrementale per JSON...")
+        sanitized_results = sanitize_for_json(results)
+        print(f"✅ Risultati classificazione incrementale sanitizzati")
+        
+        return jsonify(sanitized_results), status_code
         
     except Exception as e:
         error_response = {
@@ -1017,7 +1095,12 @@ def get_client_status(client_name: str):
             }
         }
         
-        return jsonify(status), 200
+        # 🛠️ SANITIZZAZIONE PER JSON SERIALIZATION
+        print(f"🧹 Sanitizzazione status per JSON...")
+        sanitized_status = sanitize_for_json(status)
+        print(f"✅ Status sanitizzato")
+        
+        return jsonify(sanitized_status), 200
         
     except Exception as e:
         error_response = {
@@ -1149,7 +1232,12 @@ def supervised_training(client_name: str):
             print(f"  🧩 Cluster inclusi: {stats.get('clusters_reviewed', 0)}")
             print(f"  🚫 Cluster esclusi: {stats.get('clusters_excluded', 0)}")
         
-        return jsonify(response)
+        # 🛠️ SANITIZZAZIONE PER JSON SERIALIZATION
+        print(f"🧹 Sanitizzazione dati per JSON serialization...")
+        sanitized_response = sanitize_for_json(response)
+        print(f"✅ Dati sanitizzati per JSON")
+        
+        return jsonify(sanitized_response)
         
     except Exception as e:
         print(f"❌ ERRORE nel training supervisionato: {e}")
@@ -1262,7 +1350,13 @@ def supervised_training_advanced(client_name: str):
         }
         
         print(f"✅ Training supervisionato avanzato completato per {client_name}")
-        return jsonify(response)
+        
+        # 🛠️ SANITIZZAZIONE PER JSON SERIALIZATION
+        print(f"🧹 Sanitizzazione dati per JSON serialization...")
+        sanitized_response = sanitize_for_json(response)
+        print(f"✅ Dati sanitizzati per JSON")
+        
+        return jsonify(sanitized_response)
         
     except Exception as e:
         print(f"❌ ERRORE nel training supervisionato avanzato: {e}")
@@ -1383,7 +1477,12 @@ def supervised_training_advanced(client_name: str):
         print(f"✅ Training supervisionato completato: {analysis_result}")
         print(f"📊 Coda di revisione: {review_stats.get('pending_cases', 0)} casi")
         
-        return jsonify(response), 200
+        # 🛠️ SANITIZZAZIONE PER JSON SERIALIZATION  
+        print(f"🧹 Sanitizzazione dati per JSON serialization...")
+        sanitized_response = sanitize_for_json(response)
+        print(f"✅ Dati sanitizzati per JSON")
+        
+        return jsonify(sanitized_response), 200
         
     except Exception as e:
         error_response = {
@@ -1454,7 +1553,12 @@ def create_mock_cases(client_name: str):
         
         print(f"✅ Casi mock creati: {created_case_ids}")
         
-        return jsonify(response), 200
+        # 🛠️ SANITIZZAZIONE PER JSON SERIALIZATION
+        print(f"🧹 Sanitizzazione dati per JSON serialization...")
+        sanitized_response = sanitize_for_json(response)
+        print(f"✅ Dati sanitizzati per JSON")
+        
+        return jsonify(sanitized_response), 200
         
     except Exception as e:
         error_response = {
@@ -1505,6 +1609,27 @@ def api_get_review_cases(client_name: str):
         else:
             sessions = mongo_reader.get_all_sessions(client_name, limit)
         
+        # Trasforma i dati MongoDB in formato ReviewCase per compatibilità frontend
+        formatted_cases = []
+        for session in sessions:
+            case_item = {
+                'case_id': session.get('id', session.get('session_id', '')),
+                'session_id': session.get('session_id', ''),
+                'conversation_text': session.get('conversation_text', ''),
+                'ml_prediction': session.get('classification', 'non_classificata'),
+                'ml_confidence': float(session.get('confidence', 0.0)),
+                'llm_prediction': session.get('classification', 'non_classificata'),  # Stesso valore per ora
+                'llm_confidence': float(session.get('confidence', 0.0)),  # Stesso valore per ora
+                'uncertainty_score': 1.0 - float(session.get('confidence', 0.0)),
+                'novelty_score': 0.0,  # Non disponibile da MongoDB
+                'reason': session.get('motivation', ''),
+                'notes': session.get('notes', session.get('motivation', '')),  # Campo notes per UI
+                'created_at': str(session.get('timestamp', '')),
+                'tenant': client_name,
+                'cluster_id': str(session.get('metadata', {}).get('cluster_id', '')) if session.get('metadata', {}).get('cluster_id') else None
+            }
+            formatted_cases.append(case_item)
+        
         # Recupera etichette disponibili
         available_labels = mongo_reader.get_available_labels(client_name)
         
@@ -1513,8 +1638,8 @@ def api_get_review_cases(client_name: str):
         
         return jsonify({
             'success': True,
-            'cases': sessions,
-            'total': len(sessions),
+            'cases': formatted_cases,
+            'total': len(formatted_cases),
             'client': client_name,
             'labels': available_labels,
             'statistics': stats
@@ -1738,6 +1863,33 @@ def api_get_review_stats(client_name: str):
             'success': False,
             'error': str(e),
             'client': client_name
+        }), 500
+
+@app.route('/api/tenants', methods=['GET'])
+def get_tenants():
+    """
+    Ottieni lista completa dei tenant dalla tabella MySQL TAG.tenants
+    
+    Returns:
+        Lista di tenant con tenant_id e nome per il frontend
+        
+    Ultimo aggiornamento: 2025-01-27
+    """
+    try:
+        # Usa il nuovo metodo del MongoClassificationReader che legge da MySQL
+        mongo_reader = MongoClassificationReader()
+        tenants = mongo_reader.get_available_tenants()
+        
+        return jsonify({
+            'success': True,
+            'tenants': tenants,
+            'total': len(tenants)
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
         }), 500
 
 @app.route('/api/stats/tenants', methods=['GET'])
@@ -1976,7 +2128,17 @@ def api_get_available_tags(client_name: str):
         from TAGS.tag import tag_suggestion_manager
         
         # Ottieni suggerimenti usando la logica intelligente
-        suggested_tags = tag_suggestion_manager.get_suggested_tags_for_client(client_name)
+        raw_suggested_tags = tag_suggestion_manager.get_suggested_tags_for_client(client_name)
+        
+        # Converti il formato per il frontend: tag_name -> tag, usage_count -> count
+        suggested_tags = []
+        for tag_data in raw_suggested_tags:
+            suggested_tags.append({
+                'tag': tag_data.get('tag_name', ''),
+                'count': tag_data.get('usage_count', 0),
+                'source': tag_data.get('source', 'available'),
+                'avg_confidence': tag_data.get('avg_confidence', 0.0)
+            })
         
         # Verifica se è un cliente nuovo
         is_new_client = not tag_suggestion_manager.has_existing_classifications(client_name)
@@ -2119,16 +2281,15 @@ def get_all_sessions(client):
         pending_session_ids = set()
         reviewed_session_ids = set()
         
-        if client in classification_service.quality_gates:
-            quality_gate = classification_service.quality_gates[client]
-            for case in quality_gate.pending_reviews.values():
-                pending_session_ids.add(case.session_id)
-            
-            if hasattr(quality_gate, 'reviewed_cases'):
-                for case in quality_gate.reviewed_cases.values():
-                    reviewed_session_ids.add(case.session_id)
-        else:
-            print(f"⚠️ QualityGate per {client} non ancora inizializzato - skip review status")
+        # Inizializza automaticamente il QualityGate se non esiste
+        quality_gate = classification_service.get_quality_gate(client)
+        
+        for case in quality_gate.pending_reviews.values():
+            pending_session_ids.add(case.session_id)
+        
+        if hasattr(quality_gate, 'reviewed_cases'):
+            for case in quality_gate.reviewed_cases.values():
+                reviewed_session_ids.add(case.session_id)
         
         # Ottieni classificazioni esistenti dal database
         from TagDatabase.tag_database_connector import TagDatabaseConnector
@@ -2163,26 +2324,24 @@ def get_all_sessions(client):
         
         # NUOVO: Aggiungi auto-classificazioni in cache (pending, non ancora salvate)
         auto_classifications_by_session = {}
-        if client in classification_service.quality_gates:
-            quality_gate = classification_service.quality_gates[client]
-            pending_auto_classifications = quality_gate.get_pending_auto_classifications(client)
-            
-            print(f"📊 Trovate {len(pending_auto_classifications)} auto-classificazioni in cache per {client}")
-            
-            for auto_class in pending_auto_classifications:
-                session_id = auto_class.get('session_id')
-                if session_id and session_id in sessioni_valide:  # Solo sessioni valide
-                    if session_id not in auto_classifications_by_session:
-                        auto_classifications_by_session[session_id] = []
-                    auto_classifications_by_session[session_id].append({
-                        'tag_name': auto_class.get('tag'),
-                        'confidence': float(auto_class.get('confidence', 0.0)),
-                        'method': auto_class.get('method', 'auto'),
-                        'created_at': auto_class.get('timestamp', ''),
-                        'source': 'cache_pending'  # Identificatore per classificazioni in cache
-                    })
-        else:
-            print(f"⚠️ QualityGate per {client} non inizializzato - skip auto-classificazioni cache")
+        # Inizializza automaticamente il QualityGate se non esiste
+        quality_gate = classification_service.get_quality_gate(client)
+        pending_auto_classifications = quality_gate.get_pending_auto_classifications(client)
+        
+        print(f"📊 Trovate {len(pending_auto_classifications)} auto-classificazioni in cache per {client}")
+        
+        for auto_class in pending_auto_classifications:
+            session_id = auto_class.get('session_id')
+            if session_id and session_id in sessioni_valide:  # Solo sessioni valide
+                if session_id not in auto_classifications_by_session:
+                    auto_classifications_by_session[session_id] = []
+                auto_classifications_by_session[session_id].append({
+                    'tag_name': auto_class.get('tag'),
+                    'confidence': float(auto_class.get('confidence', 0.0)),
+                    'method': auto_class.get('method', 'auto'),
+                    'created_at': auto_class.get('timestamp', ''),
+                    'source': 'cache_pending'  # Identificatore per classificazioni in cache
+                })
         
         # Prepara lista delle sessioni con stato
         all_sessions = []
@@ -2709,6 +2868,958 @@ def get_finetuning_status(client_name: str):
             'success': False,
             'error': f'Errore nel recupero stato fine-tuning: {str(e)}',
             'client': client_name
+        }), 500
+
+
+# ==================== NUOVI ENDPOINT PER FILTRO TENANT/ETICHETTE ====================
+
+@app.route('/api/tenants', methods=['GET'])
+def api_get_all_tenants():
+    """
+    API per recuperare tutti i tenant disponibili da MongoDB
+    
+    Scopo: Fornisce la lista dei tenant per il filtro principale in React
+    
+    Returns:
+        {
+            "success": true,
+            "tenants": [
+                {
+                    "tenant_name": "humanitas",
+                    "client": "humanitas", 
+                    "session_count": 2901,
+                    "classification_count": 1850
+                }
+            ],
+            "total": 1
+        }
+    """
+    try:
+        print("🔍 API: Recupero tutti i tenant da MongoDB...")
+        
+        # Usa MongoDB reader per recuperare tenant
+        mongo_reader = MongoClassificationReader()
+        
+        if not mongo_reader.connect():
+            return jsonify({
+                'success': False,
+                'error': 'Impossibile connettersi a MongoDB',
+                'tenants': []
+            }), 500
+        
+        try:
+            # Query aggregation per recuperare statistiche per tenant
+            pipeline = [
+                {
+                    '$group': {
+                        '_id': {
+                            'tenant_name': '$tenant_name',
+                            'client': '$client'
+                        },
+                        'session_count': {'$addToSet': '$session_id'},
+                        'classification_count': {'$sum': 1}
+                    }
+                },
+                {
+                    '$project': {
+                        'tenant_name': '$_id.tenant_name',
+                        'client': '$_id.client',
+                        'session_count': {'$size': '$session_count'},
+                        'classification_count': 1,
+                        '_id': 0
+                    }
+                },
+                {
+                    '$sort': {'tenant_name': 1}
+                }
+            ]
+            
+            # Esegui aggregation
+            cursor = mongo_reader.collection.aggregate(pipeline)
+            tenants = list(cursor)
+            
+            print(f"✅ Trovati {len(tenants)} tenant in MongoDB")
+            for tenant in tenants:
+                print(f"  - {tenant['tenant_name']}: {tenant['session_count']} sessioni, {tenant['classification_count']} classificazioni")
+            
+            return jsonify({
+                'success': True,
+                'tenants': tenants,
+                'total': len(tenants),
+                'timestamp': datetime.now().isoformat()
+            })
+            
+        finally:
+            mongo_reader.disconnect()
+            
+    except Exception as e:
+        print(f"❌ Errore recupero tenant: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'tenants': []
+        }), 500
+
+
+@app.route('/api/labels/<tenant_name>', methods=['GET'])
+def api_get_labels_by_tenant(tenant_name: str):
+    """
+    API per recuperare tutte le etichette per un tenant specifico da MongoDB
+    
+    Scopo: Fornisce le etichette filtrate per tenant per il dropdown in React
+    
+    Args:
+        tenant_name: Nome del tenant (es. 'humanitas')
+    
+    Returns:
+        {
+            "success": true,
+            "tenant_name": "humanitas",
+            "labels": [
+                {
+                    "label": "info_esami_prestazioni",
+                    "count": 145,
+                    "avg_confidence": 0.85
+                }
+            ],
+            "total": 25
+        }
+    """
+    try:
+        print(f"🔍 API: Recupero etichette per tenant '{tenant_name}' da MongoDB...")
+        
+        # Usa MongoDB reader per recuperare etichette
+        mongo_reader = MongoClassificationReader()
+        
+        if not mongo_reader.connect():
+            return jsonify({
+                'success': False,
+                'error': 'Impossibile connettersi a MongoDB',
+                'labels': []
+            }), 500
+        
+        try:
+            # Query aggregation per recuperare statistiche etichette per tenant
+            pipeline = [
+                {
+                    '$match': {
+                        'tenant_name': tenant_name,
+                        'classificazione': {'$ne': None, '$ne': '', '$ne': 'non_classificata'}
+                    }
+                },
+                {
+                    '$group': {
+                        '_id': '$classificazione',
+                        'count': {'$sum': 1},
+                        'avg_confidence': {'$avg': '$confidence'},
+                        'sessions': {'$addToSet': '$session_id'}
+                    }
+                },
+                {
+                    '$project': {
+                        'label': '$_id',
+                        'count': 1,
+                        'session_count': {'$size': '$sessions'},
+                        'avg_confidence': {'$round': ['$avg_confidence', 3]},
+                        '_id': 0
+                    }
+                },
+                {
+                    '$sort': {'count': -1, 'label': 1}
+                }
+            ]
+            
+            # Esegui aggregation
+            cursor = mongo_reader.collection.aggregate(pipeline)
+            labels = list(cursor)
+            
+            print(f"✅ Trovate {len(labels)} etichette per tenant '{tenant_name}'")
+            for label in labels[:5]:  # Log delle prime 5
+                print(f"  - {label['label']}: {label['count']} classificazioni, {label['session_count']} sessioni")
+            
+            return jsonify({
+                'success': True,
+                'tenant_name': tenant_name,
+                'labels': labels,
+                'total': len(labels),
+                'timestamp': datetime.now().isoformat()
+            })
+            
+        finally:
+            mongo_reader.disconnect()
+            
+    except Exception as e:
+        print(f"❌ Errore recupero etichette per tenant '{tenant_name}': {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'tenant_name': tenant_name,
+            'labels': []
+        }), 500
+
+
+@app.route('/api/sessions/<tenant_name>', methods=['GET'])
+def api_get_sessions_by_tenant(tenant_name: str):
+    """
+    API per recuperare sessioni filtrate per tenant e opzionalmente per etichetta
+    
+    Scopo: Fornisce sessioni filtrate per la visualizzazione in React
+    
+    Args:
+        tenant_name: Nome del tenant (es. 'humanitas')
+    
+    Query Parameters:
+        label: Etichetta specifica per ulteriore filtro (opzionale)
+        limit: Numero massimo di sessioni (default: 100)
+    
+    Returns:
+        {
+            "success": true,
+            "tenant_name": "humanitas", 
+            "label_filter": "info_esami_prestazioni",
+            "sessions": [...],
+            "total": 145
+        }
+    """
+    try:
+        label_filter = request.args.get('label', None)
+        limit = request.args.get('limit', 100, type=int)
+        
+        print(f"🔍 API: Recupero sessioni per tenant '{tenant_name}'")
+        if label_filter:
+            print(f"  🏷️ Filtro etichetta: '{label_filter}'")
+        print(f"  📊 Limite: {limit}")
+        
+        # Usa MongoDB reader per recuperare sessioni
+        mongo_reader = MongoClassificationReader()
+        
+        if not mongo_reader.connect():
+            return jsonify({
+                'success': False,
+                'error': 'Impossibile connettersi a MongoDB',
+                'sessions': []
+            }), 500
+        
+        try:
+            # Costruisci query MongoDB
+            query = {'tenant_name': tenant_name}
+            
+            # Aggiungi filtro etichetta se specificato
+            if label_filter:
+                query['classificazione'] = label_filter
+            
+            # Recupera sessioni
+            cursor = mongo_reader.collection.find(
+                query,
+                {'embedding': 0}  # Escludi embedding per performance
+            ).sort('timestamp', -1).limit(limit)
+            
+            sessions = []
+            for doc in cursor:
+                # Converti ObjectId in string
+                doc['_id'] = str(doc['_id'])
+                
+                # Formatta per interfaccia React
+                session = {
+                    'id': doc['_id'],
+                    'session_id': doc.get('session_id', ''),
+                    'conversation_text': doc.get('testo', doc.get('conversazione', '')),
+                    'classification': doc.get('classificazione', 'non_classificata'),
+                    'confidence': doc.get('confidence', 0.0),
+                    'motivation': doc.get('motivazione', ''),
+                    'notes': doc.get('motivazione', ''),  # Mapping motivazione → notes per UI
+                    'method': doc.get('metadata', {}).get('method', 'unknown'),
+                    'timestamp': doc.get('timestamp'),
+                    'tenant_name': doc.get('tenant_name'),
+                    'client': doc.get('client'),
+                    'classifications': [{
+                        'tag_name': doc.get('classificazione', 'non_classificata'),
+                        'confidence': doc.get('confidence', 0.0),
+                        'method': doc.get('metadata', {}).get('method', 'unknown'),
+                        'motivation': doc.get('motivazione', ''),
+                        'created_at': doc.get('timestamp').isoformat() if doc.get('timestamp') else '',
+                        'source': 'database'
+                    }] if doc.get('classificazione') and doc.get('classificazione') != 'non_classificata' else []
+                }
+                sessions.append(session)
+            
+            print(f"✅ Recuperate {len(sessions)} sessioni per tenant '{tenant_name}'")
+            if label_filter:
+                print(f"  🏷️ Con etichetta '{label_filter}'")
+            
+            return jsonify({
+                'success': True,
+                'tenant_name': tenant_name,
+                'label_filter': label_filter,
+                'sessions': sessions,
+                'total': len(sessions),
+                'limit': limit,
+                'timestamp': datetime.now().isoformat()
+            })
+            
+        finally:
+            mongo_reader.disconnect()
+            
+    except Exception as e:
+        print(f"❌ Errore recupero sessioni per tenant '{tenant_name}': {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'tenant_name': tenant_name,
+            'sessions': []
+        }), 500
+
+
+# =============================================================================
+# PROMPT MANAGEMENT API ENDPOINTS
+# =============================================================================
+
+@app.route('/api/prompts/tenant/<tenant_id>', methods=['GET'])
+def get_prompts_for_tenant(tenant_id: str):
+    """
+    Recupera tutti i prompt per un tenant specifico
+    
+    GET /api/prompts/tenant/1
+    
+    Returns:
+        [
+            {
+                "id": 1,
+                "tenant_id": 1,
+                "tenant_name": "humanitas", 
+                "prompt_type": "classification_prompt",
+                "content": "...",
+                "variables": {...},
+                "is_active": true,
+                "created_at": "2025-01-16T10:00:00",
+                "updated_at": "2025-01-16T10:00:00"
+            }
+        ]
+    """
+    try:
+        print(f"🔍 API: Recupero prompt per tenant_id: {tenant_id}")
+        
+        prompt_manager = PromptManager()
+        prompts = prompt_manager.get_all_prompts_for_tenant(tenant_id)
+        
+        print(f"✅ Recuperati {len(prompts)} prompt per tenant {tenant_id}")
+        
+        return jsonify(prompts)
+        
+    except Exception as e:
+        print(f"❌ Errore recupero prompt per tenant {tenant_id}: {e}")
+        return jsonify({
+            'error': str(e),
+            'tenant_id': tenant_id
+        }), 500
+
+
+@app.route('/api/prompts/<int:prompt_id>', methods=['GET'])
+def get_prompt_by_id(prompt_id: int):
+    """
+    Recupera un prompt specifico tramite ID
+    
+    GET /api/prompts/5
+    
+    Returns:
+        {
+            "id": 5,
+            "tenant_id": 1,
+            "tenant_name": "humanitas",
+            "prompt_type": "classification_prompt", 
+            "content": "...",
+            "variables": {...},
+            "is_active": true,
+            "created_at": "2025-01-16T10:00:00",
+            "updated_at": "2025-01-16T10:00:00"
+        }
+    """
+    try:
+        print(f"🔍 API: Recupero prompt con ID: {prompt_id}")
+        
+        prompt_manager = PromptManager()
+        prompt = prompt_manager.get_prompt_by_id(prompt_id)
+        
+        if prompt is None:
+            return jsonify({
+                'error': f'Prompt con ID {prompt_id} non trovato'
+            }), 404
+        
+        print(f"✅ Recuperato prompt ID {prompt_id}")
+        
+        return jsonify(prompt)
+        
+    except Exception as e:
+        print(f"❌ Errore recupero prompt ID {prompt_id}: {e}")
+        return jsonify({
+            'error': str(e),
+            'prompt_id': prompt_id
+        }), 500
+
+
+@app.route('/api/prompts', methods=['POST'])
+def create_prompt():
+    """
+    Crea un nuovo prompt
+    
+    POST /api/prompts
+    Content-Type: application/json
+    
+    {
+        "tenant_id": 1,
+        "tenant_name": "humanitas",
+        "prompt_type": "new_classification_prompt",
+        "content": "Classifica il testo seguente...",
+        "variables": {"param1": "value1"},
+        "is_active": true
+    }
+    
+    Returns:
+        {
+            "id": 6,
+            "tenant_id": 1,
+            "tenant_name": "humanitas",
+            "prompt_type": "new_classification_prompt",
+            "content": "Classifica il testo seguente...",
+            "variables": {"param1": "value1"},
+            "is_active": true,
+            "created_at": "2025-01-16T10:30:00",
+            "updated_at": "2025-01-16T10:30:00"
+        }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'Dati JSON richiesti'}), 400
+        
+        # Validazione campi obbligatori
+        required_fields = ['tenant_id', 'tenant_name', 'prompt_type', 'content']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({'error': f'Campo {field} mancante'}), 400
+        
+        print(f"📝 API: Creazione prompt per tenant {data['tenant_name']}")
+        print(f"  🏷️ Tipo: {data['prompt_type']}")
+        
+        prompt_manager = PromptManager()
+        prompt_id = prompt_manager.create_prompt(
+            tenant_id=data['tenant_id'],
+            tenant_name=data['tenant_name'],
+            prompt_type=data['prompt_type'],
+            content=data['content'],
+            variables=data.get('variables', {}),
+            is_active=data.get('is_active', True)
+        )
+        
+        # Recupera il prompt creato
+        created_prompt = prompt_manager.get_prompt_by_id(prompt_id)
+        
+        print(f"✅ Creato prompt ID {prompt_id}")
+        
+        return jsonify(created_prompt), 201
+        
+    except Exception as e:
+        print(f"❌ Errore creazione prompt: {e}")
+        return jsonify({
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/prompts/<int:prompt_id>', methods=['PUT'])
+def update_prompt(prompt_id: int):
+    """
+    Aggiorna un prompt esistente
+    
+    PUT /api/prompts/5
+    Content-Type: application/json
+    
+    {
+        "content": "Nuovo contenuto del prompt...",
+        "variables": {"new_param": "new_value"},
+        "is_active": false
+    }
+    
+    Returns:
+        {
+            "id": 5,
+            "tenant_id": 1,
+            "tenant_name": "humanitas",
+            "prompt_type": "classification_prompt",
+            "content": "Nuovo contenuto del prompt...",
+            "variables": {"new_param": "new_value"},
+            "is_active": false,
+            "created_at": "2025-01-16T10:00:00",
+            "updated_at": "2025-01-16T10:35:00"
+        }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'Dati JSON richiesti'}), 400
+        
+        print(f"✏️ API: Aggiornamento prompt ID {prompt_id}")
+        
+        prompt_manager = PromptManager()
+        
+        # Verifica che il prompt esista
+        existing_prompt = prompt_manager.get_prompt_by_id(prompt_id)
+        if existing_prompt is None:
+            return jsonify({
+                'error': f'Prompt con ID {prompt_id} non trovato'
+            }), 404
+        
+        success = prompt_manager.update_prompt(
+            prompt_id=prompt_id,
+            content=data.get('content'),
+            variables=data.get('variables'),
+            is_active=data.get('is_active')
+        )
+        
+        if not success:
+            return jsonify({
+                'error': f'Errore aggiornamento prompt ID {prompt_id}'
+            }), 500
+        
+        # Recupera il prompt aggiornato
+        updated_prompt = prompt_manager.get_prompt_by_id(prompt_id)
+        
+        print(f"✅ Aggiornato prompt ID {prompt_id}")
+        
+        return jsonify(updated_prompt)
+        
+    except Exception as e:
+        print(f"❌ Errore aggiornamento prompt ID {prompt_id}: {e}")
+        return jsonify({
+            'error': str(e),
+            'prompt_id': prompt_id
+        }), 500
+
+
+@app.route('/api/prompts/<int:prompt_id>', methods=['DELETE'])
+def delete_prompt(prompt_id: int):
+    """
+    Elimina un prompt
+    
+    DELETE /api/prompts/5
+    
+    Returns:
+        {
+            "success": true,
+            "message": "Prompt 5 eliminato con successo",
+            "prompt_id": 5
+        }
+    """
+    try:
+        print(f"🗑️ API: Eliminazione prompt ID {prompt_id}")
+        
+        prompt_manager = PromptManager()
+        
+        # Verifica che il prompt esista
+        existing_prompt = prompt_manager.get_prompt_by_id(prompt_id)
+        if existing_prompt is None:
+            return jsonify({
+                'error': f'Prompt con ID {prompt_id} non trovato'
+            }), 404
+        
+        success = prompt_manager.delete_prompt(prompt_id)
+        
+        if not success:
+            return jsonify({
+                'error': f'Errore eliminazione prompt ID {prompt_id}'
+            }), 500
+        
+        print(f"✅ Eliminato prompt ID {prompt_id}")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Prompt {prompt_id} eliminato con successo',
+            'prompt_id': prompt_id
+        })
+        
+    except Exception as e:
+        print(f"❌ Errore eliminazione prompt ID {prompt_id}: {e}")
+        return jsonify({
+            'error': str(e),
+            'prompt_id': prompt_id
+        }), 500
+
+
+@app.route('/api/prompts/<int:prompt_id>/preview', methods=['POST'])
+def preview_prompt_with_variables(prompt_id: int):
+    """
+    Anteprima di un prompt con variabili sostituite
+    
+    POST /api/prompts/5/preview
+    Content-Type: application/json
+    
+    {
+        "variables": {
+            "conversation_text": "Esempio di conversazione...",
+            "available_tags": "tag1, tag2, tag3"
+        }
+    }
+    
+    Returns:
+        {
+            "prompt_id": 5,
+            "prompt_type": "classification_prompt",
+            "original_content": "Classifica il testo: {{conversation_text}}...",
+            "rendered_content": "Classifica il testo: Esempio di conversazione...",
+            "variables_used": ["conversation_text", "available_tags"]
+        }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'Dati JSON richiesti'}), 400
+        
+        variables = data.get('variables', {})
+        
+        print(f"👁️ API: Anteprima prompt ID {prompt_id}")
+        print(f"  📝 Variabili: {list(variables.keys())}")
+        
+        prompt_manager = PromptManager()
+        preview = prompt_manager.preview_prompt_with_variables(prompt_id, variables)
+        
+        if preview is None:
+            return jsonify({
+                'error': f'Prompt con ID {prompt_id} non trovato'
+            }), 404
+        
+        print(f"✅ Generata anteprima prompt ID {prompt_id}")
+        
+        return jsonify(preview)
+        
+    except Exception as e:
+        print(f"❌ Errore anteprima prompt ID {prompt_id}: {e}")
+        return jsonify({
+            'error': str(e),
+            'prompt_id': prompt_id
+        }), 500
+
+
+# =============================================================================
+# TOOL MANAGEMENT API ENDPOINTS
+# =============================================================================
+
+@app.route('/api/tools/tenant/<tenant_id>', methods=['GET'])
+def get_tools_for_tenant(tenant_id: str):
+    """
+    Recupera tutti i tools per un tenant specifico
+    
+    GET /api/tools/tenant/015007d9-d413-11ef-86a5-96000228e7fe
+    
+    Returns:
+        [
+            {
+                "id": 1,
+                "tool_name": "_get_available_labels",
+                "display_name": "Etichette Disponibili",
+                "description": "Recupera tutte le etichette disponibili per la classificazione",
+                "function_schema": {
+                    "type": "function",
+                    "function": {
+                        "name": "_get_available_labels",
+                        "description": "...",
+                        "parameters": {...}
+                    }
+                },
+                "is_active": true,
+                "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+                "tenant_name": "Humanitas",
+                "created_at": "2025-01-16T10:00:00",
+                "updated_at": "2025-01-16T10:00:00"
+            }
+        ]
+    """
+    try:
+        print(f"🔧 API: Recupero tools per tenant_id: {tenant_id}")
+        
+        tool_manager = ToolManager()
+        tools = tool_manager.get_all_tools_for_tenant(tenant_id)
+        
+        print(f"✅ Recuperati {len(tools)} tools per tenant {tenant_id}")
+        
+        return jsonify(sanitize_for_json(tools))
+        
+    except Exception as e:
+        print(f"❌ Errore recupero tools per tenant {tenant_id}: {e}")
+        return jsonify({
+            'error': str(e),
+            'tenant_id': tenant_id
+        }), 500
+
+
+@app.route('/api/tools/<int:tool_id>', methods=['GET'])
+def get_tool_by_id(tool_id: int):
+    """
+    Recupera un tool specifico tramite ID
+    
+    GET /api/tools/1
+    
+    Returns:
+        {
+            "id": 1,
+            "tool_name": "_get_available_labels",
+            "display_name": "Etichette Disponibili",
+            "description": "Recupera tutte le etichette disponibili per la classificazione",
+            "function_schema": {...},
+            "is_active": true,
+            "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+            "tenant_name": "Humanitas",
+            "created_at": "2025-01-16T10:00:00",
+            "updated_at": "2025-01-16T10:00:00"
+        }
+    """
+    try:
+        print(f"🔧 API: Recupero tool ID: {tool_id}")
+        
+        tool_manager = ToolManager()
+        tool = tool_manager.get_tool_by_id(tool_id)
+        
+        if not tool:
+            return jsonify({
+                'error': 'Tool non trovato',
+                'tool_id': tool_id
+            }), 404
+        
+        print(f"✅ Recuperato tool {tool['tool_name']}")
+        
+        return jsonify(sanitize_for_json(tool))
+        
+    except Exception as e:
+        print(f"❌ Errore recupero tool ID {tool_id}: {e}")
+        return jsonify({
+            'error': str(e),
+            'tool_id': tool_id
+        }), 500
+
+
+@app.route('/api/tools', methods=['POST'])
+def create_tool():
+    """
+    Crea un nuovo tool
+    
+    POST /api/tools
+    Content-Type: application/json
+    
+    {
+        "tool_name": "_custom_function",
+        "display_name": "Funzione Personalizzata",
+        "description": "Descrizione della funzione",
+        "function_schema": {
+            "type": "function",
+            "function": {
+                "name": "_custom_function",
+                "description": "Funzione personalizzata per tenant",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "input": {"type": "string", "description": "Input parameter"}
+                    },
+                    "required": ["input"]
+                }
+            }
+        },
+        "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+        "tenant_name": "Humanitas",
+        "is_active": true
+    }
+    
+    Returns:
+        Tool creato con ID assegnato
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'Dati richiesti nel body della richiesta'}), 400
+        
+        print(f"🔧 API: Creazione nuovo tool: {data.get('tool_name', 'N/A')}")
+        
+        tool_manager = ToolManager()
+        
+        # Validazione dati richiesti
+        required_fields = ['tool_name', 'display_name', 'description', 'function_schema', 'tenant_id']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({'error': f'Campo obbligatorio mancante: {field}'}), 400
+        
+        created_tool = tool_manager.create_tool(data)
+        
+        if not created_tool:
+            return jsonify({'error': 'Impossibile creare il tool'}), 400
+        
+        print(f"✅ Tool creato: {created_tool['tool_name']} (ID: {created_tool['id']})")
+        
+        return jsonify(sanitize_for_json(created_tool)), 201
+        
+    except Exception as e:
+        print(f"❌ Errore creazione tool: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/tools/<int:tool_id>', methods=['PUT'])
+def update_tool(tool_id: int):
+    """
+    Aggiorna un tool esistente
+    
+    PUT /api/tools/1
+    Content-Type: application/json
+    
+    {
+        "display_name": "Nuovo Nome Display",
+        "description": "Nuova descrizione",
+        "is_active": false
+    }
+    
+    Returns:
+        Tool aggiornato
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'Dati richiesti nel body della richiesta'}), 400
+        
+        print(f"🔧 API: Aggiornamento tool ID: {tool_id}")
+        
+        tool_manager = ToolManager()
+        
+        updated_tool = tool_manager.update_tool(tool_id, data)
+        
+        if not updated_tool:
+            return jsonify({
+                'error': 'Tool non trovato o impossibile aggiornare',
+                'tool_id': tool_id
+            }), 404
+        
+        print(f"✅ Tool aggiornato: {updated_tool['tool_name']}")
+        
+        return jsonify(sanitize_for_json(updated_tool))
+        
+    except Exception as e:
+        print(f"❌ Errore aggiornamento tool ID {tool_id}: {e}")
+        return jsonify({
+            'error': str(e),
+            'tool_id': tool_id
+        }), 500
+
+
+@app.route('/api/tools/<int:tool_id>', methods=['DELETE'])
+def delete_tool(tool_id: int):
+    """
+    Elimina un tool (soft delete - disattiva)
+    
+    DELETE /api/tools/1
+    
+    Returns:
+        Conferma eliminazione
+    """
+    try:
+        print(f"🔧 API: Eliminazione tool ID: {tool_id}")
+        
+        tool_manager = ToolManager()
+        
+        success = tool_manager.delete_tool(tool_id)
+        
+        if not success:
+            return jsonify({
+                'error': 'Tool non trovato',
+                'tool_id': tool_id
+            }), 404
+        
+        print(f"✅ Tool eliminato: ID {tool_id}")
+        
+        return jsonify({
+            'message': 'Tool eliminato con successo',
+            'tool_id': tool_id,
+            'deleted_at': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        print(f"❌ Errore eliminazione tool ID {tool_id}: {e}")
+        return jsonify({
+            'error': str(e),
+            'tool_id': tool_id
+        }), 500
+
+
+@app.route('/api/tools/stats', methods=['GET'])
+def get_tools_stats():
+    """
+    Recupera statistiche dei tools per tutti i tenant
+    
+    GET /api/tools/stats
+    
+    Returns:
+        {
+            "total_tools": 8,
+            "tools_by_tenant": {
+                "Humanitas": 4,
+                "Ospedale_XYZ": 4
+            }
+        }
+    """
+    try:
+        print("📊 API: Recupero statistiche tools")
+        
+        tool_manager = ToolManager()
+        
+        tools_by_tenant = tool_manager.get_tools_count_by_tenant()
+        total_tools = sum(tools_by_tenant.values())
+        
+        stats = {
+            'total_tools': total_tools,
+            'tools_by_tenant': tools_by_tenant
+        }
+        
+        print(f"✅ Statistiche tools: {total_tools} tools totali")
+        
+        return jsonify(stats)
+        
+    except Exception as e:
+        print(f"❌ Errore statistiche tools: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/tools/export/tenant/<tenant_id>', methods=['GET'])
+def export_tools_for_tenant(tenant_id: str):
+    """
+    Esporta tutti i tools di un tenant in formato JSON
+    
+    GET /api/tools/export/tenant/015007d9-d413-11ef-86a5-96000228e7fe
+    
+    Returns:
+        {
+            "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+            "export_timestamp": "2025-01-16T10:00:00",
+            "tools_count": 4,
+            "tools": [...]
+        }
+    """
+    try:
+        print(f"📤 API: Esportazione tools per tenant: {tenant_id}")
+        
+        tool_manager = ToolManager()
+        
+        export_data = tool_manager.export_tools_for_tenant(tenant_id)
+        
+        print(f"✅ Esportati {export_data['tools_count']} tools per tenant {tenant_id}")
+        
+        response = jsonify(sanitize_for_json(export_data))
+        response.headers['Content-Disposition'] = f'attachment; filename="tools_export_{tenant_id}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json"'
+        
+        return response
+        
+    except Exception as e:
+        print(f"❌ Errore esportazione tools per tenant {tenant_id}: {e}")
+        return jsonify({
+            'error': str(e),
+            'tenant_id': tenant_id
         }), 500
 
 

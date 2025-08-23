@@ -48,6 +48,15 @@ except ImportError:
 # Import per fine-tuning
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'FineTuning'))
+
+# Import PromptManager per gestione prompt da database
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Utils'))
+try:
+    from prompt_manager import PromptManager
+    PROMPT_MANAGER_AVAILABLE = True
+except ImportError:
+    PromptManager = None
+    PROMPT_MANAGER_AVAILABLE = False
 try:
     from mistral_finetuning_manager import MistralFineTuningManager
     FINETUNING_AVAILABLE = True
@@ -72,6 +81,15 @@ try:
 except ImportError:
     MongoDBConnector = None
     MONGODB_AVAILABLE = False
+
+# Import per BERTopic provider
+try:
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'TopicModeling'))
+    from bertopic_feature_provider import BERTopicFeatureProvider
+    BERTOPIC_AVAILABLE = True
+except ImportError:
+    BERTopicFeatureProvider = None
+    BERTOPIC_AVAILABLE = False
 
 
 @dataclass
@@ -240,6 +258,24 @@ class IntelligentClassifier:
         self.enable_new_category_detection = self.config.get('pipeline', {}).get('new_category_detection', True)
         self.embedding_similarity_threshold = self.config.get('pipeline', {}).get('embedding_similarity_threshold', 0.85)
         
+        # Configurazioni sistema di fallback BERTopic
+        self.bertopic_fallback_threshold = self.config.get('pipeline', {}).get('bertopic_fallback_threshold', 0.70)
+        self.new_tag_similarity_threshold = self.config.get('pipeline', {}).get('new_tag_similarity_threshold', 0.75)  
+        self.auto_tag_creation = self.config.get('pipeline', {}).get('auto_tag_creation', True)
+        
+        # Inizializzazione BERTopic provider (se disponibile ed abilitato)
+        self.bertopic_provider = None
+        if (BERTOPIC_AVAILABLE and self.enable_semantic_fallback and 
+            self.enable_new_category_detection):
+            try:
+                self.bertopic_provider = BERTopicFeatureProvider()
+                if enable_logging:
+                    print(f"🎯 BERTopic provider inizializzato per sistema di fallback intelligente")
+            except Exception as e:
+                if enable_logging:
+                    print(f"⚠️ BERTopic provider non disponibile: {e}")
+                self.bertopic_provider = None
+        
         # Setup logging
         if enable_logging:
             self.logger = self._setup_logger()
@@ -247,17 +283,32 @@ class IntelligentClassifier:
             self.logger = logging.getLogger(__name__)
             self.logger.addHandler(logging.NullHandler())
         
-        # INTEGRAZIONE MYSQL: Inizializzazione connector database
+        # INTEGRAZIONE MYSQL: Inizializzazione connector database con supporto multi-tenant
         self.mysql_connector = None
         try:
             from TagDatabase.tag_database_connector import TagDatabaseConnector
-            self.mysql_connector = TagDatabaseConnector()
+            self.mysql_connector = TagDatabaseConnector(
+                tenant_id=self.tenant_id,
+                tenant_name=client_name.title() if client_name else "Humanitas"
+            )
             if enable_logging:
-                self.logger.info("✅ TagDatabaseConnector inizializzato con successo")
+                self.logger.info(f"✅ TagDatabaseConnector inizializzato per tenant {self.tenant_id}")
         except Exception as e:
             if enable_logging:
                 self.logger.error(f"❌ Errore inizializzazione TagDatabaseConnector: {e}")
-            self.mysql_connector = None
+        
+        # INIZIALIZZAZIONE PROMPT MANAGER: Sistema database-driven per prompt
+        self.prompt_manager = None
+        self.tenant_id = client_name or "humanitas"  # Default tenant
+        try:
+            self.prompt_manager = PromptManager(config_path=config_path)
+            if enable_logging:
+                self.logger.info(f"✅ PromptManager inizializzato per tenant: {self.tenant_id}")
+        except Exception as e:
+            if enable_logging:
+                self.logger.error(f"❌ Errore inizializzazione PromptManager: {e}")
+                self.logger.info("🔄 Continuo con prompt hardcoded come fallback")
+            self.prompt_manager = None
         
         # Cache per le predizioni
         self._prediction_cache = {}
@@ -565,7 +616,10 @@ class IntelligentClassifier:
         try:
             from TagDatabase.tag_database_connector import TagDatabaseConnector
             
-            tag_db = TagDatabaseConnector()
+            tag_db = TagDatabaseConnector(
+                tenant_id=self.tenant_id,
+                tenant_name=self.client_name.title() if self.client_name else "Humanitas"
+            )
             if tag_db.connetti():
                 # Verifica se l'etichetta esiste già
                 check_query = "SELECT COUNT(*) FROM tags WHERE tag_name = %s"
@@ -604,11 +658,14 @@ class IntelligentClassifier:
             # Tenta di caricare le etichette dal database TAG
             from TagDatabase.tag_database_connector import TagDatabaseConnector
             
-            tag_db = TagDatabaseConnector()
+            tag_db = TagDatabaseConnector(
+                tenant_id=self.tenant_id,
+                tenant_name=self.client_name.title() if self.client_name else "Humanitas"
+            )
             if tag_db.connetti():
-                # Query per ottenere tutte le etichette attive dal database
-                query = "SELECT tag_name FROM tags ORDER BY tag_name"
-                result = tag_db.esegui_query(query)
+                # Query per ottenere tutte le etichette attive dal database per il tenant
+                query = "SELECT tag_name FROM tags WHERE tenant_id = %s ORDER BY tag_name"
+                result = tag_db.esegui_query(query, (self.tenant_id,))
                 
                 if result and len(result) > 0:
                     # Estrae i nomi delle etichette dal risultato della query
@@ -671,12 +728,14 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         
         # Fallback con hint statico basato sulla conoscenza del dominio
         return """
-ETICHETTE COMUNI: ritiro_cartella_clinica_referti | prenotazione_esami | info_contatti
-- La maggior parte delle richieste riguarda questi 3 intenti principali"""
+            ETICHETTE COMUNI: ritiro_cartella_clinica_referti | prenotazione_esami | info_contatti
+            - La maggior parte delle richieste riguarda questi 3 intenti principali
+        """
 
     def _build_system_message(self, conversation_context: Optional[str] = None) -> str:
         """
         Costruisce il system message intelligente per guidare il comportamento del LLM
+        Utilizza PromptManager per caricare prompt dal database con supporto multi-tenant
         
         Args:
             conversation_context: Contesto aggiuntivo per specializzare il prompt
@@ -684,13 +743,36 @@ ETICHETTE COMUNI: ritiro_cartella_clinica_referti | prenotazione_esami | info_co
         Returns:
             System message ottimizzato e context-aware
         """
-        # Recupera etichette dinamicamente dal database TAG o usa fallback
+        # Tenta di utilizzare il PromptManager per caricare il prompt dal database
+        if self.prompt_manager:
+            try:
+                # Variabili dinamiche per il sistema LLM
+                variables = {
+                    'available_labels': self._get_available_labels(),
+                    'priority_labels': self._get_priority_labels_hint(),
+                    'context_guidance': f"\nCONTESTO SPECIFICO: {conversation_context}" if conversation_context else "",
+                }
+                
+                # Carica prompt dal database
+                system_prompt = self.prompt_manager.get_prompt(
+                    tenant_id=self.tenant_id,
+                    engine="LLM",
+                    prompt_type="SYSTEM", 
+                    prompt_name="intelligent_classifier_system",
+                    variables=variables
+                )
+                
+                if system_prompt:
+                    return system_prompt
+                    
+            except Exception as e:
+                if hasattr(self, 'logger'):
+                    self.logger.warning(f"⚠️ Errore caricamento prompt database: {e}")
+                    self.logger.info("🔄 Utilizzo prompt hardcoded come fallback")
+        
+        # FALLBACK: Sistema hardcoded se PromptManager non disponibile
         available_labels = self._get_available_labels()
-        
-        # Analizza le etichette più frequenti per dare priorità
         priority_labels = self._get_priority_labels_hint()
-        
-        # Context-specific guidance
         context_guidance = ""
         if conversation_context:
             context_guidance = f"\nCONTESTO SPECIFICO: {conversation_context}"
@@ -1041,6 +1123,7 @@ CRITICAL: Genera ESCLUSIVAMENTE JSON valido. Zero testo aggiuntivo."""
     def _build_user_message(self, conversation_text: str, context: Optional[str] = None) -> str:
         """
         Costruisce il messaggio utente intelligente con esempi semantici ottimizzati
+        Utilizza PromptManager per caricare prompt dal database con supporto multi-tenant
         
         Args:
             conversation_text: Testo da classificare
@@ -1049,13 +1132,53 @@ CRITICAL: Genera ESCLUSIVAMENTE JSON valido. Zero testo aggiuntivo."""
         Returns:
             User message strutturato e context-aware
         """
-        # Riassumi se troppo lungo
-        processed_text = self._summarize_if_long(conversation_text)
+        # Tenta di utilizzare il PromptManager per caricare il prompt dal database
+        if self.prompt_manager:
+            try:
+                # Riassumi se troppo lungo
+                processed_text = self._summarize_if_long(conversation_text)
+                
+                # Seleziona esempi dinamici
+                examples = self._get_dynamic_examples(conversation_text, max_examples=5)
+                
+                # Costruisce esempi con formato strutturato
+                examples_text = ""
+                for i, ex in enumerate(examples, 1):
+                    confidence_hint = "ALTA CERTEZZA" if i <= 2 else "MEDIA CERTEZZA"
+                    examples_text += f"""
+ESEMPIO {i} ({confidence_hint}):
+Input: "{ex["text"]}"
+Output: {ex["label"]}
+Ragionamento: {ex["motivation"]}"""
+                
+                # Variabili dinamiche per il template
+                variables = {
+                    'examples_text': examples_text,
+                    'context_section': f"\n\nCONTESTO AGGIUNTIVO:\n{context}" if context else "",
+                    'processed_text': processed_text,
+                }
+                
+                # Carica prompt dal database
+                user_prompt = self.prompt_manager.get_prompt(
+                    tenant_id=self.tenant_id,
+                    engine="LLM",
+                    prompt_type="TEMPLATE",
+                    prompt_name="intelligent_classifier_user",
+                    variables=variables
+                )
+                
+                if user_prompt:
+                    return user_prompt
+                    
+            except Exception as e:
+                if hasattr(self, 'logger'):
+                    self.logger.warning(f"⚠️ Errore caricamento user prompt database: {e}")
+                    self.logger.info("🔄 Utilizzo prompt hardcoded come fallback")
         
-        # Seleziona esempi dinamici (ora con algoritmo migliorato)
+        # FALLBACK: Sistema hardcoded se PromptManager non disponibile
+        processed_text = self._summarize_if_long(conversation_text)
         examples = self._get_dynamic_examples(conversation_text, max_examples=5)
         
-        # Costruisce esempi con formato migliorato per il ragionamento del LLM
         examples_text = ""
         for i, ex in enumerate(examples, 1):
             confidence_hint = "ALTA CERTEZZA" if i <= 2 else "MEDIA CERTEZZA"
@@ -1065,12 +1188,10 @@ Input: "{ex["text"]}"
 Output: {ex["label"]}
 Ragionamento: {ex["motivation"]}"""
         
-        # Context section migliorata
         context_section = ""
         if context:
             context_section = f"\n\nCONTESTO AGGIUNTIVO:\n{context}"
         
-        # Reasoning chain prompt per migliori performance
         user_message = f"""Analizza questo testo seguendo l'approccio degli esempi:
 {examples_text}
 {context_section}
@@ -1283,9 +1404,9 @@ OUTPUT (SOLO JSON):"""
             if not motivation:
                 motivation = f"Classificato come {predicted_label}"
             
-            # NUOVO: Risoluzione semantica intelligente
+            # NUOVO: Risoluzione semantica intelligente con controllo soglia fallback
             resolved_label, resolution_method, semantic_confidence = self._semantic_label_resolution(
-                predicted_label, conversation_text  # Passa il testo della conversazione
+                predicted_label, conversation_text, confidence  # Passa anche la confidence iniziale
             )
             
             # Aggiorna confidence basandosi sulla qualità della risoluzione
@@ -1295,6 +1416,12 @@ OUTPUT (SOLO JSON):"""
                 final_confidence = min(confidence, semantic_confidence + 0.1)
             elif resolution_method == "BERTOPIC_NEW_CATEGORY":
                 final_confidence = min(confidence, semantic_confidence)
+            elif resolution_method == "BERTOPIC_FALLBACK_NEW_TAG":
+                final_confidence = semantic_confidence  # Usa confidence BERTopic per nuovo tag
+                self.logger.info(f"🆕 Nuovo tag scoperto da fallback BERTopic: '{resolved_label}' (conf: {final_confidence:.3f})")
+            elif resolution_method == "BERTOPIC_FALLBACK_EXISTING":
+                final_confidence = max(0.5, semantic_confidence)  # Boost per match BERTopic
+                self.logger.info(f"🔄 Tag esistente suggerito da fallback BERTopic: '{resolved_label}' (conf: {final_confidence:.3f})")
             else:
                 final_confidence = max(0.1, confidence - 0.2)  # Penalizza fallback
             
@@ -2506,20 +2633,60 @@ OUTPUT (SOLO JSON):"""
     # ==================== METODI RISOLUZIONE SEMANTICA ====================
     
     def _semantic_label_resolution(self, proposed_label: str, 
-                                  conversation_text: str) -> Tuple[str, str, float]:
+                                  conversation_text: str, 
+                                  initial_confidence: float = 1.0) -> Tuple[str, str, float]:
         """
-        Risoluzione semantica dell'etichetta - ZERO hardcoding
+        Risoluzione semantica dell'etichetta con sistema di fallback BERTopic intelligente
         
         Args:
             proposed_label: Etichetta proposta dall'LLM
             conversation_text: Testo originale della conversazione
+            initial_confidence: Confidence iniziale della classificazione LLM
             
         Returns:
             (final_label, resolution_method, confidence_score)
         """
         original_label = proposed_label.strip().lower().replace(' ', '_')
         
-        # FASE 1: Verifica diretta (se è già nel dominio)
+        self.logger.debug(f"🎯 Inizio risoluzione semantica: '{proposed_label}' (confidence: {initial_confidence:.3f})")
+        
+        # CONTROLLO SOGLIA FALLBACK: Se confidence bassa → salta direttamente a BERTopic
+        if initial_confidence < self.bertopic_fallback_threshold:
+            self.logger.info(f"🔀 Confidence {initial_confidence:.3f} < soglia {self.bertopic_fallback_threshold:.3f} → Attivo fallback BERTopic")
+            
+            # Salta direttamente alla FASE 3: BERTopic per discovery
+            if hasattr(self, 'bertopic_provider') and self.bertopic_provider:
+                bertopic_result = self._evaluate_new_category_with_bertopic(
+                    original_label, conversation_text
+                )
+                if bertopic_result['is_valid_new_category']:
+                    # Nuova categoria scoperta da BERTopic
+                    new_label = bertopic_result['refined_label']
+                    
+                    # Auto-creazione tag se abilitata
+                    if self.auto_tag_creation:
+                        success = self._create_new_tag_automatically(new_label, conversation_text, bertopic_result)
+                        if success:
+                            self.logger.info(f"✅ Nuovo tag creato automaticamente: '{new_label}'")
+                        else:
+                            self.logger.warning(f"⚠️ Fallimento creazione automatica tag: '{new_label}'")
+                    
+                    return (
+                        new_label,
+                        "BERTOPIC_FALLBACK_NEW_TAG", 
+                        bertopic_result['confidence']
+                    )
+                else:
+                    # BERTopic suggerisce tag esistente
+                    return (
+                        bertopic_result['refined_label'],
+                        "BERTOPIC_FALLBACK_EXISTING",
+                        bertopic_result['confidence']
+                    )
+            else:
+                self.logger.warning("🚨 Fallback BERTopic richiesto ma provider non disponibile")
+        
+        # FLUSSO NORMALE: FASE 1: Verifica diretta (se è già nel dominio)
         if original_label in self.domain_labels:
             return original_label, "DIRECT_MATCH", 1.0
         
@@ -2715,22 +2882,213 @@ OUTPUT (SOLO JSON):"""
                                            conversation_text: str) -> Dict[str, Any]:
         """
         Valuta se l'etichetta proposta rappresenta una categoria genuinamente nuova
+        usando BERTopic per l'analisi del topic
         """
         try:
-            # Placeholder per integrazione BERTopic futura
-            # Attualmente ritorna sempre False per mantenere comportamento esistente
+            if not self.bertopic_provider or not self.bertopic_provider.model:
+                return {
+                    'is_valid_new_category': False,
+                    'refined_label': proposed_label,
+                    'reason': 'BERTopic provider non disponibile',
+                    'confidence': 0.0,
+                    'topic_info': None
+                }
+            
+            # Analizza il topic del testo con BERTopic
+            topics, probabilities = self.bertopic_provider.model.transform([conversation_text])
+            topic_id = topics[0]
+            topic_prob = probabilities[0] if len(probabilities) > 0 else [0.0]
+            max_prob = max(topic_prob) if hasattr(topic_prob, '__iter__') else topic_prob
+            
+            # Se topic ID è -1, è considerato "noise" da BERTopic
+            if topic_id == -1:
+                return {
+                    'is_valid_new_category': False,
+                    'refined_label': proposed_label,
+                    'reason': 'Testo classificato come rumore da BERTopic',
+                    'confidence': 0.2,
+                    'topic_info': {'topic_id': topic_id, 'probability': max_prob}
+                }
+            
+            # Ottieni informazioni sul topic identificato
+            topic_info = self.bertopic_provider.model.get_topic_info()
+            if topic_info is not None and topic_id < len(topic_info):
+                topic_words = self.bertopic_provider.model.get_topic(topic_id)
+                
+                # Crea label raffinata dalle parole chiave del topic
+                if topic_words and len(topic_words) > 0:
+                    # Prendi le prime 3-4 parole più rilevanti per creare una label
+                    top_words = [word for word, _ in topic_words[:3] if word.isalpha()]
+                    if top_words:
+                        refined_label = '_'.join(top_words).lower()
+                    else:
+                        refined_label = proposed_label
+                else:
+                    refined_label = proposed_label
+                
+                # Verifica se questa label raffinata è semanticamente diversa da quelle esistenti
+                if self.embedder and hasattr(self, 'domain_labels'):
+                    refined_embedding = self.embedder.encode_single(refined_label.replace('_', ' '))
+                    
+                    max_similarity = 0.0
+                    most_similar_label = None
+                    
+                    for existing_label in self.domain_labels:
+                        existing_embedding = self.embedder.encode_single(existing_label.replace('_', ' '))
+                        similarity = self._cosine_similarity(refined_embedding, existing_embedding)
+                        
+                        if similarity > max_similarity:
+                            max_similarity = similarity
+                            most_similar_label = existing_label
+                    
+                    # Se similarità < soglia configurabile, è effettivamente una nuova categoria
+                    if max_similarity < self.new_tag_similarity_threshold:
+                        return {
+                            'is_valid_new_category': True,
+                            'refined_label': refined_label,
+                            'reason': f'Nuovo topic identificato, max similarità: {max_similarity:.3f}',
+                            'confidence': min(0.8, max_prob + 0.1),
+                            'topic_info': {
+                                'topic_id': topic_id, 
+                                'probability': max_prob,
+                                'topic_words': topic_words[:5],
+                                'most_similar_existing': most_similar_label,
+                                'max_similarity': max_similarity
+                            }
+                        }
+                    else:
+                        # Topic rilevato ma troppo simile a categoria esistente
+                        return {
+                            'is_valid_new_category': False,
+                            'refined_label': most_similar_label,
+                            'reason': f'Topic simile a categoria esistente: {most_similar_label} (sim: {max_similarity:.3f})',
+                            'confidence': min(0.7, max_similarity),
+                            'topic_info': {
+                                'topic_id': topic_id,
+                                'probability': max_prob,
+                                'topic_words': topic_words[:5],
+                                'most_similar_existing': most_similar_label,
+                                'max_similarity': max_similarity
+                            }
+                        }
+                else:
+                    # Senza embedder, accetta il topic BERTopic se ha probabilità sufficiente
+                    return {
+                        'is_valid_new_category': max_prob > 0.5,
+                        'refined_label': refined_label,
+                        'reason': f'Topic BERTopic con probabilità: {max_prob:.3f}',
+                        'confidence': max_prob,
+                        'topic_info': {
+                            'topic_id': topic_id,
+                            'probability': max_prob,
+                            'topic_words': topic_words[:5]
+                        }
+                    }
+            else:
+                return {
+                    'is_valid_new_category': False,
+                    'refined_label': proposed_label,
+                    'reason': 'Topic info non disponibile',
+                    'confidence': 0.3,
+                    'topic_info': {'topic_id': topic_id, 'probability': max_prob}
+                }
+                
+        except Exception as e:
+            self.logger.error(f"Errore in valutazione BERTopic: {e}")
             return {
                 'is_valid_new_category': False,
-                'reason': 'BERTopic integration not yet implemented',
-                'confidence': 0.0
+                'refined_label': proposed_label,
+                'reason': f"Errore BERTopic: {e}",
+                'confidence': 0.0,
+                'topic_info': None
+            }
+
+    def _create_new_tag_automatically(self, new_tag_name: str, 
+                                     conversation_text: str, 
+                                     bertopic_result: Dict[str, Any]) -> bool:
+        """
+        Crea automaticamente un nuovo tag nel database TAG.tags
+        
+        Args:
+            new_tag_name: Nome del nuovo tag da creare
+            conversation_text: Testo che ha generato il tag
+            bertopic_result: Risultato dell'analisi BERTopic con topic_info
+            
+        Returns:
+            bool: True se creazione riuscita, False altrimenti
+        """
+        try:
+            if not self.mysql_connector:
+                self.logger.warning("MySQL connector non disponibile per creazione automatica tag")
+                return False
+            
+            # Prepara i dati del tag
+            tag_data = {
+                'tag': new_tag_name,
+                'description': self._generate_tag_description(conversation_text, bertopic_result),
+                'created_via': 'BERTopic_AutoDiscovery',
+                'topic_info': json.dumps(bertopic_result.get('topic_info', {})),
+                'creation_confidence': bertopic_result.get('confidence', 0.0),
+                'sample_text': conversation_text[:500]  # Primi 500 caratteri come esempio
             }
             
+            # Verifica che il tag non esista già
+            existing_tags = self.mysql_connector.get_tags_list()
+            if any(tag.get('tag', '').lower() == new_tag_name.lower() for tag in existing_tags):
+                self.logger.info(f"Tag '{new_tag_name}' già esistente, skip creazione")
+                return True  # Non è un errore, il tag esiste già
+            
+            # Inserisce il nuovo tag
+            success = self.mysql_connector.create_new_tag(
+                tag_name=new_tag_name,
+                description=tag_data['description'],
+                metadata={
+                    'created_via': tag_data['created_via'],
+                    'topic_info': tag_data['topic_info'], 
+                    'creation_confidence': tag_data['creation_confidence']
+                }
+            )
+            
+            if success:
+                # Aggiorna cache locale domain_labels
+                if hasattr(self, 'domain_labels'):
+                    self.domain_labels.add(new_tag_name)
+                
+                self.logger.info(f"✅ Nuovo tag creato automaticamente: '{new_tag_name}' (confidence: {tag_data['creation_confidence']:.3f})")
+                return True
+            else:
+                self.logger.error(f"❌ Fallimento creazione tag nel database: '{new_tag_name}'")
+                return False
+                
         except Exception as e:
-            return {
-                'is_valid_new_category': False,
-                'reason': f"BERTopic evaluation error: {e}",
-                'confidence': 0.0
-            }
+            self.logger.error(f"❌ Errore in creazione automatica tag '{new_tag_name}': {e}")
+            return False
+    
+    def _generate_tag_description(self, conversation_text: str, bertopic_result: Dict[str, Any]) -> str:
+        """
+        Genera una descrizione automatica per il nuovo tag basata su BERTopic
+        """
+        try:
+            topic_info = bertopic_result.get('topic_info', {})
+            topic_words = topic_info.get('topic_words', [])
+            
+            # Costruisce descrizione dalle parole chiave del topic
+            if topic_words:
+                key_words = [word for word, _ in topic_words[:5]]
+                base_description = f"Tag auto-generato da topic BERTopic. Parole chiave: {', '.join(key_words)}"
+            else:
+                base_description = "Tag auto-generato da analisi BERTopic del contenuto conversazione"
+            
+            # Aggiunge informazioni aggiuntive
+            topic_id = topic_info.get('topic_id')
+            confidence = bertopic_result.get('confidence', 0.0)
+            
+            full_description = f"{base_description}. Topic ID: {topic_id}, Confidence: {confidence:.3f}"
+            
+            return full_description[:200]  # Limita lunghezza descrizione
+            
+        except Exception as e:
+            return f"Tag auto-generato da sistema BERTopic (errore descrizione: {e})"
 
     def _intelligent_fallback(self, original_label: str, 
                              conversation_text: str) -> Tuple[str, str, float]:

@@ -43,20 +43,22 @@ const TagSuggestions: React.FC<TagSuggestionsProps> = ({
   useEffect(() => {
     // Filtra i tag basandosi sul termine di ricerca
     const filtered = tags.filter(tag =>
-      tag.tag.toLowerCase().includes(searchTerm.toLowerCase())
+      tag && tag.tag && tag.tag.toLowerCase().includes(searchTerm.toLowerCase())
     );
     
     // Ordina per rilevanza: prima i tag che iniziano con il termine di ricerca,
     // poi per frequenza d'uso
     filtered.sort((a, b) => {
-      const aStartsWith = a.tag.toLowerCase().startsWith(searchTerm.toLowerCase());
-      const bStartsWith = b.tag.toLowerCase().startsWith(searchTerm.toLowerCase());
+      const aTag = a.tag || '';
+      const bTag = b.tag || '';
+      const aStartsWith = aTag.toLowerCase().startsWith(searchTerm.toLowerCase());
+      const bStartsWith = bTag.toLowerCase().startsWith(searchTerm.toLowerCase());
       
       if (aStartsWith && !bStartsWith) return -1;
       if (!aStartsWith && bStartsWith) return 1;
       
       // Se entrambi iniziano o non iniziano con il termine, ordina per conteggio
-      return b.count - a.count;
+      return (b.count || 0) - (a.count || 0);
     });
     
     setFilteredTags(filtered);
@@ -168,31 +170,31 @@ const TagSuggestions: React.FC<TagSuggestionsProps> = ({
           <Box display="flex" flexWrap="wrap" gap={1}>
             {filteredTags.map((tagItem) => (
               <Tooltip
-                key={tagItem.tag}
+                key={tagItem.tag || 'unknown'}
                 title={
                   <Box>
                     <Typography variant="body2">
-                      <strong>{tagItem.tag}</strong>
+                      <strong>{tagItem.tag || 'N/A'}</strong>
                     </Typography>
                     <Typography variant="caption">
-                      Utilizzato {tagItem.count} volte
+                      Utilizzato {tagItem.count || 0} volte
                     </Typography>
                     <Typography variant="caption" display="block">
-                      {getSourceLabel(tagItem.source)}
+                      {getSourceLabel(tagItem.source || 'automatic')}
                     </Typography>
                     <Typography variant="caption" display="block">
-                      Confidenza media: {(tagItem.avg_confidence * 100).toFixed(1)}%
+                      Confidenza media: {((tagItem.avg_confidence || 0) * 100).toFixed(1)}%
                     </Typography>
                   </Box>
                 }
                 arrow
               >
                 <Chip
-                  label={tagItem.tag}
-                  icon={getSourceIcon(tagItem.source) || undefined}
-                  onClick={() => handleTagClick(tagItem.tag)}
+                  label={tagItem.tag || 'N/A'}
+                  icon={getSourceIcon(tagItem.source || 'automatic') || undefined}
+                  onClick={() => handleTagClick(tagItem.tag || '')}
                   variant={currentValue === tagItem.tag ? "filled" : "outlined"}
-                  color={getSourceColor(tagItem.source) as any}
+                  color={getSourceColor(tagItem.source || 'automatic') as any}
                   size="small"
                   sx={{
                     cursor: 'pointer',

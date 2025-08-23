@@ -60,6 +60,21 @@ interface AllSessionsViewProps {
   onSessionAdd: (sessionId: string) => void;
 }
 
+// Nuove interfacce per integrazione MongoDB
+interface MongoTenant {
+  tenant_name: string;
+  client: string;
+  session_count: number;
+  classification_count: number;
+}
+
+interface MongoLabel {
+  label: string;
+  count: number;
+  session_count: number;
+  avg_confidence: number;
+}
+
 const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSessionAdd }) => {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(false);
@@ -70,6 +85,14 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
   const [currentLimit, setCurrentLimit] = useState<number>(50);
   const [selectedLabel, setSelectedLabel] = useState<string>('all'); // Nuovo stato per filtro etichetta
   const [recentlyAddedSessions, setRecentlyAddedSessions] = useState<Set<string>>(new Set()); // Per mostrare temporaneamente sessioni appena aggiunte
+  
+  // Nuovi stati per integrazione MongoDB  
+  const [availableTenants, setAvailableTenants] = useState<MongoTenant[]>([]);
+  const [selectedTenant, setSelectedTenant] = useState<string>('');
+  const [availableLabels, setAvailableLabels] = useState<MongoLabel[]>([]);
+  const [tenantLoading, setTenantLoading] = useState(false);
+  const [labelsLoading, setLabelsLoading] = useState(false);
+  const [mongoMode, setMongoMode] = useState<boolean>(true); // Usa MongoDB per default
   
   // Stati per classificazione completa
   const [classificationLoading, setClassificationLoading] = useState(false);

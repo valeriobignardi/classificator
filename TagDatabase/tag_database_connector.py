@@ -4,9 +4,18 @@ from mysql.connector import Error
 import os
 
 class TagDatabaseConnector:
-    """Connettore specifico per il database TAG locale"""
+    """Connettore specifico per il database TAG locale con supporto multi-tenant"""
     
-    def __init__(self):
+    def __init__(self, tenant_id: str = "humanitas", tenant_name: str = "Humanitas"):
+        """
+        Inizializza il connettore con supporto multi-tenant
+        
+        Args:
+            tenant_id: ID del tenant (default: "humanitas")
+            tenant_name: Nome del tenant (default: "Humanitas")
+        """
+        self.tenant_id = tenant_id
+        self.tenant_name = tenant_name
         self.config = self._load_config()
         self.connection = None
     
@@ -49,10 +58,10 @@ class TagDatabaseConnector:
         """Chiude la connessione al database"""
     def get_all_tags(self):
         """
-        Recupera tutti i tag attivi dal database TAG.tags
+        Recupera tutti i tag attivi dal database TAG.tags per il tenant corrente
         
         Returns:
-            Lista di dizionari con informazioni sui tag
+            Lista di dizionari con informazioni sui tag del tenant
         """
         if not self.connetti():
             return []
@@ -60,12 +69,12 @@ class TagDatabaseConnector:
         try:
             cursor = self.connection.cursor(dictionary=True)
             query = """
-            SELECT tag_name, tag_description
+            SELECT tag_name, tag_description, tenant_id, tenant_name, created_at
             FROM tags
-            WHERE tag_name IS NOT NULL
+            WHERE tag_name IS NOT NULL AND tenant_id = %s
             ORDER BY tag_name
             """
-            cursor.execute(query)
+            cursor.execute(query, (self.tenant_id,))
             result = cursor.fetchall()
             cursor.close()
             
@@ -75,11 +84,13 @@ class TagDatabaseConnector:
                 tags.append({
                     'tag_name': row['tag_name'],
                     'tag_description': row.get('tag_description', ''),
+                    'tenant_id': row['tenant_id'],
+                    'tenant_name': row['tenant_name'],
                     'tag_color': row.get('tag_color', '#2196F3'),
                     'created_at': row.get('created_at')
                 })
             
-            print(f"📋 Recuperati {len(tags)} tag dal database TAGS")
+            print(f"📋 Recuperati {len(tags)} tag dal database TAGS per tenant {self.tenant_id}")
             return tags
             
         except Error as e:
@@ -90,7 +101,7 @@ class TagDatabaseConnector:
     
     def get_tag_by_name(self, tag_name: str):
         """
-        Recupera un tag specifico per nome
+        Recupera un tag specifico per nome dal tenant corrente
         
         Args:
             tag_name: Nome del tag da cercare
@@ -104,11 +115,11 @@ class TagDatabaseConnector:
         try:
             cursor = self.connection.cursor(dictionary=True)
             query = """
-            SELECT tag_name 
+            SELECT tag_name, tag_description, tenant_id, tenant_name, created_at
             FROM tags
-            WHERE tag_name = %s
+            WHERE tag_name = %s AND tenant_id = %s
             """
-            cursor.execute(query, (tag_name,))
+            cursor.execute(query, (tag_name, self.tenant_id))
             result = cursor.fetchone()
             cursor.close()
             
@@ -116,6 +127,8 @@ class TagDatabaseConnector:
                 return {
                     'tag_name': result['tag_name'],
                     'tag_description': result.get('tag_description', ''),
+                    'tenant_id': result['tenant_id'],
+                    'tenant_name': result['tenant_name'],
                     'tag_color': result.get('tag_color', '#2196F3'),
                     'created_at': result.get('created_at')
                 }
@@ -146,41 +159,28 @@ class TagDatabaseConnector:
         try:
             cursor = self.connection.cursor()
             
-            # Verifica se il tag esiste già (case-insensitive)
+            # Verifica se il tag esiste già per questo tenant (case-insensitive)
             check_query = """
-            SELECT id, tag_name, is_active 
+            SELECT id, tag_name
             FROM tags 
-            WHERE LOWER(tag_name) = LOWER(%s)
+            WHERE LOWER(tag_name) = LOWER(%s) AND tenant_id = %s
             """
-            cursor.execute(check_query, (tag_name,))
+            cursor.execute(check_query, (tag_name, self.tenant_id))
             result = cursor.fetchone()
             
             if result:
-                tag_id, existing_name, is_active = result
-                if is_active:
-                    print(f"  ℹ️ Tag '{tag_name}' già esistente e attivo")
-                    return True
-                else:
-                    # Riattiva tag esistente ma disattivato
-                    update_query = """
-                    UPDATE tags 
-                    SET is_active = 1, tag_description = %s, tag_color = %s, updated_at = NOW()
-                    WHERE id = %s
-                    """
-                    cursor.execute(update_query, (tag_description, tag_color, tag_id))
-                    self.connection.commit()
-                    print(f"  ✅ Tag '{tag_name}' riattivato")
-                    return True
+                print(f"  ℹ️ Tag '{tag_name}' già esistente per tenant {self.tenant_id}")
+                return True
             else:
-                # Inserisce nuovo tag
+                # Inserisce nuovo tag con tenant_id e tenant_name
                 insert_query = """
-                INSERT INTO tags (tag_name, tag_description, tag_color, is_active, created_at, updated_at) 
-                VALUES (%s, %s, %s, 1, NOW(), NOW())
+                INSERT INTO tags (tenant_id, tenant_name, tag_name, tag_description, created_at, updated_at) 
+                VALUES (%s, %s, %s, %s, NOW(), NOW())
                 """
                 
-                cursor.execute(insert_query, (tag_name, tag_description, tag_color))
+                cursor.execute(insert_query, (self.tenant_id, self.tenant_name, tag_name, tag_description))
                 self.connection.commit()
-                print(f"  ✅ Nuovo tag '{tag_name}' aggiunto")
+                print(f"  ✅ Nuovo tag '{tag_name}' aggiunto per tenant {self.tenant_id}")
                 return True
                 
         except Error as e:

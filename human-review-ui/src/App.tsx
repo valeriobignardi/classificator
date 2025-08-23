@@ -8,13 +8,21 @@ import {
   Tabs,
   Tab,
   Alert,
-  CircularProgress
+  CircularProgress,
+  IconButton,
+  Chip,
+  Fab
 } from '@mui/material';
+import { MenuOutlined, ChevronRight } from '@mui/icons-material';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import ReviewDashboard from './components/ReviewDashboard';
 import ReviewStats from './components/ReviewStats';
 import CaseDetail from './components/CaseDetail';
+import PromptManager from './components/PromptManager';
+import ToolManager from './components/ToolManager';
+import TenantSelector from './components/TenantSelector';
+import { TenantProvider, useTenant } from './contexts/TenantContext';
 import { apiService } from './services/apiService';
 import { ReviewCase } from './types/ReviewCase';
 
@@ -63,17 +71,24 @@ function TabPanel(props: TabPanelProps) {
   );
 }
 
-function App() {
+function AppContent() {
   const [currentTab, setCurrentTab] = useState(0);
   const [selectedCase, setSelectedCase] = useState<ReviewCase | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tenant] = useState('humanitas'); // Per ora hardcodato, in futuro da parametro URL
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [tenantSelectorOpen, setTenantSelectorOpen] = useState(true); // Inizia aperto
+  
+  // Larghezza del drawer
+  const drawerWidth = 280;
+
+  // Usa il context per il tenant
+  const { selectedTenant } = useTenant();
+  const tenant = selectedTenant?.nome.toLowerCase() || 'humanitas'; // Fallback per compatibilità
 
   const handleCaseSelect = (caseItem: ReviewCase) => {
     setSelectedCase(caseItem);
-    setCurrentTab(2); // Switch to case detail tab
+    setCurrentTab(selectedCase ? 3 : 3); // Switch to case detail tab (index 3 now)
   };
 
   const handleCaseResolved = () => {
@@ -83,13 +98,14 @@ function App() {
   };
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
-    // Non permettere di cambiare al tab 2 se non c'è un caso selezionato
-    if (newValue === 2 && !selectedCase) {
+    // Non permettere di cambiare al tab caso se non c'è un caso selezionato
+    const caseTabIndex = selectedCase ? 3 : -1;
+    if (newValue === caseTabIndex && !selectedCase) {
       return;
     }
     setCurrentTab(newValue);
     // Se cambiamo tab e non stiamo andando al case detail, reset case selection
-    if (newValue !== 2) {
+    if (newValue !== caseTabIndex) {
       setSelectedCase(null);
     }
   };
@@ -121,13 +137,54 @@ function App() {
   }, [currentTab]);
 
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
-      <Box sx={{ flexGrow: 1 }}>
-        <AppBar position="static">
+    <Box sx={{ display: 'flex' }}>
+      {/* Barra laterale fissa */}
+      <TenantSelector
+        open={tenantSelectorOpen}
+        onToggle={() => setTenantSelectorOpen(!tenantSelectorOpen)}
+        drawerWidth={drawerWidth}
+      />
+
+      {/* Contenuto principale */}
+      <Box
+        component="main"
+        sx={{
+          flexGrow: 1,
+          width: { sm: `calc(100% - ${tenantSelectorOpen ? drawerWidth : 0}px)` },
+          transition: 'width 0.3s ease',
+        }}
+      >
+        <AppBar 
+          position="fixed" 
+          sx={{ 
+            width: { sm: `calc(100% - ${tenantSelectorOpen ? drawerWidth : 0}px)` },
+            ml: { sm: tenantSelectorOpen ? `${drawerWidth}px` : 0 },
+            transition: 'width 0.3s ease, margin 0.3s ease',
+          }}
+        >
           <Toolbar>
+            {!tenantSelectorOpen && (
+              <IconButton
+                edge="start"
+                color="inherit"
+                aria-label="apri menu tenant"
+                onClick={() => setTenantSelectorOpen(true)}
+                sx={{ mr: 2 }}
+              >
+                <MenuOutlined />
+              </IconButton>
+            )}
             <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-              🏥 Human Review Interface - {tenant.toUpperCase()}
+              🏥 Human Review Interface
+              {selectedTenant && (
+                <Chip
+                  label={selectedTenant.nome.toUpperCase()}
+                  color="secondary"
+                  variant="outlined"
+                  size="small"
+                  sx={{ ml: 1, color: 'white', borderColor: 'white' }}
+                />
+              )}
             </Typography>
             <Typography variant="body2">
               Sistema di Supervisione Umana
@@ -135,7 +192,10 @@ function App() {
           </Toolbar>
         </AppBar>
 
-        <Container maxWidth="xl" sx={{ mt: 2 }}>
+        {/* Spaziatura per AppBar fissa */}
+        <Toolbar />
+
+        <Container maxWidth="xl" sx={{ mt: 2, mb: 2 }}>
           {error && (
             <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
               {error}
@@ -146,6 +206,7 @@ function App() {
             <Tabs value={currentTab} onChange={handleTabChange} aria-label="review tabs">
               <Tab label="Dashboard Revisione" />
               <Tab label="Statistiche" />
+              <Tab label="Configurazione" />
               {selectedCase && (
                 <Tab label={`Caso: ${selectedCase.session_id.substring(0, 8)}...`} />
               )}
@@ -169,8 +230,31 @@ function App() {
             />
           </TabPanel>
 
+          <TabPanel value={currentTab} index={2}>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {/* Sezione Tools */}
+              <Box>
+                <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>
+                  Gestione Tools
+                </Typography>
+                <ToolManager open={true} />
+              </Box>
+
+              {/* Separatore */}
+              <Box sx={{ borderTop: '1px solid #e0e0e0', my: 2 }} />
+
+              {/* Sezione Prompts */}
+              <Box>
+                <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>
+                  Gestione Prompts
+                </Typography>
+                <PromptManager open={true} />
+              </Box>
+            </Box>
+          </TabPanel>
+
           {selectedCase && (
-            <TabPanel value={currentTab} index={2}>
+            <TabPanel value={currentTab} index={3}>
               <CaseDetail
                 case={selectedCase}
                 tenant={tenant}
@@ -186,7 +270,36 @@ function App() {
             </Box>
           )}
         </Container>
+
+        {/* Floating Action Button per aprire la barra quando è chiusa */}
+        {!tenantSelectorOpen && (
+          <Fab
+            color="primary"
+            aria-label="apri barra tenant"
+            onClick={() => setTenantSelectorOpen(true)}
+            sx={{
+              position: 'fixed',
+              bottom: 24,
+              left: 16,
+              zIndex: 1200,
+            }}
+            size="small"
+          >
+            <ChevronRight />
+          </Fab>
+        )}
       </Box>
+    </Box>
+  );
+}
+
+function App() {
+  return (
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <TenantProvider>
+        <AppContent />
+      </TenantProvider>
     </ThemeProvider>
   );
 }

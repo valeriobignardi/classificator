@@ -22,6 +22,7 @@ Note stile/sintassi:
 from typing import Any, Dict, List, Optional, Tuple
 import os
 import json
+import time
 import numpy as np
 
 # Dipendenze opzionali per non rompere l'ambiente se mancanti
@@ -338,9 +339,45 @@ class BERTopicFeatureProvider:
         if not self.available:
             raise RuntimeError("BERTopic non disponibile: installa dipendenze.")
 
-        from bertopic import BERTopic  # reimport sicuro
-        model_path = os.path.join(path, "bertopic_model")
-        self.model = BERTopic.load(model_path)
+        try:
+            from bertopic import BERTopic  # reimport sicuro
+            model_path = os.path.join(path, "bertopic_model")
+            
+            print(f"🔄 Caricamento BERTopic model da {model_path}")
+            self.model = BERTopic.load(model_path)
+            print("✅ BERTopic model caricato con successo")
+            
+        except Exception as e:
+            error_msg = str(e)
+            print(f"❌ Errore nel caricamento del modello BERTopic: {error_msg}")
+            
+            # Riconoscimento errori di incompatibilità numba/joblib
+            if any(keyword in error_msg for keyword in [
+                "code() argument", 
+                "must be str, not int", 
+                "numba", 
+                "serialize",
+                "_unpickle__CustomPickled"
+            ]):
+                print("🔧 ERRORE DI COMPATIBILITÀ NUMBA RILEVATO!")
+                print("📋 Causa: Modello salvato con versione numba incompatibile")
+                print("🔄 SOLUZIONE: Rimuovere modello corrotto e permettere ricreazione")
+                
+                # Rimuovi la directory corrotta
+                import shutil
+                if os.path.exists(path):
+                    backup_path = path + "_corrupted_" + str(int(time.time()))
+                    print(f"🗂️ Spostando modello corrotto in: {backup_path}")
+                    shutil.move(path, backup_path)
+                    
+                # Forza ricreazione indicando assenza di modello
+                print("✅ Modello corrotto rimosso - il sistema ricreerà automaticamente BERTopic")
+                return None  # Indica che non c'è modello da caricare
+            else:
+                # Altri errori - propaga eccezione
+                import traceback
+                print(f"❌ Stack trace: {traceback.format_exc()}")
+                raise e
 
         # Carica SVD se presente e previsto
         svd_path = os.path.join(path, "svd_model.pkl")

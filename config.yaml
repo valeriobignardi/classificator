@@ -22,7 +22,7 @@ mongodb:
 # Configurazione BERTopic feature
 # ===============================
 bertopic:
-  enabled: true           # Attiva feature augmentation BERTopic
+  enabled: true          # Riabilitato - i modelli corrotti sono stati rimossi
   top_k: 15               # Numero di topic-prob da concatenare
   return_one_hot: false   # Non includere one-hot del topic principale
   model_subdir: "bertopic" # Sotto-cartella del modello per il provider
@@ -147,11 +147,16 @@ pipeline:
   classification_batch_size: 32    # Dimensione batch per classificazione
   
   # Parametri per IntelligentClassifier con embedding
-  intelligent_classifier_embedding: false  # DISABILITATO: ridondante con pipeline clustering
+  intelligent_classifier_embedding: true   # ABILITATO: per sistema di fallback BERTopic
   embedding_validation: false              # DISABILITATO: non necessario
-  semantic_fallback: false                 # DISABILITATO: usa fallback semplice
-  new_category_detection: false            # DISABILITATO: gestito da review umana
+  semantic_fallback: true                  # ABILITATO: usa fallback intelligente BERTopic
+  new_category_detection: true             # ABILITATO: per auto-discovery tag via BERTopic
   embedding_similarity_threshold: 0.85     # Soglia similarità per matching semantico
+  
+  # Sistema di fallback intelligente BERTopic
+  bertopic_fallback_threshold: 0.70        # Se confidence < soglia → BERTopic discovery
+  new_tag_similarity_threshold: 0.75       # Se similarità < soglia → crea nuovo tag
+  auto_tag_creation: true                   # Permetti creazione automatica tag
 
   # Riaddestramento automatico all'inizializzazione
   auto_retrain_on_init: false     # DISABILITATO: Modello già trainato (90.1% accuracy)

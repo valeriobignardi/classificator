@@ -244,6 +244,43 @@ class ApiService {
   async listAllModels(): Promise<any> {
     return this.get(`${API_BASE_URL}/finetuning/models`);
   }
+
+  // PROMPT MANAGEMENT METHODS
+  
+  async checkPromptStatus(tenant: string): Promise<{
+    canOperate: boolean;
+    requiredPrompts: Array<{
+      name: string;
+      type: string;
+      description: string;
+      exists: boolean;
+    }>;
+    missingCount: number;
+  }> {
+    return this.handleRequest(
+      axios.get(`${API_BASE_URL}/prompts/${tenant}/status`)
+    );
+  }
+
+  async createPromptFromTemplate(
+    tenant: string,
+    tenantName: string,
+    config: {
+      customize_prompts: boolean;
+      system_customization: string;
+    }
+  ): Promise<{
+    success: boolean;
+    message: string;
+    created_prompts: string[];
+  }> {
+    return this.handleRequest(
+      axios.post(`${API_BASE_URL}/prompts/${tenant}/from-template`, {
+        tenant_name: tenantName,
+        ...config
+      })
+    );
+  }
 }
 
 export const apiService = new ApiService();

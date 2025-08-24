@@ -200,7 +200,12 @@ class EndToEndPipeline:
         
         # Inizializza il trainer interattivo
         print("👤 Inizializzazione trainer interattivo...")
-        self.interactive_trainer = InteractiveTrainer(llm_classifier=llm_classifier, auto_mode=self.auto_mode)
+        self.interactive_trainer = InteractiveTrainer(
+            llm_classifier=llm_classifier, 
+            auto_mode=self.auto_mode,
+            tenant_id=self.client_name,  # Usa client_name come tenant_id
+            bertopic_model=None  # Sarà inizializzato dopo il clustering
+        )
         
         
         # Inizializza il dedupplicatore intelligente di etichette

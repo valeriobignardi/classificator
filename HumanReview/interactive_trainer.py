@@ -12,6 +12,9 @@ from datetime import datetime
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'LLMClassifier'))
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'EmbeddingEngine'))
 
+# Import per validatore ALTRO
+from altro_tag_validator import AltroTagValidator
+
 # Non importiamo più direttamente IntelligentClassifier
 # Lo riceviamo come parametro per maggiore flessibilità
 
@@ -20,18 +23,31 @@ class InteractiveTrainer:
     Gestisce il training supervisionato interattivo con feedback umano
     """
     
-    def __init__(self, llm_classifier: Optional[Any] = None, auto_mode: bool = False):
+    def __init__(self, llm_classifier: Optional[Any] = None, auto_mode: bool = False, tenant_id: str = None, bertopic_model: Optional[Any] = None):
         """
         Inizializza il trainer interattivo
         
         Args:
             llm_classifier: Classificatore LLM per proposte automatiche
             auto_mode: Se True, utilizza solo proposte automatiche senza input umano
+            tenant_id: ID del tenant per validazione tag "altro"
+            bertopic_model: Modello BERTopic per validazione incrociata
         """
         self.llm_classifier = llm_classifier
         self.auto_mode = auto_mode
+        self.tenant_id = tenant_id
+        self.bertopic_model = bertopic_model
         self.human_feedback = []  # Storico feedback umano
         self.approved_labels = {}  # Etichette approvate dall'umano
+        
+        # Inizializza validatore per tag "altro" se abbiamo tenant_id
+        self.altro_validator = None
+        if tenant_id:
+            try:
+                self.altro_validator = AltroTagValidator(tenant_id)
+            except Exception as e:
+                print(f"⚠️ Warning: Impossibile inizializzare AltroTagValidator: {e}")
+                self.altro_validator = None
         
     def review_cluster_representatives(self, 
                                      cluster_id: int,
@@ -180,6 +196,162 @@ class InteractiveTrainer:
         self.approved_labels[cluster_id] = final_label
         
         return final_label, human_confidence
+    
+    def handle_altro_classification(self, conversation_text: str, force_human_decision: bool = False) -> Tuple[str, float, Dict[str, Any]]:
+        """
+        Gestisce una classificazione "ALTRO" con validazione incrociata LLM + BERTopic
+        
+        Args:
+            conversation_text: Testo della conversazione classificata come "altro"
+            force_human_decision: Se True, forza la decisione umana
+            
+        Returns:
+            Tuple (etichetta_finale, confidenza, info_validazione)
+        """
+        if not self.altro_validator or not self.llm_classifier:
+            # Fallback: restituisci "altro" senza validazione
+            return "altro", 0.3, {"validation_path": "no_validator", "needs_human_review": True}
+        
+        try:
+            print(f"\n" + "🔍" * 80)
+            print(f"🏷️  VALIDAZIONE CLASSIFICAZIONE 'ALTRO'")
+            print("🔍" * 80)
+            
+            # Esegui validazione con LLM + BERTopic + Similarità
+            validation_result = self.altro_validator.validate_altro_classification(
+                conversation_text=conversation_text,
+                llm_classifier=self.llm_classifier,
+                bertopic_model=self.bertopic_model,
+                force_human_decision=force_human_decision
+            )
+            
+            print(f"\n📊 RISULTATO VALIDAZIONE:")
+            print(f"   Path: {validation_result.validation_path}")
+            print(f"   Tag finale: '{validation_result.final_tag}'")
+            print(f"   Confidenza: {validation_result.confidence:.3f}")
+            
+            if validation_result.similarity_score is not None:
+                print(f"   Similarità: {validation_result.similarity_score:.3f}")
+                if validation_result.matched_existing_tag:
+                    print(f"   Tag simile trovato: '{validation_result.matched_existing_tag}'")
+            
+            if validation_result.bertopic_suggestion:
+                print(f"   Suggerimento BERTopic: '{validation_result.bertopic_suggestion}'")
+            
+            # Se dobbiamo aggiungere nuovo tag, fallo immediatamente
+            if validation_result.should_add_new_tag:
+                print(f"\n➕ AGGIUNGENDO NUOVO TAG: '{validation_result.final_tag}'")
+                
+                success = self.altro_validator.add_new_tag_immediately(
+                    validation_result.final_tag,
+                    validation_result.confidence
+                )
+                
+                if success:
+                    print(f"✅ Nuovo tag '{validation_result.final_tag}' aggiunto e disponibile")
+                else:
+                    print(f"❌ Errore nell'aggiunta del tag '{validation_result.final_tag}'")
+                    # Fallback ad "altro" se non riusciamo ad aggiungere il tag
+                    validation_result.final_tag = "altro"
+                    validation_result.confidence = 0.3
+            
+            # Se necessita review umana, mostra dettagli
+            if validation_result.needs_human_review and not self.auto_mode:
+                print(f"\n👤 REVIEW UMANA NECESSARIA")
+                print(f"   Motivo: {validation_result.validation_path}")
+                
+                if validation_result.bertopic_suggestion:
+                    print(f"   BERTopic suggerisce: '{validation_result.bertopic_suggestion}'")
+                
+                if validation_result.llm_raw_response:
+                    print(f"   LLM raw response (primi 200 char):")
+                    print(f"   {validation_result.llm_raw_response[:200]}...")
+                
+                # Chiedi decisione umana
+                final_tag = self._get_human_decision_for_altro(validation_result)
+                validation_result.final_tag = final_tag
+                validation_result.confidence = 0.8  # Alta confidenza per decisione umana
+            
+            # Restituisci risultato
+            validation_info = {
+                "validation_path": validation_result.validation_path,
+                "similarity_score": validation_result.similarity_score,
+                "matched_existing_tag": validation_result.matched_existing_tag,
+                "bertopic_suggestion": validation_result.bertopic_suggestion,
+                "should_add_new_tag": validation_result.should_add_new_tag,
+                "needs_human_review": validation_result.needs_human_review
+            }
+            
+            return validation_result.final_tag, validation_result.confidence, validation_info
+            
+        except Exception as e:
+            print(f"❌ Errore durante validazione ALTRO: {e}")
+            return "altro", 0.2, {"validation_path": "error", "error": str(e), "needs_human_review": True}
+    
+    def _get_human_decision_for_altro(self, validation_result) -> str:
+        """
+        Chiede decisione umana per un caso "altro" complesso
+        
+        Args:
+            validation_result: Risultato della validazione
+            
+        Returns:
+            Tag deciso dall'umano
+        """
+        print(f"\n👤 DECISIONE UMANA RICHIESTA:")
+        print(f"   [1] 🏷️  Mantieni 'altro'")
+        
+        option_counter = 2
+        
+        if validation_result.bertopic_suggestion and validation_result.bertopic_suggestion != "sconosciuto":
+            print(f"   [{option_counter}] 🤖 Usa suggerimento BERTopic: '{validation_result.bertopic_suggestion}'")
+            bertopic_option = option_counter
+            option_counter += 1
+        else:
+            bertopic_option = None
+        
+        if validation_result.matched_existing_tag:
+            print(f"   [{option_counter}] 🎯 Usa tag simile esistente: '{validation_result.matched_existing_tag}'")
+            similar_option = option_counter
+            option_counter += 1
+        else:
+            similar_option = None
+        
+        print(f"   [{option_counter}] 📝 Inserisci nuovo tag personalizzato")
+        custom_option = option_counter
+        
+        while True:
+            try:
+                choice = input(f"\nScelta [1-{option_counter}]: ").strip()
+                choice_int = int(choice)
+                
+                if choice_int == 1:
+                    return "altro"
+                elif bertopic_option and choice_int == bertopic_option:
+                    return validation_result.bertopic_suggestion
+                elif similar_option and choice_int == similar_option:
+                    return validation_result.matched_existing_tag
+                elif choice_int == custom_option:
+                    while True:
+                        new_tag = input("Inserisci nuovo tag: ").strip().lower()
+                        if new_tag and new_tag != "altro":
+                            # Aggiungi immediatamente il nuovo tag
+                            if self.altro_validator.add_new_tag_immediately(new_tag, 0.9):
+                                print(f"✅ Nuovo tag '{new_tag}' aggiunto")
+                                return new_tag
+                            else:
+                                print(f"❌ Errore nell'aggiunta. Uso 'altro'")
+                                return "altro"
+                        else:
+                            print("❌ Tag non valido")
+                else:
+                    print(f"❌ Scelta non valida. Usa un numero da 1 a {option_counter}")
+                    
+            except ValueError:
+                print("❌ Inserisci un numero valido")
+            except KeyboardInterrupt:
+                print(f"\n🛑 Interrotto. Uso 'altro'")
+                return "altro"
     
     def _get_confidence_input(self) -> float:
         """

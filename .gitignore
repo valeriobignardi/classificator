@@ -1,7 +1,11 @@
 # Virtual Environment
 venv/
+.venv/
 env/
+.env/
 ENV/
+env.bak/
+venv.bak/
 
 # Python
 __pycache__/
@@ -32,6 +36,12 @@ debug_logs/
 
 # Models and Cache
 models/
+model/
+*/models/
+**/models/
+*.model
+*.pkl
+*.joblib
 semantic_cache/
 */semantic_cache/
 **/semantic_cache/

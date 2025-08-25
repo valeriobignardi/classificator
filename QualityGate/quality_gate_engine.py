@@ -589,6 +589,15 @@ class QualityGateEngine:
             bool: True se salvato con successo
         """
         try:
+            # 🔧 FIX: Ricostruisci cluster_metadata da cluster_id disponibile
+            cluster_metadata = None
+            if hasattr(case, 'cluster_id') and case.cluster_id:
+                cluster_metadata = {
+                    'cluster_id': case.cluster_id,
+                    'method': 'human_review_preserved'  # Metodo per tracciabilità
+                }
+                # TODO: In futuro si potrebbe recuperare metadata completi dal DB
+            
             # Usa MongoDB come sistema unificato per tutte le classificazioni
             success = self.mongo_reader.save_classification_result(
                 session_id=case.session_id,
@@ -612,7 +621,8 @@ class QualityGateEngine:
                 conversation_text=case.conversation_text,
                 needs_review=False,  # Risolto dall'umano
                 classified_by='human_supervisor',
-                notes=notes
+                notes=notes,
+                cluster_metadata=cluster_metadata  # 🔧 FIX: Aggiunti metadati cluster
             )
                 
             if success:

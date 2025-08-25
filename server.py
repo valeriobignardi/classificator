@@ -28,10 +28,14 @@ from tag_database_connector import TagDatabaseConnector
 from quality_gate_engine import QualityGateEngine
 from mongo_classification_reader import MongoClassificationReader
 from prompt_manager import PromptManager
+from tool_manager import ToolManager
 
 # Import del blueprint per validazione prompt
 sys.path.append(os.path.join(os.path.dirname(__file__), 'APIServer'))
 from APIServer.prompt_validation_api import prompt_validation_bp
+
+# Import del blueprint per gestione esempi
+from esempi_api_server import esempi_bp
 
 app = Flask(__name__)
 # Configurazione CORS generica per sviluppo
@@ -43,6 +47,9 @@ CORS(app,
 
 # Registrazione blueprint per validazione prompt
 app.register_blueprint(prompt_validation_bp, url_prefix='/api/prompt-validation')
+
+# Registrazione blueprint per gestione esempi
+app.register_blueprint(esempi_bp)
 
 
 def sanitize_for_json(obj):
@@ -1644,7 +1651,7 @@ def api_get_review_cases(client_name: str):
         label: Filtra per etichetta specifica (opzionale)
         show_representatives: Se 'true', mostra solo rappresentanti di cluster (pending)
         include_propagated: Se 'true', include conversazioni propagate dai cluster (default: 'false')
-        show_outliers: Se 'true', include outliers con etichetta assegnata
+        include_outliers: Se 'true', include sessioni outlier (default: 'true')
         
     Returns:
         {
@@ -1664,10 +1671,19 @@ def api_get_review_cases(client_name: str):
         show_representatives = request.args.get('show_representatives', 'false').lower() == 'true'
         # 🔧 FIX: Uso include_propagated per coerenza con frontend e endpoint /clusters
         show_propagated = request.args.get('include_propagated', 'false').lower() == 'true'
-        show_outliers = request.args.get('show_outliers', 'false').lower() == 'true'
+        # 🆕 NUOVO: include_outliers per coerenza con altri parametri include_*
+        show_outliers = request.args.get('include_outliers', 'false').lower() == 'true'
         
-        # Se nessun flag specifico, mostra tutto (comportamento default)
-        if not (show_representatives or show_propagated or show_outliers):
+        # 🔧 FIX LOGICA: Se nessun parametro è specificato (tutti default), mostra tutto
+        # Se i parametri sono specificati esplicitamente, rispettali anche se False
+        has_explicit_filters = (
+            'show_representatives' in request.args or 
+            'include_propagated' in request.args or 
+            'include_outliers' in request.args
+        )
+        
+        if not has_explicit_filters:
+            # Comportamento default: mostra tutto
             show_representatives = show_propagated = show_outliers = True
         
         # Ottieni reader MongoDB tenant-aware - AGGIORNATO
@@ -3975,33 +3991,22 @@ def copy_prompts_from_humanitas():
             if not original_prompt.get('is_active', False):
                 continue  # Salta prompt non attivi
                 
-            # Crea il nuovo prompt con gli stessi dati ma nuovo tenant_id
-            new_prompt_data = {
-                'tenant_id': target_tenant_id,
-                'engine': original_prompt.get('engine', 'chatgpt'),
-                'prompt_type': original_prompt.get('prompt_type'),
-                'prompt_name': original_prompt.get('prompt_name'),
-                'content': original_prompt.get('content'),
-                'variables': original_prompt.get('variables', {}),
-                'is_active': True
-            }
-            
-            # Salva il nuovo prompt
-            prompt_id = prompt_manager.save_prompt(
-                tenant_id=new_prompt_data['tenant_id'],
-                engine=new_prompt_data['engine'],
-                prompt_type=new_prompt_data['prompt_type'],
-                prompt_name=new_prompt_data['prompt_name'],
-                content=new_prompt_data['content'],
-                variables=new_prompt_data['variables'],
-                is_active=new_prompt_data['is_active']
+            # Usa il nuovo metodo specializzato per la copia
+            prompt_id = prompt_manager.create_prompt_from_template(
+                target_tenant_id=target_tenant_id,
+                template_prompt=original_prompt
             )
             
-            # Recupera il prompt appena creato per includerlo nella risposta
-            created_prompt = prompt_manager.get_prompt_by_id(prompt_id)
-            copied_prompts.append(created_prompt)
-            
-            print(f"✅ [DEBUG] Copiato prompt '{original_prompt.get('prompt_name')}' -> ID: {prompt_id}")
+            if prompt_id:
+                # Recupera il prompt appena creato per includerlo nella risposta
+                created_prompt = prompt_manager.get_prompt_by_id(prompt_id)
+                if created_prompt:
+                    copied_prompts.append(created_prompt)
+                    print(f"✅ [DEBUG] Copiato prompt '{original_prompt.get('prompt_name')}' -> ID: {prompt_id}")
+                else:
+                    print(f"⚠️ [DEBUG] Prompt creato ma non recuperabile: ID {prompt_id}")
+            else:
+                print(f"❌ [DEBUG] Errore copia prompt '{original_prompt.get('prompt_name')}'")
         
         print(f"🎉 [DEBUG] Copia completata: {len(copied_prompts)} prompt copiati")
         

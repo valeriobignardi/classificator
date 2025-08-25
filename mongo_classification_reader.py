@@ -1339,6 +1339,34 @@ class MongoClassificationReader:
                 
                 # Log per debug
                 print(f"🏷️  Salvati metadati cluster per sessione {session_id}: cluster_id={cluster_metadata.get('cluster_id', 'N/A')}, is_representative={cluster_metadata.get('is_representative', False)}")
+            else:
+                # 🔧 FIX CRITICO: Se non ci sono cluster_metadata, la sessione è un OUTLIER
+                # SEMPRE salvare i metadati, anche se vuoti/null, per tracciabilità!
+                if "metadata" not in doc:
+                    doc["metadata"] = {}
+                
+                # Genera cluster_id progressivo per outlier
+                outlier_counter = self._get_next_outlier_counter()
+                outlier_cluster_id = f"outlier_{outlier_counter}"
+                
+                doc["metadata"]["cluster_id"] = outlier_cluster_id
+                doc["metadata"]["is_representative"] = False  # Gli outlier non sono mai rappresentanti
+                doc["metadata"]["outlier_score"] = 1.0  # Score massimo per outlier
+                doc["metadata"]["method"] = "auto_outlier_assignment"
+                
+                # Determina il session_type per l'UI
+                doc["session_type"] = "outlier"
+                
+                print(f"🔍 OUTLIER ASSIGNMENT: Sessione {session_id} assegnata a cluster {outlier_cluster_id}")
+            
+            # 🆕 AGGIUNGI SEMPRE session_type basato sui metadata per consistenza UI
+            if "session_type" not in doc:
+                if doc.get("metadata", {}).get("is_representative", False):
+                    doc["session_type"] = "representative"
+                elif doc.get("metadata", {}).get("propagated_from"):
+                    doc["session_type"] = "propagated"
+                else:
+                    doc["session_type"] = "outlier"
             
             # Prepara il filtro per upsert usando tenant_id come chiave univoca
             filter_dict = {"session_id": session_id}
@@ -1363,6 +1391,47 @@ class MongoClassificationReader:
         except Exception as e:
             print(f"Errore nel salvataggio risultato classificazione: {e}")
             return False
+
+    def _get_next_outlier_counter(self) -> int:
+        """
+        Scopo: Genera il prossimo numero progressivo per outlier_X
+        
+        Output:
+            - Numero progressivo per il prossimo outlier
+            
+        Ultimo aggiornamento: 2025-08-25
+        """
+        try:
+            if not self.ensure_connection():
+                return 1
+                
+            collection = self.db[self.get_collection_name()]
+            
+            # Trova tutti i cluster_id che iniziano con "outlier_"
+            pipeline = [
+                {"$match": {"metadata.cluster_id": {"$regex": "^outlier_"}}},
+                {"$project": {"cluster_id": "$metadata.cluster_id"}},
+                {"$group": {"_id": "$cluster_id"}}
+            ]
+            
+            existing_outliers = list(collection.aggregate(pipeline))
+            
+            # Estrai i numeri dai cluster_id esistenti
+            max_counter = 0
+            for outlier_doc in existing_outliers:
+                cluster_id = outlier_doc.get('_id', '')
+                if cluster_id.startswith('outlier_'):
+                    try:
+                        counter = int(cluster_id.replace('outlier_', ''))
+                        max_counter = max(max_counter, counter)
+                    except ValueError:
+                        continue
+            
+            return max_counter + 1
+            
+        except Exception as e:
+            print(f"Errore nel calcolo outlier counter: {e}")
+            return 1
 
     def get_review_queue_sessions(self, client_name: str, limit: int = 100, 
                                   label_filter: str = None,
@@ -1412,10 +1481,13 @@ class MongoClassificationReader:
                     "metadata.is_representative": {"$ne": True}
                 })
             
-            # 3. OUTLIERS: cluster_id = -1 O cluster_id non esiste
+            # 3. OUTLIERS: cluster_id inizia con "outlier_" O valori legacy
             if show_outliers:
                 or_conditions.append({
                     "$or": [
+                        # 🆕 NUOVO: outliers con formato outlier_X
+                        {"metadata.cluster_id": {"$regex": "^outlier_"}},
+                        # Legacy: outliers con cluster_id = -1
                         {"metadata.cluster_id": -1},
                         {"metadata.cluster_id": "-1"},  # Fallback string
                         {"metadata.cluster_id": {"$exists": False}}  # Legacy senza cluster

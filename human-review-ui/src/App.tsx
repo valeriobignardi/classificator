@@ -20,6 +20,7 @@ import ReviewDashboard from './components/ReviewDashboard';
 import ReviewStats from './components/ReviewStats';
 import CaseDetail from './components/CaseDetail';
 import PromptManager from './components/PromptManager';
+import ExampleManager from './components/ExampleManager';
 import ToolManager from './components/ToolManager';
 import ClusteringParametersManager from './components/ClusteringParametersManager';
 import TenantSelector from './components/TenantSelector';
@@ -240,6 +241,17 @@ function AppContent() {
                   Gestione Prompts
                 </Typography>
                 <PromptManager open={true} />
+              </Box>
+
+              {/* Separatore */}
+              <Box sx={{ borderTop: '1px solid #e0e0e0', my: 2 }} />
+
+              {/* Sezione Esempi - NUOVA */}
+              <Box>
+                <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>
+                  Gestione Esempi
+                </Typography>
+                <ExampleManager open={true} />
               </Box>
 
               {/* Separatore */}

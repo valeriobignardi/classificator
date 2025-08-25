@@ -28,24 +28,26 @@ class ApiService {
     }
   }
 
-  async getReviewCases(tenant: string, limit: number = 20, includePropagated: boolean = false): Promise<{ cases: ReviewCase[]; total: number }> {
+  async getReviewCases(tenant: string, limit: number = 20, includePropagated: boolean = false, includeOutliers: boolean = false): Promise<{ cases: ReviewCase[]; total: number }> {
     return this.handleRequest(
       axios.get(`${API_BASE_URL}/review/${tenant}/cases`, {
         params: { 
           limit,
-          include_propagated: includePropagated
+          include_propagated: includePropagated,
+          include_outliers: includeOutliers
         }
       })
     );
   }
 
   // 🆕 Nuovo metodo per cluster view - mostra solo rappresentanti per default
-  async getClusterCases(tenant: string, limit: number = 20, includePropagated: boolean = false): Promise<{ clusters: any[]; total: number }> {
+  async getClusterCases(tenant: string, limit: number = 20, includePropagated: boolean = false, includeOutliers: boolean = false): Promise<{ clusters: any[]; total: number }> {
     return this.handleRequest(
       axios.get(`${API_BASE_URL}/review/${tenant}/clusters`, {
         params: { 
           limit,
-          include_propagated: includePropagated 
+          include_propagated: includePropagated,
+          include_outliers: includeOutliers
         }
       })
     );
@@ -372,6 +374,114 @@ class ApiService {
       
     } catch (error) {
       console.error('❌ [DEBUG] Errore copia prompt:', error);
+      throw error;
+    }
+  }
+
+  // =====================================================================
+  // METODI PER GESTIONE ESEMPI
+  // =====================================================================
+
+  /**
+   * Recupera la lista degli esempi per un tenant
+   * @param tenantId ID del tenant
+   * @returns Lista degli esempi
+   */
+  async getExamples(tenantId: string): Promise<any[]> {
+    console.log('🔍 [DEBUG] ApiService.getExamples() - Avvio richiesta');
+    console.log('🔍 [DEBUG] Tenant:', tenantId);
+    
+    const url = `${API_BASE_URL}/examples?tenant_id=${tenantId}`;
+    console.log('🔍 [DEBUG] URL chiamata:', url);
+
+    try {
+      const response = await axios.get(url);
+      console.log('✅ [DEBUG] Risposta esempi ricevuta:', response.status);
+      console.log('✅ [DEBUG] Dati esempi:', response.data);
+      
+      return response.data.data || [];
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore get esempi:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Crea un nuovo esempio
+   * @param example Dati dell'esempio
+   * @returns Risultato operazione
+   */
+  async createExample(example: any): Promise<any> {
+    console.log('🔍 [DEBUG] ApiService.createExample() - Avvio richiesta');
+    console.log('🔍 [DEBUG] Esempio:', example);
+    
+    const url = `${API_BASE_URL}/examples`;
+    console.log('🔍 [DEBUG] URL chiamata:', url);
+
+    try {
+      const response = await axios.post(url, example);
+      console.log('✅ [DEBUG] Esempio creato:', response.status);
+      console.log('✅ [DEBUG] Risultato:', response.data);
+      
+      return response.data;
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore creazione esempio:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Elimina un esempio
+   * @param exampleId ID dell'esempio
+   * @param tenantId ID del tenant
+   * @returns Risultato operazione
+   */
+  async deleteExample(exampleId: number, tenantId: string): Promise<any> {
+    console.log('🔍 [DEBUG] ApiService.deleteExample() - Avvio richiesta');
+    console.log('🔍 [DEBUG] ID esempio:', exampleId);
+    console.log('🔍 [DEBUG] Tenant:', tenantId);
+    
+    const url = `${API_BASE_URL}/examples/${exampleId}?tenant_id=${tenantId}`;
+    console.log('🔍 [DEBUG] URL chiamata:', url);
+
+    try {
+      const response = await axios.delete(url);
+      console.log('✅ [DEBUG] Esempio eliminato:', response.status);
+      console.log('✅ [DEBUG] Risultato:', response.data);
+      
+      return response.data;
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore eliminazione esempio:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Ottiene esempi formattati per il placeholder {{examples_text}}
+   * @param tenantId ID del tenant
+   * @param limit Numero massimo di esempi
+   * @returns Oggetto con esempi formattati e statistiche
+   */
+  async getExamplesForPlaceholder(tenantId: string, limit: number = 3): Promise<{
+    examples_text: string;
+    num_conversations: number;
+    length: number;
+  }> {
+    console.log('🔍 [DEBUG] ApiService.getExamplesForPlaceholder() - Avvio richiesta');
+    console.log('🔍 [DEBUG] Tenant:', tenantId);
+    console.log('🔍 [DEBUG] Limit:', limit);
+    
+    const url = `${API_BASE_URL}/examples/placeholder?tenant_id=${tenantId}&limit=${limit}`;
+    console.log('🔍 [DEBUG] URL chiamata:', url);
+
+    try {
+      const response = await axios.get(url);
+      console.log('✅ [DEBUG] Placeholder esempi ricevuto:', response.status);
+      console.log('✅ [DEBUG] Esempi formattati:', response.data);
+      
+      return response.data.data || { examples_text: '', num_conversations: 0, length: 0 };
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore get placeholder esempi:', error);
       throw error;
     }
   }

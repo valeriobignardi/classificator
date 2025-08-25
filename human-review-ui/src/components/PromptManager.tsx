@@ -418,85 +418,52 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
             </Alert>
           ) : (
             prompts.map((prompt) => (
-              <Accordion key={prompt.id} sx={{ mb: 1 }}>
-                <AccordionSummary expandIcon={<ExpandMore />}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', width: '100%', pr: 2 }}>
-                    <Box sx={{ flexGrow: 1 }}>
-                      <Typography variant="subtitle1" fontWeight="medium">
-                        {prompt.prompt_name}
-                      </Typography>
-                      <Box sx={{ display: 'flex', gap: 1, mt: 0.5 }}>
-                        <Chip
-                          label={prompt.engine}
-                          size="small"
-                          color="primary"
-                          variant="outlined"
-                        />
-                        <Chip
-                          label={prompt.prompt_type}
-                          size="small"
-                          color="secondary"
-                          variant="outlined"
-                        />
-                        <Chip
-                          label={prompt.is_active ? "Attivo" : "Inattivo"}
-                          size="small"
-                          color={prompt.is_active ? "success" : "default"}
-                        />
+              <Box key={prompt.id} sx={{ position: 'relative', mb: 1, '&:hover .action-buttons': { opacity: 1 } }}>
+                <Accordion sx={{ mb: 0 }}>
+                  <AccordionSummary 
+                    expandIcon={<ExpandMore />}
+                    sx={{ pr: 8 }} // Space for external buttons
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+                      <Box sx={{ flexGrow: 1 }}>
+                        <Typography variant="subtitle1" fontWeight="medium">
+                          {prompt.prompt_name}
+                        </Typography>
+                        <Box sx={{ display: 'flex', gap: 1, mt: 0.5 }}>
+                          <Chip
+                            label={prompt.engine}
+                            size="small"
+                            color="primary"
+                            variant="outlined"
+                          />
+                          <Chip
+                            label={prompt.prompt_type}
+                            size="small"
+                            color="secondary"
+                            variant="outlined"
+                          />
+                          <Chip
+                            label={prompt.is_active ? "Attivo" : "Inattivo"}
+                            size="small"
+                            color={prompt.is_active ? "success" : "default"}
+                          />
+                        </Box>
                       </Box>
                     </Box>
-                    
-                    <Box sx={{ display: 'flex', gap: 0.5 }}>
-                      <Tooltip title="Anteprima">
-                        <IconButton
-                          size="small"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            previewPrompt(prompt);
-                          }}
-                        >
-                          <Visibility />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Modifica">
-                        <IconButton
-                          size="small"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingPrompt(prompt);
-                          }}
-                        >
-                          <Edit />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Elimina">
-                        <IconButton
-                          size="small"
-                          color="error"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            deletePrompt(prompt.id);
-                          }}
-                        >
-                          <Delete />
-                        </IconButton>
-                      </Tooltip>
-                    </Box>
-                  </Box>
-                </AccordionSummary>
+                  </AccordionSummary>
                 
-                <AccordionDetails>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                    Ultimo aggiornamento: {new Date(prompt.updated_at).toLocaleString('it-IT')}
-                  </Typography>
-                  
-                  {editingPrompt?.id === prompt.id ? (
-                    <Box>
-                      <TextField
-                        fullWidth
-                        label="Contenuto Prompt"
-                        value={editingPrompt.content}
-                        onChange={(e) => 
+                  <AccordionDetails>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                      Ultimo aggiornamento: {new Date(prompt.updated_at).toLocaleString('it-IT')}
+                    </Typography>
+                    
+                    {editingPrompt?.id === prompt.id ? (
+                      <Box>
+                        <TextField
+                          fullWidth
+                          label="Contenuto Prompt"
+                          value={editingPrompt.content}
+                          onChange={(e) => 
                           setEditingPrompt(prev => prev ? { ...prev, content: e.target.value } : null)
                         }
                         multiline
@@ -538,6 +505,63 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
                   )}
                 </AccordionDetails>
               </Accordion>
+              
+              {/* Action buttons positioned OUTSIDE the Accordion structure - NO HTML NESTING! */}
+              <Box
+                className="action-buttons"
+                sx={{ 
+                  position: 'absolute',
+                  right: 48,
+                  top: 12,
+                  display: 'flex',
+                  gap: 0.5,
+                  opacity: 0,
+                  transition: 'opacity 0.2s',
+                  zIndex: 10
+                }}
+              >
+                <Tooltip title="Anteprima">
+                  <IconButton
+                    size="small"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      previewPrompt(prompt);
+                    }}
+                    sx={{ bgcolor: 'background.paper', boxShadow: 1 }}
+                  >
+                    <Visibility />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="Modifica">
+                  <IconButton
+                    size="small"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      setEditingPrompt(prompt);
+                    }}
+                    sx={{ bgcolor: 'background.paper', boxShadow: 1 }}
+                  >
+                    <Edit />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="Elimina">
+                  <IconButton
+                    size="small"
+                    color="error"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      deletePrompt(prompt.id);
+                    }}
+                    sx={{ bgcolor: 'background.paper', boxShadow: 1 }}
+                  >
+                    <Delete />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+            </Box>
             ))
           )}
         </Box>

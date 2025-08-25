@@ -64,6 +64,7 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
   const [clusters, setClusters] = useState<ClusterCase[]>([]);
   const [showClusterView, setShowClusterView] = useState(false); // Default: mostra vista tradizionale
   const [includePropagated, setIncludePropagated] = useState(false);
+  const [includeOutliers, setIncludeOutliers] = useState(false);  // 🆕 NUOVO: flag per includere outliers nella review queue
   const [expandedClusters, setExpandedClusters] = useState<Set<string>>(new Set());
   
   const [dashboardLoading, setDashboardLoading] = useState(false);
@@ -150,13 +151,13 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
       const effectiveLimit = limit || currentLimit;
       
       if (showClusterView) {
-        // 🆕 Nuova logica: carica cluster con rappresentanti e gestisce includePropagated
-        const response = await apiService.getClusterCases(tenant, effectiveLimit, includePropagated);
+        // 🆕 Nuova logica: carica cluster con rappresentanti e gestisce includePropagated e includeOutliers
+        const response = await apiService.getClusterCases(tenant, effectiveLimit, includePropagated, includeOutliers);
         setClusters(response.clusters || []);
         setCases([]); // Reset cases quando in cluster view
       } else {
         // Logica esistente: carica tutti i casi
-        const response = await apiService.getReviewCases(tenant, effectiveLimit, includePropagated);
+        const response = await apiService.getReviewCases(tenant, effectiveLimit, includePropagated, includeOutliers);
         setCases(response.cases);
         setClusters([]); // Reset clusters quando in traditional view
       }
@@ -166,7 +167,7 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
     } finally {
       setDashboardLoading(false);
     }
-  }, [tenant, currentLimit, showClusterView, includePropagated]);
+  }, [tenant, currentLimit, showClusterView, includePropagated, includeOutliers]);
 
   // 🆕 Funzione per espandere/contrarre cluster
   const toggleCluster = (clusterId: string) => {
@@ -189,6 +190,11 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
   // 🆕 Funzione per gestire il toggle "include propagated" 
   const handleIncludePropagatedToggle = () => {
     setIncludePropagated(!includePropagated);
+  };
+
+  // 🆕 Funzione per gestire il toggle "include outliers"
+  const handleIncludeOutliersToggle = () => {
+    setIncludeOutliers(!includeOutliers);
   };
 
   const handleRefreshCases = useCallback(() => {
@@ -509,18 +515,32 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
                     label={showClusterView ? "Cluster View" : "Lista Completa"}
                   />
                   {!showClusterView && (
-                    <FormControlLabel
-                      control={
-                        <Switch
-                          checked={includePropagated}
-                          onChange={handleIncludePropagatedToggle}
-                          disabled={dashboardLoading}
-                          size="small"
-                        />
-                      }
-                      label="Include Propagated"
-                      sx={{ fontSize: '0.75rem' }}
-                    />
+                    <>
+                      <FormControlLabel
+                        control={
+                          <Switch
+                            checked={includePropagated}
+                            onChange={handleIncludePropagatedToggle}
+                            disabled={dashboardLoading}
+                            size="small"
+                          />
+                        }
+                        label="Include Propagated"
+                        sx={{ fontSize: '0.75rem' }}
+                      />
+                      <FormControlLabel
+                        control={
+                          <Switch
+                            checked={includeOutliers}
+                            onChange={handleIncludeOutliersToggle}
+                            disabled={dashboardLoading}
+                            size="small"
+                          />
+                        }
+                        label="Include Outliers"
+                        sx={{ fontSize: '0.75rem' }}
+                      />
+                    </>
                   )}
                 </Box>
               </Box>

@@ -803,27 +803,175 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                     
                 except Exception as e:
                     error_msg = (
-                        f"⚠️  Prompt SYSTEM non trovato per tenant {self.tenant_id}. "
+                        f"❌ ERRORE CRITICO: Prompt SYSTEM obbligatorio non trovato per tenant {self.tenant_id}. "
                         f"Dettaglio: {e}. "
-                        f"Usando fallback hardcoded per continuare operazioni."
+                        f"Configurazione prompt SYSTEM richiesta nel database: wopta:LLM:SYSTEM:intelligent_classifier_system"
                     )
                     if hasattr(self, 'logger'):
-                        self.logger.warning(error_msg)
+                        self.logger.error(error_msg)
                     
-                    # FALLBACK HARDCODED per continuare operazioni
-                    return self._get_hardcoded_system_prompt(conversation_context)
+                    print(error_msg)
+                    raise Exception(error_msg)
                     
             except AttributeError:
                 error_msg = (
-                    f"⚠️  PromptManager non inizializzato per tenant {self.tenant_id}. "
-                    f"Usando fallback hardcoded per continuare operazioni."
+                    f"❌ ERRORE CRITICO: PromptManager non inizializzato per tenant {self.tenant_id}. "
+                    f"Verificare configurazione database e connessione MySQL per SYSTEM prompt."
                 )
                 if hasattr(self, 'logger'):
-                    self.logger.warning(error_msg)
-                return self._get_hardcoded_system_prompt(conversation_context)
+                    self.logger.error(error_msg)
+                print(error_msg)
+                raise Exception(error_msg)
         
-        # FALLBACK HARDCODED se PromptManager non disponibile
-        return self._get_hardcoded_system_prompt(conversation_context)
+        # NESSUN FALLBACK - SE PromptManager NON DISPONIBILE IL SISTEMA SI DEVE BLOCCARE
+        error_msg = (
+            f"❌ ERRORE CRITICO: PromptManager non disponibile per SYSTEM prompt tenant {self.tenant_id}. "
+            f"Sistema non può funzionare senza prompt DATABASE-DRIVEN."
+        )
+        if hasattr(self, 'logger'):
+            self.logger.error(error_msg)
+        print(error_msg)
+        raise Exception(error_msg)
+    
+    def _get_system_prompt(self, conversation_context: str) -> str:
+        """
+        Carica il prompt di sistema dal database utilizzando PromptManager
+        
+        Scopo della funzione:
+        - Caricare il prompt SYSTEM dal database per il tenant corrente
+        - Segnalare errori di configurazione senza fallback nascosti
+        
+        Parametri di input e output:
+        - conversation_context: str - Contesto della conversazione da classificare
+        
+        Valori di ritorno:
+        - str: Prompt di sistema caricato dal database
+        
+        Tracciamento aggiornamenti:
+        - 2025-08-25: Correzione per caricare SOLO dal database
+        
+        Args:
+            conversation_context: Contesto della conversazione
+            
+        Returns:
+            str: Prompt di sistema dal database
+            
+        Raises:
+            Exception: Se il prompt non può essere caricato dal database
+        """
+        if not self.prompt_manager:
+            error_msg = f"❌ ERRORE CRITICO: PromptManager non inizializzato per tenant {self.tenant_id}"
+            print(error_msg)
+            self.logger.error(error_msg)
+            raise Exception(error_msg)
+        
+        try:
+            # Risolvi tenant_id da nome a UUID se necessario
+            resolved_tenant_id = self.prompt_manager._resolve_tenant_id(self.tenant_id)
+            
+            # Variabili dinamiche per il prompt
+            variables = {
+                'available_labels': self._get_available_labels(),
+                'priority_labels': self._get_priority_labels_hint(),
+                'context_guidance': f"\nCONTESTO SPECIFICO: {conversation_context}" if conversation_context else ""
+            }
+            
+            # Carica prompt dal database con validazione STRICT
+            system_prompt = self.prompt_manager.get_prompt_strict(
+                tenant_id=resolved_tenant_id,
+                engine="LLM",
+                prompt_type="SYSTEM", 
+                prompt_name="intelligent_classifier_system",
+                variables=variables
+            )
+            
+            self.logger.info(f"✅ Prompt SYSTEM caricato da database per tenant {self.tenant_id}")
+            return system_prompt
+            
+        except Exception as e:
+            error_msg = f"❌ ERRORE CARICAMENTO PROMPT: Impossibile caricare prompt SYSTEM per tenant {self.tenant_id}. Dettaglio: {e}"
+            print(error_msg)
+            self.logger.error(error_msg)
+            raise Exception(error_msg)
+    
+    def _get_user_prompt(self, conversation_text: str, context: Optional[str] = None) -> str:
+        """
+        Carica il prompt USER dal database utilizzando PromptManager
+        
+        Scopo della funzione:
+        - Caricare il prompt USER/TEMPLATE dal database per il tenant corrente
+        - Segnalare errori di configurazione senza fallback nascosti
+        
+        Parametri di input e output:
+        - conversation_text: str - Testo da classificare
+        - context: Optional[str] - Contesto opzionale aggiuntivo
+        
+        Valori di ritorno:
+        - str: Prompt USER caricato dal database
+        
+        Tracciamento aggiornamenti:
+        - 2025-08-25: Creazione metodo per caricare SOLO dal database
+        
+        Args:
+            conversation_text: Testo da classificare
+            context: Contesto opzionale
+            
+        Returns:
+            str: Prompt USER dal database
+            
+        Raises:
+            Exception: Se il prompt non può essere caricato dal database
+        """
+        if not self.prompt_manager:
+            error_msg = f"❌ ERRORE CRITICO: PromptManager non inizializzato per tenant {self.tenant_id}"
+            print(error_msg)
+            self.logger.error(error_msg)
+            raise Exception(error_msg)
+        
+        try:
+            # Risolvi tenant_id da nome a UUID se necessario
+            resolved_tenant_id = self.prompt_manager._resolve_tenant_id(self.tenant_id)
+            
+            # Riassumi se troppo lungo
+            processed_text = self._summarize_if_long(conversation_text)
+            
+            # Seleziona esempi dinamici
+            examples = self._get_dynamic_examples(conversation_text, max_examples=5)
+            
+            # Costruisce esempi con formato strutturato
+            examples_text = ""
+            for i, ex in enumerate(examples, 1):
+                confidence_hint = "ALTA CERTEZZA" if i <= 2 else "MEDIA CERTEZZA"
+                examples_text += f"""
+ESEMPIO {i} ({confidence_hint}):
+Input: "{ex["text"]}"
+Output: {ex["label"]}
+Ragionamento: {ex["motivation"]}"""
+            
+            # Variabili dinamiche per il template
+            variables = {
+                'examples_text': examples_text,
+                'context_section': f"\n\nCONTESTO AGGIUNTIVO:\n{context}" if context else "",
+                'processed_text': processed_text,
+            }
+            
+            # Carica prompt dal database con validazione STRICT
+            user_prompt = self.prompt_manager.get_prompt_strict(
+                tenant_id=resolved_tenant_id,
+                engine="LLM",
+                prompt_type="TEMPLATE",
+                prompt_name="intelligent_classifier_user_template",
+                variables=variables
+            )
+            
+            self.logger.info(f"✅ Prompt USER caricato da database per tenant {self.tenant_id}")
+            return user_prompt
+            
+        except Exception as e:
+            error_msg = f"❌ ERRORE CARICAMENTO PROMPT: Impossibile caricare prompt USER per tenant {self.tenant_id}. Dettaglio: {e}"
+            print(error_msg)
+            self.logger.error(error_msg)
+            raise Exception(error_msg)
     
     def _get_dynamic_examples(self, conversation_text: str, max_examples: int = 4) -> List[Dict]:
         """
@@ -1142,8 +1290,7 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
     
     def _build_user_message(self, conversation_text: str, context: Optional[str] = None) -> str:
         """
-        Costruisce il messaggio utente intelligente con esempi semantici ottimizzati
-        Utilizza PromptManager per caricare prompt dal database con supporto multi-tenant
+        Costruisce il messaggio utente utilizzando _get_user_prompt per caricamento database
         
         Args:
             conversation_text: Testo da classificare
@@ -1151,85 +1298,32 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             
         Returns:
             User message strutturato e context-aware
+            
+        Raises:
+            Exception: Se i prompt obbligatori non sono configurati per il tenant
         """
-        # Tenta di utilizzare il PromptManager per caricare il prompt dal database
-        if self.prompt_manager:
-            try:
-                # Riassumi se troppo lungo
-                processed_text = self._summarize_if_long(conversation_text)
-                
-                # Seleziona esempi dinamici
-                examples = self._get_dynamic_examples(conversation_text, max_examples=5)
-                
-                # Costruisce esempi con formato strutturato
-                examples_text = ""
-                for i, ex in enumerate(examples, 1):
-                    confidence_hint = "ALTA CERTEZZA" if i <= 2 else "MEDIA CERTEZZA"
-                    examples_text += f"""
-ESEMPIO {i} ({confidence_hint}):
-Input: "{ex["text"]}"
-Output: {ex["label"]}
-Ragionamento: {ex["motivation"]}"""
-                
-                # Variabili dinamiche per il template
-                variables = {
-                    'examples_text': examples_text,
-                    'context_section': f"\n\nCONTESTO AGGIUNTIVO:\n{context}" if context else "",
-                    'processed_text': processed_text,
-                }
-                
-                # Carica prompt dal database con validazione STRICT
-                try:
-                    user_prompt = self.prompt_manager.get_prompt_strict(
-                        tenant_id=self.tenant_id,
-                        engine="LLM",
-                        prompt_type="TEMPLATE",
-                        prompt_name="intelligent_classifier_user",
-                        variables=variables
-                    )
-                    
-                    self.logger.info(f"✅ Prompt USER caricato da database per tenant {self.tenant_id}")
-                    
-                    # 🔍 STAMPA DETTAGLIATA PROMPT USER
-                    print("\n" + "="*80)
-                    print("👤 DEBUG PROMPT USER - DATABASE")
-                    print("="*80)
-                    print(f"📋 Prompt Name: LLM/TEMPLATE/intelligent_classifier_user")
-                    print(f"🏢 Tenant ID: {self.tenant_id}")
-                    print(f"📝 Variables Used: {list(variables.keys())}")
-                    print(f"📊 Examples Count: {len(examples)}")
-                    print(f"📏 Text Length: {len(processed_text)} chars (original: {len(conversation_text)} chars)")
-                    print("-"*80)
-                    print("📄 USER PROMPT CONTENT (dopo sostituzione placeholder):")
-                    print("-"*80)
-                    print(user_prompt)
-                    print("="*80)
-                    
-                    return user_prompt
-                    
-                except Exception as e:
-                    error_msg = (
-                        f"⚠️  Prompt USER non trovato per tenant {self.tenant_id}. "
-                        f"Dettaglio: {e}. "
-                        f"Usando fallback hardcoded per continuare operazioni."
-                    )
-                    if hasattr(self, 'logger'):
-                        self.logger.warning(error_msg)
-                    
-                    # FALLBACK HARDCODED per continuare operazioni
-                    return self._get_hardcoded_user_prompt(conversation_text, context)
-                    
-            except AttributeError:
-                error_msg = (
-                    f"⚠️  PromptManager non inizializzato per tenant {self.tenant_id}. "
-                    f"Usando fallback hardcoded per continuare operazioni."
-                )
-                if hasattr(self, 'logger'):
-                    self.logger.warning(error_msg)
-                return self._get_hardcoded_user_prompt(conversation_text, context)
-        
-        # FALLBACK HARDCODED se PromptManager non disponibile
-        return self._get_hardcoded_user_prompt(conversation_text, context)
+        # Usa il metodo dedicato per caricare il prompt USER dal database
+        try:
+            user_prompt = self._get_user_prompt(conversation_text, context)
+            
+            # 🔍 STAMPA DETTAGLIATA PROMPT USER
+            print("\n" + "="*80)
+            print("👤 DEBUG PROMPT USER - DATABASE")
+            print("="*80)
+            print(f"📋 Prompt Name: LLM/TEMPLATE/intelligent_classifier_user")
+            print(f"🏢 Tenant ID: {self.tenant_id}")
+            print(f"📏 Text Length: {len(conversation_text)} chars")
+            print("-"*80)
+            print("📄 USER PROMPT CONTENT (dopo sostituzione placeholder):")
+            print("-"*80)
+            print(user_prompt)
+            print("="*80)
+            
+            return user_prompt
+            
+        except Exception as e:
+            # Errore già gestito in _get_user_prompt, rilancialo
+            raise e
     
     def _build_classification_prompt(self, 
                                    conversation_text: str,
@@ -1826,6 +1920,22 @@ Ragionamento: {ex["motivation"]}"""
         except Exception as e:
             self.logger.error(f"Errore nella classificazione: {e}")
             self._update_stats(time.time() - start_time, success=False)
+            
+            # VERIFICA SE È UN ERRORE DI CONFIGURAZIONE PROMPT - NON USARE FALLBACK
+            error_str = str(e).lower()
+            is_prompt_configuration_error = (
+                'errore critico' in error_str and 
+                ('prompt' in error_str or 'promptmanager' in error_str)
+            )
+            
+            if is_prompt_configuration_error:
+                # ERRORI DI CONFIGURAZIONE PROMPT DEVONO BLOCCARE IL SISTEMA
+                error_msg = f"❌ SISTEMA BLOCCATO: {e}"
+                self.logger.error(error_msg)
+                print(error_msg)
+                raise e  # Rilancia l'errore originale per bloccare il sistema
+            
+            # Altri errori possono usare fallback
             return self._fallback_classification(conversation_text, f"LLM_ERROR: {str(e)}")
     
     def _fallback_classification(self, 

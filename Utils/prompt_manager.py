@@ -232,15 +232,18 @@ class PromptManager:
             Prompt processato con variabili sostituite, o None se non trovato
         """
         try:
+            # RISOLVE IL TENANT_ID UNA SOLA VOLTA
+            resolved_tenant_id = self._resolve_tenant_id(tenant_id)
+            
             # Cache key per il prompt
-            cache_key = f"{tenant_id}:{engine}:{prompt_type}:{prompt_name}"
+            cache_key = f"{resolved_tenant_id}:{engine}:{prompt_type}:{prompt_name}"
             
             # Controlla cache
             if self._is_cached_valid(cache_key):
                 prompt_data = self._cache[cache_key]['data']
             else:
-                # Carica dal database
-                prompt_data = self._load_prompt_from_db(tenant_id, engine, prompt_type, prompt_name)
+                # Carica dal database (usa tenant_id GIÀ RISOLTO)
+                prompt_data = self._load_prompt_from_db_resolved(resolved_tenant_id, engine, prompt_type, prompt_name)
                 if not prompt_data:
                     self.logger.warning(f"Prompt non trovato: {cache_key}")
                     return None
@@ -251,11 +254,11 @@ class PromptManager:
                     'timestamp': datetime.now()
                 }
             
-            # Processa le variabili dinamiche
+            # Processa le variabili dinamiche (usa tenant_id GIÀ RISOLTO)
             processed_content = self._process_dynamic_variables(
                 prompt_data['content'],
                 prompt_data['dynamic_variables'],
-                tenant_id,
+                resolved_tenant_id,
                 variables or {}
             )
             
@@ -278,6 +281,9 @@ class PromptManager:
             return None
         
         try:
+            # RISOLVE IL TENANT_ID PRIMA DELLA QUERY
+            resolved_tenant_id = self._resolve_tenant_id(tenant_id)
+            
             cursor = self.connection.cursor()
             
             query = """
@@ -292,7 +298,51 @@ class PromptManager:
             LIMIT 1
             """
             
-            cursor.execute(query, (tenant_id, engine, prompt_type, prompt_name))
+            cursor.execute(query, (resolved_tenant_id, engine, prompt_type, prompt_name))
+            result = cursor.fetchone()
+            cursor.close()
+            
+            if result:
+                content, dynamic_vars_json, config_params_json = result
+                return {
+                    'content': content,
+                    'dynamic_variables': json.loads(dynamic_vars_json) if dynamic_vars_json else {},
+                    'config_parameters': json.loads(config_params_json) if config_params_json else {}
+                }
+            
+            return None
+            
+        except Error as e:
+            self.logger.error(f"❌ Errore query prompt: {e}")
+            return None
+    
+    def _load_prompt_from_db_resolved(self, resolved_tenant_id: str, engine: str, 
+                           prompt_type: str, prompt_name: str) -> Optional[Dict]:
+        """
+        Carica prompt dal database con tenant_id GIÀ RISOLTO
+        
+        Returns:
+            Dict con 'content', 'dynamic_variables', 'config_parameters' o None
+        """
+        if not self.connect():
+            return None
+        
+        try:
+            cursor = self.connection.cursor()
+            
+            query = """
+            SELECT prompt_content, dynamic_variables, config_parameters
+            FROM prompts 
+            WHERE tenant_id = %s 
+                AND engine = %s 
+                AND prompt_type = %s 
+                AND prompt_name = %s 
+                AND is_active = TRUE
+            ORDER BY version DESC
+            LIMIT 1
+            """
+            
+            cursor.execute(query, (resolved_tenant_id, engine, prompt_type, prompt_name))
             result = cursor.fetchone()
             cursor.close()
             
@@ -408,6 +458,44 @@ class PromptManager:
             self.logger.debug(f"⚠️ Errore recupero variabili base tenant: {e}")
         
         return base_vars
+    
+    def _get_tenant_name(self, tenant_id: str) -> str:
+        """
+        Recupera il nome del tenant dal database
+        
+        Args:
+            tenant_id: ID del tenant
+            
+        Returns:
+            Nome del tenant o 'unknown' se non trovato
+            
+        Autore: Sistema di Classificazione AI
+        Data: 2025-08-25
+        Ultimo aggiornamento: 2025-08-25
+        """
+        try:
+            if not self.connect():
+                return 'unknown'
+            
+            cursor = self.connection.cursor()
+            cursor.execute("""
+                SELECT DISTINCT tenant_name
+                FROM prompts 
+                WHERE tenant_id = %s 
+                LIMIT 1
+            """, (tenant_id,))
+            
+            result = cursor.fetchone()
+            cursor.close()
+            
+            if result:
+                return result[0]
+            else:
+                return 'unknown'
+                
+        except Error as e:
+            self.logger.debug(f"⚠️ Errore recupero nome tenant: {e}")
+            return 'unknown'
     
     def _resolve_dynamic_variable(self, 
                                 var_config: Dict,
@@ -759,12 +847,12 @@ Motivazione: Richiesta diretta di prenotazione"""
                 self.logger.debug(f"🎯 '{tenant_identifier}' sembra già un tenant_id UUID")
                 return tenant_identifier
             
-            # Altrimenti cerca per slug nella tabella tenants (campo corretto è 'slug')
+            # Altrimenti cerca per nome nella tabella tenants
             cursor = self.connection.cursor()
             query = """
-            SELECT tenant_id, nome 
+            SELECT tenant_id, tenant_name 
             FROM tenants 
-            WHERE slug = %s AND is_active = 1
+            WHERE tenant_name = %s AND is_active = 1
             LIMIT 1
             """
             
@@ -1392,3 +1480,503 @@ Motivazione: Richiesta diretta di prenotazione"""
         """
         self._cache = {}
         self.logger.debug("🔄 Cache prompt invalidata")
+
+    def create_prompt_from_template(self,
+                                   target_tenant_id: str,
+                                   template_prompt: Dict[str, Any]) -> Optional[int]:
+        """
+        Crea un nuovo prompt copiando da un template
+        Se esiste già, lo aggiorna con il contenuto del template
+        
+        Args:
+            target_tenant_id: ID del tenant destinazione (UUID string)
+            template_prompt: Dizionario con i dati del prompt template
+            
+        Returns:
+            ID del prompt creato/aggiornato, None se errore
+            
+        Autore: Sistema
+        Data: 2025-08-25
+        Ultimo aggiornamento: 2025-08-25
+        """
+        if not self.connection:
+            self.connect()
+        
+        try:
+            cursor = self.connection.cursor()
+            
+            # CORREZIONE: Recupera il nome reale del tenant
+            tenant_query = "SELECT tenant_name FROM tenants WHERE tenant_id = %s LIMIT 1"
+            cursor.execute(tenant_query, (target_tenant_id,))
+            tenant_result = cursor.fetchone()
+            tenant_name = tenant_result[0] if tenant_result else 'unknown'
+            
+            self.logger.debug(f"🏢 Tenant {target_tenant_id} -> Nome: {tenant_name}")
+            
+            # Dati del prompt da copiare - CORREZIONE: usa 'content' non 'prompt_content'
+            engine = template_prompt.get('engine', 'LLM')
+            prompt_type = template_prompt.get('prompt_type', 'USER')
+            prompt_name = template_prompt.get('prompt_name', f"{prompt_type.lower()}_prompt")
+            content = template_prompt.get('content', '')  # CORREZIONE: chiave corretta è 'content'
+            variables = template_prompt.get('variables', {})  # CORREZIONE: chiave corretta è 'variables'
+            
+            # Assicurati che variables sia un dict, non una stringa JSON
+            if isinstance(variables, str):
+                variables = json.loads(variables) if variables else {}
+            
+            # DEBUG: Log del contenuto che stiamo per copiare
+            self.logger.debug(f"🔍 Copiando prompt '{prompt_name}': contenuto {len(content)} caratteri")
+            
+            if not content:
+                self.logger.warning(f"⚠️ Prompt '{prompt_name}' ha contenuto vuoto!")
+            
+            # CORREZIONE: Prima controlla se esiste già il prompt
+            check_query = """
+            SELECT id FROM prompts 
+            WHERE tenant_id = %s AND engine = %s AND prompt_type = %s AND prompt_name = %s
+            """
+            
+            cursor.execute(check_query, (target_tenant_id, engine, prompt_type, prompt_name))
+            existing_prompt = cursor.fetchone()
+            
+            self.logger.debug(f"🔍 Controllo esistenza: {prompt_name} -> {'Trovato ID ' + str(existing_prompt[0]) if existing_prompt else 'Non trovato'}")
+            
+            if existing_prompt:
+                # AGGIORNA il prompt esistente
+                prompt_id = existing_prompt[0]
+                update_query = """
+                UPDATE prompts SET 
+                    tenant_name = %s,
+                    prompt_content = %s,
+                    dynamic_variables = %s,
+                    is_active = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                """
+                
+                cursor.execute(update_query, (
+                    tenant_name,  # CORREZIONE: usa nome tenant reale
+                    content,
+                    json.dumps(variables),
+                    True,  # is_active
+                    prompt_id
+                ))
+                
+                self.logger.info(f"✅ Aggiornato prompt esistente: ID {prompt_id} per tenant {target_tenant_id}")
+            else:
+                self.logger.debug(f"📝 Creazione nuovo prompt: {prompt_name}")
+                # CREA nuovo prompt
+                insert_query = """
+                INSERT INTO prompts (
+                    tenant_id, tenant_name, engine, prompt_type, prompt_name, 
+                    prompt_content, dynamic_variables, is_active, created_at, updated_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()
+                )
+                """
+                
+                cursor.execute(insert_query, (
+                    target_tenant_id,
+                    tenant_name,  # CORREZIONE: usa nome tenant reale
+                    engine,
+                    prompt_type,
+                    prompt_name,
+                    content,
+                    json.dumps(variables),
+                    True  # is_active
+                ))
+                
+                prompt_id = cursor.lastrowid
+                self.logger.info(f"✅ Creato prompt da template: ID {prompt_id} per tenant {target_tenant_id}")
+            
+            self.connection.commit()
+            
+            # Invalida cache
+            self._invalidate_cache()
+            
+            return prompt_id
+            
+        except Error as e:
+            self.logger.error(f"❌ Errore creazione prompt da template: {e}")
+            if self.connection:
+                self.connection.rollback()
+            return None
+
+    # =====================================================================
+    # GESTIONE ESEMPI MULTI-TENANT
+    # =====================================================================
+    
+    def get_examples_for_placeholder(
+        self, 
+        tenant_id: str, 
+        engine: str = 'LLM', 
+        esempio_type: str = 'CONVERSATION',
+        limit: int = None
+    ) -> str:
+        """
+        Recupera esempi formattati per sostituire placeholder {{examples_text}}
+        
+        Args:
+            tenant_id: ID del tenant
+            engine: Tipo di engine (LLM, ML, FINETUNING) 
+            esempio_type: Tipo di esempio (CONVERSATION, CLASSIFICATION, TEMPLATE)
+            limit: Numero massimo di esempi (opzionale)
+            
+        Returns:
+            Stringa con esempi formattati per il placeholder
+            
+        Autore: Sistema di Classificazione AI
+        Data: 2025-08-25
+        Ultimo aggiornamento: 2025-08-25
+        """
+        if not self.connection:
+            self.connect()
+            
+        try:
+            cursor = self.connection.cursor()
+            
+            # Risolvi tenant_id se necessario
+            resolved_tenant_id = self._resolve_tenant_id(tenant_id)
+            
+            # Query per recuperare esempi attivi
+            query = """
+            SELECT esempio_content, esempio_name, categoria, description
+            FROM esempi 
+            WHERE tenant_id = %s AND engine = %s AND esempio_type = %s AND is_active = 1
+            ORDER BY created_at DESC
+            """
+            
+            params = [resolved_tenant_id, engine, esempio_type]
+            
+            if limit:
+                query += " LIMIT %s"
+                params.append(limit)
+            
+            cursor.execute(query, params)
+            esempi = cursor.fetchall()
+            
+            if not esempi:
+                self.logger.warning(f"⚠️ Nessun esempio trovato per tenant {tenant_id}")
+                return ""
+            
+            # Formatta gli esempi
+            formatted_examples = []
+            for esempio_content, esempio_name, categoria, description in esempi:
+                # Gli esempi sono già formattati con UTENTE:/ASSISTENTE:
+                formatted_examples.append(esempio_content)
+            
+            result = "\n\n".join(formatted_examples)
+            
+            self.logger.info(f"✅ Caricati {len(esempi)} esempi per placeholder {{examples_text}}")
+            return result
+            
+        except Error as e:
+            self.logger.error(f"❌ Errore caricamento esempi: {e}")
+            return ""
+    
+    def create_example(
+        self,
+        tenant_id: str,
+        esempio_name: str,
+        esempio_content: str,
+        engine: str = 'LLM',
+        esempio_type: str = 'CONVERSATION',
+        description: str = None,
+        categoria: str = None,
+        livello_difficolta: str = 'MEDIO'
+    ) -> Optional[int]:
+        """
+        Crea nuovo esempio nel database
+        
+        Args:
+            tenant_id: ID del tenant
+            esempio_name: Nome identificativo dell'esempio
+            esempio_content: Contenuto formattato UTENTE:/ASSISTENTE:
+            engine: Tipo di engine (LLM, ML, FINETUNING)
+            esempio_type: Tipo esempio (CONVERSATION, CLASSIFICATION, TEMPLATE)  
+            description: Descrizione dell'esempio
+            categoria: Categoria dell'esempio
+            livello_difficolta: Livello difficoltà (FACILE, MEDIO, DIFFICILE)
+            
+        Returns:
+            ID dell'esempio creato o None se errore
+            
+        Autore: Sistema di Classificazione AI
+        Data: 2025-08-25
+        Ultimo aggiornamento: 2025-08-25
+        """
+        if not self.connection:
+            self.connect()
+            
+        try:
+            cursor = self.connection.cursor()
+            
+            # Risolvi tenant_id e ottieni nome tenant
+            resolved_tenant_id = self._resolve_tenant_id(tenant_id)
+            tenant_name = self._get_tenant_name(resolved_tenant_id)
+            
+            # Controlla se esempio già esiste
+            check_query = """
+            SELECT id FROM esempi 
+            WHERE tenant_id = %s AND engine = %s AND esempio_type = %s AND esempio_name = %s
+            """
+            
+            cursor.execute(check_query, (resolved_tenant_id, engine, esempio_type, esempio_name))
+            existing = cursor.fetchone()
+            
+            if existing:
+                self.logger.warning(f"⚠️ Esempio '{esempio_name}' già esiste per tenant {tenant_id}")
+                return existing[0]
+            
+            # Inserisci nuovo esempio
+            insert_query = """
+            INSERT INTO esempi (
+                tenant_id, tenant_name, engine, esempio_type, esempio_name,
+                esempio_content, description, categoria, livello_difficolta,
+                is_active, created_by, created_at, updated_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()
+            )
+            """
+            
+            cursor.execute(insert_query, (
+                resolved_tenant_id,
+                tenant_name,
+                engine,
+                esempio_type,
+                esempio_name,
+                esempio_content,
+                description,
+                categoria,
+                livello_difficolta,
+                1,  # is_active = 1 (TRUE)
+                'prompt_manager'
+            ))
+            
+            esempio_id = cursor.lastrowid
+            self.connection.commit()
+            
+            self.logger.info(f"✅ Creato esempio '{esempio_name}' ID {esempio_id} per tenant {tenant_id}")
+            return esempio_id
+            
+        except Error as e:
+            self.logger.error(f"❌ Errore creazione esempio: {e}")
+            if self.connection:
+                self.connection.rollback()
+            return None
+    
+    def get_examples_list(
+        self,
+        tenant_id: str,
+        engine: str = 'LLM',
+        esempio_type: str = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Recupera lista esempi per un tenant
+        
+        Args:
+            tenant_id: ID del tenant
+            engine: Tipo di engine (LLM, ML, FINETUNING)
+            esempio_type: Tipo esempio (opzionale per filtrare)
+            
+        Returns:
+            Lista dizionari con dati esempi
+            
+        Autore: Sistema di Classificazione AI  
+        Data: 2025-08-25
+        Ultimo aggiornamento: 2025-08-25
+        """
+        if not self.connection:
+            self.connect()
+            
+        try:
+            cursor = self.connection.cursor()
+            
+            # Risolvi tenant_id
+            resolved_tenant_id = self._resolve_tenant_id(tenant_id)
+            
+            # Query dinamica in base ai filtri - Solo esempi attivi
+            query = """
+            SELECT id, esempio_name, esempio_type, categoria, livello_difficolta, 
+                   description, is_active, created_at, updated_at
+            FROM esempi 
+            WHERE tenant_id = %s AND engine = %s AND is_active = TRUE
+            """
+            
+            params = [resolved_tenant_id, engine]
+            
+            if esempio_type:
+                query += " AND esempio_type = %s"
+                params.append(esempio_type)
+            
+            query += " ORDER BY created_at DESC"
+            
+            cursor.execute(query, params)
+            esempi = cursor.fetchall()
+            
+            # Formatta risultato
+            result = []
+            for esempio in esempi:
+                result.append({
+                    'id': esempio[0],
+                    'esempio_name': esempio[1],
+                    'esempio_type': esempio[2],
+                    'categoria': esempio[3],
+                    'livello_difficolta': esempio[4],
+                    'description': esempio[5],
+                    'is_active': bool(esempio[6]),
+                    'created_at': esempio[7].strftime('%Y-%m-%d %H:%M:%S'),
+                    'updated_at': esempio[8].strftime('%Y-%m-%d %H:%M:%S')
+                })
+            
+            self.logger.info(f"✅ Recuperati {len(result)} esempi per tenant {tenant_id}")
+            return result
+            
+        except Error as e:
+            self.logger.error(f"❌ Errore recupero lista esempi: {e}")
+            return []
+    
+    def update_example(
+        self,
+        esempio_id: int,
+        tenant_id: str,
+        **updates
+    ) -> bool:
+        """
+        Aggiorna esempio esistente
+        
+        Args:
+            esempio_id: ID dell'esempio da aggiornare
+            tenant_id: ID del tenant (per sicurezza)
+            **updates: Campi da aggiornare
+            
+        Returns:
+            True se aggiornamento riuscito, False altrimenti
+            
+        Autore: Sistema di Classificazione AI
+        Data: 2025-08-25  
+        Ultimo aggiornamento: 2025-08-25
+        """
+        if not self.connection:
+            self.connect()
+            
+        try:
+            cursor = self.connection.cursor()
+            
+            # Risolvi tenant_id
+            resolved_tenant_id = self._resolve_tenant_id(tenant_id)
+            
+            # Costruisci query dinamica
+            set_clauses = []
+            params = []
+            
+            allowed_fields = [
+                'esempio_name', 'esempio_content', 'description', 
+                'categoria', 'livello_difficolta', 'is_active'
+            ]
+            
+            for field, value in updates.items():
+                if field in allowed_fields:
+                    set_clauses.append(f"{field} = %s")
+                    params.append(value)
+            
+            if not set_clauses:
+                self.logger.warning("⚠️ Nessun campo valido da aggiornare")
+                return False
+            
+            # Aggiungi timestamp e condizioni WHERE
+            set_clauses.append("updated_at = NOW()")
+            set_clauses.append("updated_by = %s")
+            params.extend(['prompt_manager', esempio_id, resolved_tenant_id])
+            
+            query = f"""
+            UPDATE esempi 
+            SET {', '.join(set_clauses)}
+            WHERE id = %s AND tenant_id = %s
+            """
+            
+            cursor.execute(query, params)
+            
+            if cursor.rowcount > 0:
+                self.connection.commit()
+                self.logger.info(f"✅ Aggiornato esempio ID {esempio_id}")
+                return True
+            else:
+                self.logger.warning(f"⚠️ Esempio ID {esempio_id} non trovato per tenant {tenant_id}")
+                return False
+                
+        except Error as e:
+            self.logger.error(f"❌ Errore aggiornamento esempio: {e}")
+            if self.connection:
+                self.connection.rollback()
+            return False
+    
+    def delete_example(self, esempio_id: int, tenant_id: str) -> bool:
+        """
+        Elimina esempio (soft delete - imposta is_active = False)
+        
+        Args:
+            esempio_id: ID dell'esempio da eliminare
+            tenant_id: ID del tenant (per sicurezza)
+            
+        Returns:
+            True se eliminazione riuscita, False altrimenti
+            
+        Autore: Sistema di Classificazione AI
+        Data: 2025-08-25
+        Ultimo aggiornamento: 2025-08-25
+        """
+        return self.update_example(esempio_id, tenant_id, is_active=False)
+    
+    def get_prompt_with_examples(
+        self,
+        tenant_id: str,
+        engine: str,
+        prompt_type: str,
+        prompt_name: str,
+        examples_limit: int = None
+    ) -> Optional[str]:
+        """
+        Recupera prompt e sostituisce {{examples_text}} con esempi reali
+        
+        Args:
+            tenant_id: ID del tenant
+            engine: Tipo di engine  
+            prompt_type: Tipo di prompt
+            prompt_name: Nome del prompt
+            examples_limit: Limite numero esempi
+            
+        Returns:
+            Prompt con esempi sostituiti o None se errore
+            
+        Autore: Sistema di Classificazione AI
+        Data: 2025-08-25
+        Ultimo aggiornamento: 2025-08-25
+        """
+        try:
+            # Carica prompt base
+            prompt = self.get_prompt_strict(tenant_id, engine, prompt_type, prompt_name)
+            
+            # Se non contiene placeholder, restituisci com'è
+            if '{{examples_text}}' not in prompt:
+                return prompt
+            
+            # Carica esempi
+            examples = self.get_examples_for_placeholder(
+                tenant_id, engine, 'CONVERSATION', examples_limit
+            )
+            
+            # Sostituisci placeholder
+            if examples:
+                final_prompt = prompt.replace('{{examples_text}}', examples)
+                self.logger.info(f"✅ Sostituito {{examples_text}} con {len(examples.split('UTENTE:'))-1} esempi")
+                return final_prompt
+            else:
+                # Se non ci sono esempi, rimuovi il placeholder
+                final_prompt = prompt.replace('{{examples_text}}', '')
+                self.logger.warning(f"⚠️ Nessun esempio disponibile, rimosso placeholder {{examples_text}}")
+                return final_prompt
+                
+        except Exception as e:
+            self.logger.error(f"❌ Errore sostituzione esempi nel prompt: {e}")
+            return None

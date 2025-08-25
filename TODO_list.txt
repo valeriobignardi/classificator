@@ -5,4 +5,6 @@ premuto su FORCE_review, dove a quel punto (Se esiste per quel tenant) cancella 
 4. esportare in interfaccia grafica le impostazioni per modificare i parametri del clustering e vedere graficamente i risultati
 
 Sitemare il recupero dei prompt da database:
-fallo anche per il prompt: mistral_finetuning_system , mistral_specialized_system e ollama_modelfile_template
+fallo anche per il prompt: mistral_finetuning_system , mistral_specialized_system e ollama_modelfile_template++
+
+PROVA

@@ -71,19 +71,36 @@ class PromptValidationAPI:
                 }
             ]
             
-            # Esegue validazione STRICT
-            validation_result = self.prompt_manager.validate_tenant_prompts_strict(
-                tenant_id=tenant_id,
-                required_prompts=required_prompts
-            )
-            
-            return {
-                'success': True,
-                'tenant_id': tenant_id,
-                'validation_result': validation_result,
-                'required_prompts': required_prompts,
-                'timestamp': datetime.now().isoformat()
-            }
+            # Esegue validazione STRICT - ora gestita senza eccezioni
+            try:
+                validation_result = self.prompt_manager.validate_tenant_prompts_strict(
+                    tenant_id=tenant_id,
+                    required_prompts=required_prompts
+                )
+                # Se arriva qui, la validazione è passata
+                return {
+                    'success': True,
+                    'tenant_id': tenant_id,
+                    'validation_result': validation_result,
+                    'required_prompts': required_prompts,
+                    'timestamp': datetime.now().isoformat(),
+                    'prompts_configured': True
+                }
+            except Exception as validation_error:
+                # Prompt mancanti - restituisce comunque risposta valida
+                return {
+                    'success': False,
+                    'tenant_id': tenant_id,
+                    'error': str(validation_error),
+                    'validation_result': {
+                        'valid': False,
+                        'missing_prompts': required_prompts,
+                        'error_details': str(validation_error)
+                    },
+                    'required_prompts': required_prompts,
+                    'timestamp': datetime.now().isoformat(),
+                    'prompts_configured': False
+                }
             
         except Exception as e:
             return {

@@ -111,6 +111,36 @@ class EndToEndPipeline:
         # Leggi parametri da configurazione con fallback ai valori passati
         pipeline_config = config.get('pipeline', {})
         clustering_config = config.get('clustering', {})
+        
+        # 🆕 CARICA PARAMETRI PERSONALIZZATI TENANT (se esistono)
+        if hasattr(self, 'tenant_id') and self.tenant_id:
+            tenant_config_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tenant_configs')
+            tenant_config_file = os.path.join(tenant_config_dir, f'{self.tenant_id}_clustering.yaml')
+            
+            if os.path.exists(tenant_config_file):
+                try:
+                    with open(tenant_config_file, 'r', encoding='utf-8') as f:
+                        tenant_config = yaml.safe_load(f)
+                        tenant_clustering_params = tenant_config.get('clustering_parameters', {})
+                        
+                        if tenant_clustering_params:
+                            print(f"🎯 [PIPELINE CLUSTERING CONFIG] Caricati parametri personalizzati per tenant {self.tenant_id}:")
+                            for param, value in tenant_clustering_params.items():
+                                old_value = clustering_config.get(param, 'non_definito')
+                                clustering_config[param] = value
+                                print(f"   {param}: {old_value} -> {value}")
+                        else:
+                            print(f"📋 [PIPELINE CLUSTERING CONFIG] File config personalizzata vuoto per tenant {self.tenant_id}")
+                            print(f"🔄 [PIPELINE CLUSTERING CONFIG] Usando configurazione default")
+                            
+                except Exception as e:
+                    print(f"⚠️ [PIPELINE CLUSTERING CONFIG] Errore caricamento config personalizzata tenant {self.tenant_id}: {e}")
+                    print("🔄 [PIPELINE CLUSTERING CONFIG] Fallback alla configurazione default da config.yaml")
+                    # Non solleva eccezione - continua con parametri default
+            else:
+                print(f"� [PIPELINE CLUSTERING CONFIG] Nessun file personalizzato per tenant {self.tenant_id}")
+                print(f"�🔄 [PIPELINE CLUSTERING CONFIG] Usando configurazione default da config.yaml")
+        
         self.bertopic_config = config.get('bertopic', {
             'enabled': False,
             'top_k': 15,
@@ -1944,6 +1974,10 @@ class EndToEndPipeline:
             Risultati del training interattivo con statistiche complete
         """
         start_time = datetime.now()
+        
+        # 🔧 CORREZIONE: Aggiorna il confidence threshold con il valore passato
+        self.confidence_threshold = confidence_threshold
+        print(f"🎯 Confidence threshold aggiornato a: {self.confidence_threshold}")
         
         # Determina limite review umana dalla configurazione
         try:

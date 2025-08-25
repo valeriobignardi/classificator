@@ -21,6 +21,7 @@ import ReviewStats from './components/ReviewStats';
 import CaseDetail from './components/CaseDetail';
 import PromptManager from './components/PromptManager';
 import ToolManager from './components/ToolManager';
+import ClusteringParametersManager from './components/ClusteringParametersManager';
 import TenantSelector from './components/TenantSelector';
 import { TenantProvider, useTenant } from './contexts/TenantContext';
 import { apiService } from './services/apiService';
@@ -207,6 +208,7 @@ function AppContent() {
               <Tab label="Dashboard Revisione" />
               <Tab label="Statistiche" />
               <Tab label="Configurazione" />
+              <Tab label="Parametri Clustering" />
               {selectedCase && (
                 <Tab label={`Caso: ${selectedCase.session_id.substring(0, 8)}...`} />
               )}
@@ -232,29 +234,33 @@ function AppContent() {
 
           <TabPanel value={currentTab} index={2}>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {/* Sezione Tools */}
-              <Box>
-                <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>
-                  Gestione Tools
-                </Typography>
-                <ToolManager open={true} />
-              </Box>
-
-              {/* Separatore */}
-              <Box sx={{ borderTop: '1px solid #e0e0e0', my: 2 }} />
-
-              {/* Sezione Prompts */}
+              {/* Sezione Prompts - SPOSTATA PRIMA */}
               <Box>
                 <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>
                   Gestione Prompts
                 </Typography>
                 <PromptManager open={true} />
               </Box>
+
+              {/* Separatore */}
+              <Box sx={{ borderTop: '1px solid #e0e0e0', my: 2 }} />
+
+              {/* Sezione Tools - SPOSTATA DOPO */}
+              <Box>
+                <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>
+                  Gestione Tools
+                </Typography>
+                <ToolManager open={true} />
+              </Box>
             </Box>
           </TabPanel>
 
+          <TabPanel value={currentTab} index={3}>
+            <ClusteringParametersManager />
+          </TabPanel>
+
           {selectedCase && (
-            <TabPanel value={currentTab} index={3}>
+            <TabPanel value={currentTab} index={4}>
               <CaseDetail
                 case={selectedCase}
                 tenant={tenant}

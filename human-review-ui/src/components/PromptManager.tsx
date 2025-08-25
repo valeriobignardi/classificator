@@ -20,6 +20,7 @@ import {
   Button,
   Chip,
   Alert,
+  AlertTitle,
   CircularProgress,
   FormControl,
   InputLabel,
@@ -46,6 +47,7 @@ import {
   Code
 } from '@mui/icons-material';
 import { useTenant } from '../contexts/TenantContext';
+import { apiService } from '../services/apiService';
 
 interface Prompt {
   id: number;
@@ -147,7 +149,46 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
   };
 
   /**
-   * Crea nuovo prompt
+   * Copia prompt da Humanitas per il tenant selezionato
+   * 
+   * Autore: Sistema
+   * Data: 2025-08-24
+   * Descrizione: Sostituisce creazione manuale con copia template da Humanitas
+   */
+  const copyPromptsFromHumanitas = async () => {
+    if (!selectedTenant) {
+      setError('Nessun tenant selezionato');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      console.log('🔄 [DEBUG] Inizio copia prompt da Humanitas per tenant:', selectedTenant.nome);
+      
+      const result = await apiService.copyPromptsFromHumanitas(selectedTenant.tenant_id);
+      
+      console.log('✅ [DEBUG] Copia completata:', result);
+      
+      // Ricarica i prompt per mostrare quelli nuovi
+      await loadPrompts();
+      
+      // Chiudi il form e mostra messaggio di successo
+      setShowAddForm(false);
+      setError(null);
+      
+      // Mostra messaggio di successo
+      alert(`✅ Copiati ${result.copied_prompts} prompt dal tenant Humanitas!\n\nOra puoi modificarli secondo le tue esigenze.`);
+      
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore copia prompt:', error);
+      setError(`Errore durante la copia: ${error instanceof Error ? error.message : 'Errore sconosciuto'}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /**
+   * Crea nuovo prompt (metodo legacy, ora usato per prompt personalizzati)
    */
   const createPrompt = async () => {
     if (!selectedTenant || !newPrompt.prompt_name || !newPrompt.content) {
@@ -272,6 +313,17 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
               Crea Nuovo Prompt
             </Typography>
             
+            {/* Alert informativo per guidare l'utente */}
+            <Alert severity="info" sx={{ mb: 3 }}>
+              <AlertTitle>💡 Suggerimento</AlertTitle>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                <strong>🔄 Copia da Template:</strong> Copia automaticamente tutti i prompt pre-configurati dal tenant template (consigliato per iniziare velocemente)
+              </Typography>
+              <Typography variant="body2">
+                <strong>➕ Crea Vuoto:</strong> Crea un singolo prompt vuoto da configurare manualmente
+              </Typography>
+            </Alert>
+            
             <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
               <FormControl size="small" sx={{ minWidth: 120 }}>
                 <InputLabel>Engine</InputLabel>
@@ -321,13 +373,24 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
               sx={{ mb: 2 }}
             />
 
-            <Box sx={{ display: 'flex', gap: 1 }}>
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
               <Button
                 variant="contained"
+                onClick={copyPromptsFromHumanitas}
+                startIcon={<Add />}
+                color="primary"
+                sx={{ flexGrow: 1 }}
+              >
+                🔄 Copia da Template
+              </Button>
+              <Button
+                variant="outlined"
                 onClick={createPrompt}
                 startIcon={<Save />}
+                color="secondary"
+                sx={{ flexGrow: 1 }}
               >
-                Crea Prompt
+                ➕ Crea Vuoto
               </Button>
               <Button
                 variant="outlined"

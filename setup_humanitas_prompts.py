@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-=====================================================================
+=================================            "json_example": {
+                "type": "variable",
+                "source": "runtime", 
+                "description": "Esempio formato JSON per la risposta"
+            }===============================
 PROMPT TEMPLATE INITIALIZER - SETUP PROMPT HUMANITAS
 =====================================================================
 Autore: Sistema di Classificazione AI
@@ -54,13 +58,13 @@ CONFIDENCE GUIDELINES:
 - 0.0-0.2: Impossibile classificare
 
 ETICHETTE DISPONIBILI:
-{available_labels}
+{{available_labels}}
 
-{priority_labels}
-{conversation_context}
+{{priority_labels}}
+{{context_guidance}}
 
 OUTPUT FORMAT (SOLO JSON):
-{{"predicted_label": "etichetta_precisa", "confidence": 0.X, "motivation": "ragionamento_breve"}}
+{"predicted_label": "etichetta_precisa", "confidence": 0.X, "motivation": "ragionamento_breve"}
 
 CRITICAL: Genera ESCLUSIVAMENTE JSON valido. Zero testo aggiuntivo."""
 
@@ -77,20 +81,20 @@ CRITICAL: Genera ESCLUSIVAMENTE JSON valido. Zero testo aggiuntivo."""
                 "function": "get_priority_labels_hint",
                 "description": "Hint per etichette prioritarie"
             },
-            "conversation_context": {
+            "context_guidance": {
                 "type": "variable",
                 "source": "runtime",
-                "description": "Contesto specifico della conversazione"
+                "description": "Guida contestuale per la classificazione"
             }
         }
         
         # USER TEMPLATE per intelligent_classifier_user  
         user_template_content = """Analizza questo testo seguendo l'approccio degli esempi:
-{examples_text}
-{context_section}
+{{examples_text}}
+{{context_section}}
 
 TESTO DA CLASSIFICARE:
-"{processed_text}"
+"{{processed_text}}"
 
 RAGIONA STEP-BY-STEP:
 1. Identifica l'intento principale
@@ -170,7 +174,31 @@ OUTPUT (SOLO JSON):"""
             ))
             
             if cursor.fetchone()[0] > 0:
-                print(f"   ⚠️  Prompt già esistente, saltato")
+                print(f"   🔄 Prompt già esistente, aggiorno contenuto...")
+                # Aggiorna il prompt esistente
+                update_query = """
+                UPDATE prompts 
+                SET prompt_content = %s, 
+                    dynamic_variables = %s,
+                    config_parameters = %s,
+                    description = %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE tenant_id = %s 
+                  AND engine = %s 
+                  AND prompt_type = %s 
+                  AND prompt_name = %s
+                """
+                cursor.execute(update_query, (
+                    prompt_data['prompt_content'],
+                    json.dumps(prompt_data['dynamic_variables']),
+                    json.dumps(prompt_data['config_parameters']),
+                    prompt_data['description'],
+                    prompt_data['tenant_id'],
+                    prompt_data['engine'],
+                    prompt_data['prompt_type'],
+                    prompt_data['prompt_name']
+                ))
+                print(f"   ✅ Prompt aggiornato: {prompt_data['engine']}/{prompt_data['prompt_type']}/{prompt_data['prompt_name']}")
                 continue
             
             # Inserisci nuovo prompt

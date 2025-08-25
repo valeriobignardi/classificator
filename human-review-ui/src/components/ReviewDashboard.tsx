@@ -42,6 +42,7 @@ import {
 import { apiService } from '../services/apiService';
 import { ReviewCase, ClusterCase } from '../types/ReviewCase';
 import AllSessionsView from './AllSessionsView';
+import { useTenant } from '../contexts/TenantContext';
 
 interface ReviewDashboardProps {
   tenant: string;
@@ -77,6 +78,9 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
   // Stato per force_review toggle
   const [forceReview, setForceReview] = useState(false);
   
+  // 🔍 Context per gestire tenant e prompt status
+  const { selectedTenant, promptStatus } = useTenant();
+  
   // Stato per dialogo training supervisionato SEMPLIFICATO - 4 PARAMETRI
   const [trainingDialogOpen, setTrainingDialogOpen] = useState(false);
   const [trainingConfig, setTrainingConfig] = useState({
@@ -88,6 +92,10 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
 
   // Stato per gestire le tab
   const [activeTab, setActiveTab] = useState(0);
+
+  // 🚨 Logica per controllare se i prompt esistono
+  const hasPrompts = promptStatus?.canOperate === true;
+  const promptsLoading = promptStatus === null; // Ancora caricando
 
   // Ref per debouncing delle chiamate API
   const lastLoadTime = useRef<number>(0);
@@ -142,8 +150,8 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
       const effectiveLimit = limit || currentLimit;
       
       if (showClusterView) {
-        // 🆕 Nuova logica: carica cluster con rappresentanti
-        const response = await apiService.getClusterCases(tenant, effectiveLimit);
+        // 🆕 Nuova logica: carica cluster con rappresentanti e gestisce includePropagated
+        const response = await apiService.getClusterCases(tenant, effectiveLimit, includePropagated);
         setClusters(response.clusters || []);
         setCases([]); // Reset cases quando in cluster view
       } else {
@@ -363,38 +371,59 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
             Crea Casi Mock
           </Button>
 
-          <Button
-            variant="outlined"
-            startIcon={trainingLoading ? undefined : <SchoolIcon />}
-            onClick={() => setTrainingDialogOpen(true)}
-            disabled={!uiConfig || trainingLoading || classificationLoading || retrainingLoading}
-            color="secondary"
-            sx={{ mr: 1 }}
+          <Tooltip 
+            title={!hasPrompts ? "Devi configurare i prompt nella sezione Configurazione prima di poter usare il training supervisionato" : ""}
+            arrow
           >
-            {trainingLoading ? 'Training in corso...' : 'Training Supervisionato'}
-          </Button>
+            <span>
+              <Button
+                variant="outlined"
+                startIcon={trainingLoading ? undefined : <SchoolIcon />}
+                onClick={() => setTrainingDialogOpen(true)}
+                disabled={!uiConfig || trainingLoading || classificationLoading || retrainingLoading || !hasPrompts}
+                color="secondary"
+                sx={{ mr: 1 }}
+              >
+                {trainingLoading ? 'Training in corso...' : 'Training Supervisionato'}
+              </Button>
+            </span>
+          </Tooltip>
 
-          <Button
-            variant="outlined"
-            startIcon={<ModelTrainingIcon />}
-            onClick={handleManualRetraining}
-            disabled={!uiConfig || trainingLoading || classificationLoading || retrainingLoading}
-            color="info"
-            sx={{ mr: 1 }}
+          <Tooltip 
+            title={!hasPrompts ? "Devi configurare i prompt nella sezione Configurazione prima di poter riaddestrare il modello" : ""}
+            arrow
           >
-            {retrainingLoading ? 'Riaddestramento...' : 'Riaddestra Modello'}
-          </Button>
+            <span>
+              <Button
+                variant="outlined"
+                startIcon={<ModelTrainingIcon />}
+                onClick={handleManualRetraining}
+                disabled={!uiConfig || trainingLoading || classificationLoading || retrainingLoading || !hasPrompts}
+                color="info"
+                sx={{ mr: 1 }}
+              >
+                {retrainingLoading ? 'Riaddestramento...' : 'Riaddestra Modello'}
+              </Button>
+            </span>
+          </Tooltip>
           
           <Box display="flex" flexDirection="column" alignItems="center">
-            <Button
-              variant="contained"
-              startIcon={classificationLoading ? undefined : <PlayIcon />}
-              onClick={handleStartClassification}
-              disabled={!uiConfig || classificationLoading || trainingLoading || retrainingLoading}
-              sx={{ mb: 0.5 }}
+            <Tooltip 
+              title={!hasPrompts ? "Devi configurare i prompt nella sezione Configurazione prima di avviare la classificazione" : ""}
+              arrow
             >
-              {classificationLoading ? 'Classificazione in corso...' : 'Avvia Classificazione Completa'}
-            </Button>
+              <span>
+                <Button
+                  variant="contained"
+                  startIcon={classificationLoading ? undefined : <PlayIcon />}
+                  onClick={handleStartClassification}
+                  disabled={!uiConfig || classificationLoading || trainingLoading || retrainingLoading || !hasPrompts}
+                  sx={{ mb: 0.5 }}
+                >
+                  {classificationLoading ? 'Classificazione in corso...' : 'Avvia Classificazione Completa'}
+                </Button>
+              </span>
+            </Tooltip>
             <FormControlLabel
               control={
                 <Switch
@@ -533,8 +562,35 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
             </Card>
           )}
 
-          {/* Info Card per quando non ci sono casi */}
-          {(showClusterView ? clusters.length === 0 : cases.length === 0) && !dashboardLoading && (
+          {/* Alert per prompt mancanti */}
+          {!hasPrompts && !promptsLoading && (
+            <Card sx={{ mb: 3, backgroundColor: '#fff3e0', border: '1px solid #ff9800' }}>
+              <CardContent>
+                <Box display="flex" alignItems="center" gap={2}>
+                  <WarningIcon color="warning" />
+                  <Box>
+                    <Typography variant="h6" color="warning.dark" gutterBottom>
+                      ⚠️ Configurazione Incompleta
+                    </Typography>
+                    <Typography variant="body1" sx={{ mb: 2 }}>
+                      <strong>Prima di poter utilizzare il sistema di training e classificazione, devi configurare i prompt.</strong>
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      📋 <strong>VAI NELLA SEZIONE CONFIGURAZIONE E CREA IL PRIMO PROMPT</strong>
+                    </Typography>
+                    {promptStatus && promptStatus.missingCount > 0 && (
+                      <Typography variant="body2" color="error" sx={{ mt: 1 }}>
+                        Mancano {promptStatus.missingCount} prompt richiesti per questo tenant.
+                      </Typography>
+                    )}
+                  </Box>
+                </Box>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Info Card per quando non ci sono casi (ma ci sono i prompt) */}
+          {hasPrompts && (showClusterView ? clusters.length === 0 : cases.length === 0) && !dashboardLoading && (
             <Card sx={{ mb: 3, backgroundColor: '#f5f5f5' }}>
               <CardContent>
                 <Box display="flex" alignItems="center" gap={2}>

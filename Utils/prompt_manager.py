@@ -33,7 +33,7 @@ class PromptManager:
         Args:
             config_path: Percorso file configurazione (default: config.yaml nella root)
         """
-        self.config_path = config_path or '/home/ubuntu/classificazione_discussioni/config.yaml'
+        self.config_path = config_path or '/home/ubuntu/classificazione_discussioni_bck_23_08_2025/config.yaml'
         self.config = self._load_config()
         self.connection = None
         self._cache = {}  # Cache per prompt caricati

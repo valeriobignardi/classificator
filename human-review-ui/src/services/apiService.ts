@@ -40,10 +40,13 @@ class ApiService {
   }
 
   // 🆕 Nuovo metodo per cluster view - mostra solo rappresentanti per default
-  async getClusterCases(tenant: string, limit: number = 20): Promise<{ clusters: any[]; total: number }> {
+  async getClusterCases(tenant: string, limit: number = 20, includePropagated: boolean = false): Promise<{ clusters: any[]; total: number }> {
     return this.handleRequest(
       axios.get(`${API_BASE_URL}/review/${tenant}/clusters`, {
-        params: { limit }
+        params: { 
+          limit,
+          include_propagated: includePropagated 
+        }
       })
     );
   }
@@ -93,10 +96,29 @@ class ApiService {
 
   // Metodo per recuperare l'elenco dei tenant dal server
   async getTenants(): Promise<Tenant[]> {
-    const response = await this.handleRequest<{ tenants: Tenant[] }>(
-      axios.get(`${API_BASE_URL}/tenants`)
-    );
-    return response.tenants;
+    console.log('🔍 [DEBUG] ApiService.getTenants() - Avvio richiesta');
+    console.log('🔍 [DEBUG] URL chiamata:', `${API_BASE_URL}/tenants`);
+    
+    try {
+      console.log('🔍 [DEBUG] Eseguo axios.get...');
+      const axiosResponse = await axios.get(`${API_BASE_URL}/tenants`);
+      console.log('✅ [DEBUG] Risposta axios ricevuta:', axiosResponse.status);
+      console.log('✅ [DEBUG] Dati risposta:', axiosResponse.data);
+      
+      console.log('🔍 [DEBUG] Chiamo handleRequest...');
+      const response = await this.handleRequest<{ tenants: Tenant[] }>(
+        Promise.resolve(axiosResponse)
+      );
+      console.log('✅ [DEBUG] HandleRequest completato:', response);
+      console.log('✅ [DEBUG] Restituisco tenant:', response.tenants.length, 'elementi');
+      return response.tenants;
+      
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore in getTenants():', error);
+      console.error('❌ [DEBUG] Tipo errore:', typeof error);
+      console.error('❌ [DEBUG] Stack:', error instanceof Error ? error.stack : 'No stack');
+      throw error;
+    }
   }
 
   async getLabelStatistics(tenant: string): Promise<any> {
@@ -269,9 +291,36 @@ class ApiService {
     }>;
     missingCount: number;
   }> {
-    return this.handleRequest(
-      axios.get(`${API_BASE_URL}/prompts/${tenant}/status`)
-    );
+    console.log('🔍 [DEBUG] ApiService.checkPromptStatus() - Avvio richiesta');
+    console.log('🔍 [DEBUG] Tenant:', tenant);
+    console.log('🔍 [DEBUG] URL chiamata:', `${API_BASE_URL}/prompts/${tenant}/status`);
+    
+    try {
+      console.log('🔍 [DEBUG] Eseguo axios.get per prompt status...');
+      const axiosResponse = await axios.get(`${API_BASE_URL}/prompts/${tenant}/status`);
+      console.log('✅ [DEBUG] Risposta axios per prompt status:', axiosResponse.status);
+      console.log('✅ [DEBUG] Dati prompt status:', axiosResponse.data);
+      
+      console.log('🔍 [DEBUG] Chiamo handleRequest per prompt status...');
+      const result = await this.handleRequest<{
+        canOperate: boolean;
+        requiredPrompts: Array<{
+          name: string;
+          type: string;
+          description: string;
+          exists: boolean;
+        }>;
+        missingCount: number;
+      }>(Promise.resolve(axiosResponse));
+      console.log('✅ [DEBUG] HandleRequest per prompt status completato:', result);
+      return result;
+      
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore in checkPromptStatus():', error);
+      console.error('❌ [DEBUG] Tipo errore:', typeof error);
+      console.error('❌ [DEBUG] Stack:', error instanceof Error ? error.stack : 'No stack');
+      throw error;
+    }
   }
 
   async createPromptFromTemplate(
@@ -292,6 +341,39 @@ class ApiService {
         ...config
       })
     );
+  }
+
+  /**
+   * Copia tutti i prompt dal tenant Humanitas al tenant specificato
+   * 
+   * @param targetTenantId - ID del tenant di destinazione
+   * @returns Risultato della copia con lista prompt copiati
+   * 
+   * Autore: Sistema 
+   * Data: 2025-08-24
+   * Descrizione: Copia automatica prompt template da Humanitas
+   */
+  async copyPromptsFromHumanitas(targetTenantId: string): Promise<{
+    success: boolean;
+    copied_prompts: number;
+    prompts: any[];
+    message: string;
+  }> {
+    console.log('🔄 [DEBUG] ApiService.copyPromptsFromHumanitas() - Avvio copia');
+    console.log('🔄 [DEBUG] Target tenant:', targetTenantId);
+    
+    try {
+      const response = await axios.post(`${API_BASE_URL}/prompts/copy-from-humanitas`, {
+        target_tenant_id: targetTenantId
+      });
+      
+      console.log('✅ [DEBUG] Copia prompt completata:', response.data);
+      return response.data;
+      
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore copia prompt:', error);
+      throw error;
+    }
   }
 }
 

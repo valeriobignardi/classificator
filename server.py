@@ -1643,7 +1643,7 @@ def api_get_review_cases(client_name: str):
         limit: Numero massimo di casi da restituire (default: 100)
         label: Filtra per etichetta specifica (opzionale)
         show_representatives: Se 'true', mostra solo rappresentanti di cluster (pending)
-        show_propagated: Se 'true', include conversazioni propagate dai cluster
+        include_propagated: Se 'true', include conversazioni propagate dai cluster (default: 'false')
         show_outliers: Se 'true', include outliers con etichetta assegnata
         
     Returns:
@@ -1662,7 +1662,8 @@ def api_get_review_cases(client_name: str):
         
         # 🆕 NUOVI PARAMETRI per Review Queue a 3 livelli
         show_representatives = request.args.get('show_representatives', 'false').lower() == 'true'
-        show_propagated = request.args.get('show_propagated', 'false').lower() == 'true'
+        # 🔧 FIX: Uso include_propagated per coerenza con frontend e endpoint /clusters
+        show_propagated = request.args.get('include_propagated', 'false').lower() == 'true'
         show_outliers = request.args.get('show_outliers', 'false').lower() == 'true'
         
         # Se nessun flag specifico, mostra tutto (comportamento default)
@@ -1793,6 +1794,7 @@ def api_get_clusters(client_name: str):
     
     Query Parameters:
         limit: Numero massimo di cluster da restituire (default: 20)
+        include_propagated: Se 'true', include conversazioni propagate dai cluster (default: 'false')
         
     Returns:
         {
@@ -1812,8 +1814,9 @@ def api_get_clusters(client_name: str):
     """
     try:
         limit = int(request.args.get('limit', 20))
+        include_propagated = request.args.get('include_propagated', 'false').lower() == 'true'
         
-        print(f"🔍 API: Recupero cluster per tenant '{client_name}' con limite {limit}")
+        print(f"🔍 API: Recupero cluster per tenant '{client_name}' con limite {limit}, include_propagated={include_propagated}")
         
         # Ottieni reader MongoDB tenant-aware
         mongo_reader = classification_service.get_mongo_reader(client_name)
@@ -1830,11 +1833,24 @@ def api_get_clusters(client_name: str):
             # Query aggregation per recuperare informazioni sui cluster
             collection = mongo_reader.db[mongo_reader.get_collection_name()]
             
+            # Costruisci il filtro match base
+            match_filter = {
+                'metadata.cluster_id': {'$exists': True, '$ne': None}
+            }
+            
+            # 🆕 FILTRO PROPAGATED: Se include_propagated è False, escludi le sessioni propagated
+            if not include_propagated:
+                match_filter['$or'] = [
+                    {'session_type': {'$ne': 'propagated'}},  # Non è propagated
+                    {'session_type': {'$exists': False}}      # session_type non esiste (retrocompatibilità)
+                ]
+                print(f"🔍 FILTRO: Escludendo sessioni propagated (include_propagated={include_propagated})")
+            else:
+                print(f"🔍 FILTRO: Includendo TUTTE le sessioni (include_propagated={include_propagated})")
+            
             pipeline = [
                 {
-                    '$match': {
-                        'metadata.cluster_id': {'$exists': True, '$ne': None}
-                    }
+                    '$match': match_filter
                 },
                 {
                     '$group': {
@@ -2108,18 +2124,32 @@ def get_tenants():
         
     Ultimo aggiornamento: 2025-01-27
     """
+    print("🔍 [DEBUG] GET /api/tenants - Avvio richiesta tenant")
     try:
+        print("🔍 [DEBUG] Inizializzo MongoClassificationReader...")
         # Usa il nuovo metodo del MongoClassificationReader che legge da MySQL
         mongo_reader = MongoClassificationReader()
+        
+        print("🔍 [DEBUG] Chiamo get_available_tenants()...")
         tenants = mongo_reader.get_available_tenants()
         
-        return jsonify({
+        print(f"🔍 [DEBUG] Recuperati {len(tenants)} tenant dal database")
+        print(f"🔍 [DEBUG] Primi 3 tenant: {tenants[:3] if tenants else 'Nessuno'}")
+        
+        response_data = {
             'success': True,
             'tenants': tenants,
             'total': len(tenants)
-        }), 200
+        }
+        
+        print(f"🔍 [DEBUG] Invio risposta con {len(tenants)} tenant")
+        return jsonify(response_data), 200
         
     except Exception as e:
+        print(f"❌ [DEBUG] ERRORE in get_tenants(): {str(e)}")
+        print(f"❌ [DEBUG] Tipo errore: {type(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False,
             'error': str(e)
@@ -3638,28 +3668,62 @@ def get_prompts_for_tenant(tenant_id: str):
 #         }), 500
 
 
-@app.route('/api/prompts/<tenant_id>/status', methods=['GET'])
-def get_prompts_status_by_tenant_id(tenant_id: str):
+@app.route('/api/prompts/<tenant_identifier>/status', methods=['GET'])
+def get_prompts_status_by_tenant_id(tenant_identifier: str):
     """
-    Recupera lo status dei prompt per un tenant usando tenant_id completo
+    Recupera lo status dei prompt per un tenant usando tenant_id UUID o tenant_slug
     
-    GET /api/prompts/a0fd7600-f4f7-11ef-9315-96000228e7fe/status
+    GET /api/prompts/a0fd7600-f4f7-11ef-9315-96000228e7fe/status (UUID)
+    GET /api/prompts/alleanza/status (slug)
     
     Returns: Stesso formato dell'endpoint sopra
     """
+    print(f"🔍 [DEBUG] GET /api/prompts/{tenant_identifier}/status - Avvio richiesta")
     try:
-        print(f"🔍 API: Recupero status prompt per tenant_id completo: {tenant_id}")
+        print(f"🔍 [DEBUG] API: Recupero status prompt per tenant: {tenant_identifier}")
         
+        # Determina se è UUID o slug
+        import re
+        is_uuid = bool(re.match(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$', tenant_identifier))
+        
+        if is_uuid:
+            print(f"✅ [DEBUG] Riconosciuto come tenant_id UUID: {tenant_identifier}")
+            tenant_id = tenant_identifier
+        else:
+            print(f"✅ [DEBUG] Riconosciuto come tenant_slug: {tenant_identifier}")
+            # Risolvi slug -> tenant_id
+            print("🔍 [DEBUG] Inizializzo MongoClassificationReader per slug resolution...")
+            from mongo_classification_reader import MongoClassificationReader
+            reader = MongoClassificationReader()
+            
+            print(f"🔍 [DEBUG] Chiamo get_tenant_info_from_name({tenant_identifier})...")
+            tenant_info = reader.get_tenant_info_from_name(tenant_identifier)
+            if not tenant_info:
+                print(f"❌ [DEBUG] Tenant non trovato: {tenant_identifier}")
+                return jsonify({
+                    'success': False,
+                    'error': f'Tenant non trovato: {tenant_identifier}',
+                    'tenant_id': tenant_identifier
+                }), 404
+            tenant_id = tenant_info['tenant_id']
+            print(f"🔄 [DEBUG] Risolto {tenant_identifier} -> {tenant_id}")
+        
+        print("🔍 [DEBUG] Inizializzo PromptManager...")
         prompt_manager = PromptManager()
         
+        print(f"🔍 [DEBUG] Chiamo get_all_prompts_for_tenant({tenant_id})...")
         # Per tenant_id completo, dobbiamo trovare lo slug corrispondente
         # Il PromptManager ora gestisce automaticamente questa conversione
         prompts = prompt_manager.get_all_prompts_for_tenant(tenant_id)
+        
+        print(f"🔍 [DEBUG] Recuperati {len(prompts)} prompt dal PromptManager")
         
         # Calcola statistiche
         total_prompts = len(prompts)
         active_prompts = len([p for p in prompts if p.get('is_active', False)])
         inactive_prompts = total_prompts - active_prompts
+        
+        print(f"🔍 [DEBUG] Statistiche: {active_prompts}/{total_prompts} attivi, {inactive_prompts} inattivi")
         
         # Trova ultimo aggiornamento
         last_updated = None
@@ -3669,27 +3733,78 @@ def get_prompts_status_by_tenant_id(tenant_id: str):
         # Determina tenant name
         tenant_name = prompts[0].get('tenant_name', 'unknown') if prompts else 'unknown'
         
+        # 🔍 Determina prompt requirements per questo tenant
+        # Lista dei prompt richiesti per il funzionamento del sistema
+        required_prompt_types = [
+            {"name": "System Prompt", "type": "system", "description": "Prompt di sistema per la classificazione"},
+            {"name": "User Template", "type": "user", "description": "Template per prompt utente"},
+            {"name": "Classification Prompt", "type": "classification", "description": "Prompt per classificazione intelligente"}
+        ]
+        
+        # Verifica quali prompt esistono
+        existing_prompt_types = set()
+        for prompt in prompts:
+            if prompt.get('is_active', False):
+                prompt_type = prompt.get('prompt_type', '').lower()
+                if 'system' in prompt_type:
+                    existing_prompt_types.add('system')
+                elif 'user' in prompt_type or 'template' in prompt_type:
+                    existing_prompt_types.add('user')
+                elif 'classification' in prompt_type or 'intelligent' in prompt_type:
+                    existing_prompt_types.add('classification')
+        
+        # Costruisci lista prompt requirements con stato exists
+        required_prompts = []
+        missing_count = 0
+        
+        for req in required_prompt_types:
+            exists = req["type"] in existing_prompt_types
+            if not exists:
+                missing_count += 1
+            
+            required_prompts.append({
+                "name": req["name"],
+                "type": req["type"], 
+                "description": req["description"],
+                "exists": exists
+            })
+        
+        # canOperate = True solo se abbiamo almeno system e user prompt (prompt essenziali)
+        essential_prompts = {'system', 'user'}
+        has_essential_prompts = essential_prompts.issubset(existing_prompt_types)
+        can_operate = has_essential_prompts and active_prompts > 0
+        
         status = {
-            "success": True,  # AGGIUNTO: Campo success richiesto dall'ApiService UI
+            "success": True,
             "tenant_id": tenant_id,
             "tenant_name": tenant_name,
             "total_prompts": total_prompts,
             "active_prompts": active_prompts,
             "inactive_prompts": inactive_prompts,
             "last_updated": last_updated,
-            "status": "ready" if active_prompts > 0 else "no_active_prompts"
+            "status": "ready" if active_prompts > 0 else "no_active_prompts",
+            # 🆕 Campi richiesti dal frontend TenantContext
+            "canOperate": can_operate,
+            "requiredPrompts": required_prompts,
+            "missingCount": missing_count
         }
         
-        print(f"✅ Status prompt per tenant_id {tenant_id}: {active_prompts}/{total_prompts} attivi")
+        print(f"✅ [DEBUG] Status calcolato: {status}")
+        print(f"✅ [DEBUG] Status prompt per tenant_id {tenant_id}: {active_prompts}/{total_prompts} attivi")
+        print(f"🔍 [DEBUG] Invio risposta JSON per status prompt")
         
         return jsonify(status)
         
     except Exception as e:
-        print(f"❌ Errore status prompt per tenant_id {tenant_id}: {e}")
+        print(f"❌ [DEBUG] ERRORE in get_prompts_status_by_tenant_id(): {str(e)}")
+        print(f"❌ [DEBUG] Tipo errore: {type(e)}")
+        import traceback
+        traceback.print_exc()
+        print(f"❌ [DEBUG] Errore status prompt per tenant: {tenant_identifier}: {e}")
         return jsonify({
             'success': False,  # AGGIUNTO: Campo success per coerenza
             'error': str(e),
-            'tenant_id': tenant_id,
+            'tenant_id': tenant_identifier,
             'status': 'error'
         }), 500
 
@@ -3803,6 +3918,104 @@ def create_prompt():
         print(f"❌ Errore creazione prompt: {e}")
         return jsonify({
             'error': str(e)
+        }), 500
+
+
+@app.route('/api/prompts/copy-from-humanitas', methods=['POST'])
+def copy_prompts_from_humanitas():
+    """
+    Copia tutti i prompt dal tenant Humanitas al tenant specificato
+    
+    POST /api/prompts/copy-from-humanitas
+    Content-Type: application/json
+    
+    {
+        "target_tenant_id": "a0fd7600-f4f7-11ef-9315-96000228e7fe"
+    }
+    
+    Returns:
+        {
+            "success": true,
+            "copied_prompts": 3,
+            "prompts": [...]
+        }
+        
+    Autore: Sistema
+    Data: 2025-08-24
+    Descrizione: Copia automatica prompt da tenant Humanitas template
+    """
+    try:
+        data = request.get_json()
+        target_tenant_id = data.get('target_tenant_id')
+        
+        if not target_tenant_id:
+            return jsonify({'error': 'target_tenant_id richiesto'}), 400
+            
+        print(f"🔄 [DEBUG] Copia prompt da Humanitas a tenant: {target_tenant_id}")
+        
+        # ID del tenant Humanitas (template)
+        HUMANITAS_TENANT_ID = "015007d9-d413-11ef-86a5-96000228e7fe"
+        
+        prompt_manager = PromptManager()
+        
+        # 1. Recupera tutti i prompt di Humanitas
+        humanitas_prompts = prompt_manager.get_all_prompts_for_tenant(HUMANITAS_TENANT_ID)
+        
+        if not humanitas_prompts:
+            return jsonify({
+                'error': 'Nessun prompt trovato per il tenant Humanitas template'
+            }), 404
+            
+        print(f"🔍 [DEBUG] Trovati {len(humanitas_prompts)} prompt in Humanitas")
+        
+        # 2. Copia ogni prompt al nuovo tenant
+        copied_prompts = []
+        
+        for original_prompt in humanitas_prompts:
+            if not original_prompt.get('is_active', False):
+                continue  # Salta prompt non attivi
+                
+            # Crea il nuovo prompt con gli stessi dati ma nuovo tenant_id
+            new_prompt_data = {
+                'tenant_id': target_tenant_id,
+                'engine': original_prompt.get('engine', 'chatgpt'),
+                'prompt_type': original_prompt.get('prompt_type'),
+                'prompt_name': original_prompt.get('prompt_name'),
+                'content': original_prompt.get('content'),
+                'variables': original_prompt.get('variables', {}),
+                'is_active': True
+            }
+            
+            # Salva il nuovo prompt
+            prompt_id = prompt_manager.save_prompt(
+                tenant_id=new_prompt_data['tenant_id'],
+                engine=new_prompt_data['engine'],
+                prompt_type=new_prompt_data['prompt_type'],
+                prompt_name=new_prompt_data['prompt_name'],
+                content=new_prompt_data['content'],
+                variables=new_prompt_data['variables'],
+                is_active=new_prompt_data['is_active']
+            )
+            
+            # Recupera il prompt appena creato per includerlo nella risposta
+            created_prompt = prompt_manager.get_prompt_by_id(prompt_id)
+            copied_prompts.append(created_prompt)
+            
+            print(f"✅ [DEBUG] Copiato prompt '{original_prompt.get('prompt_name')}' -> ID: {prompt_id}")
+        
+        print(f"🎉 [DEBUG] Copia completata: {len(copied_prompts)} prompt copiati")
+        
+        return jsonify({
+            'success': True,
+            'copied_prompts': len(copied_prompts),
+            'prompts': copied_prompts,
+            'message': f"Copiati {len(copied_prompts)} prompt dal tenant Humanitas"
+        }), 201
+        
+    except Exception as e:
+        print(f"❌ [DEBUG] Errore copia prompt da Humanitas: {e}")
+        return jsonify({
+            'error': f"Errore nella copia dei prompt: {str(e)}"
         }), 500
 
 
@@ -4302,6 +4515,295 @@ def export_tools_for_tenant(tenant_id: str):
             'tenant_id': tenant_id
         }), 500
 
+# ==================== CLUSTERING PARAMETERS API ====================
+
+@app.route('/api/clustering/<tenant_id>/parameters', methods=['GET'])
+def get_clustering_parameters(tenant_id):
+    """
+    Recupera i parametri di clustering attuali per un tenant
+    
+    Returns:
+        JSON con parametri di clustering e loro spiegazioni
+    """
+    try:
+        # Carica configurazione attuale
+        config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+        with open(config_path, 'r', encoding='utf-8') as file:
+            config = yaml.safe_load(file)
+        
+        clustering_config = config.get('clustering', {})
+        
+        # 🆕 CARICA PARAMETRI PERSONALIZZATI TENANT (se esistono)
+        config_status = "default"  # default, custom, error
+        custom_config_info = {}
+        tenant_config_dir = os.path.join(os.path.dirname(__file__), 'tenant_configs')
+        tenant_config_file = os.path.join(tenant_config_dir, f'{tenant_id}_clustering.yaml')
+        
+        if os.path.exists(tenant_config_file):
+            try:
+                with open(tenant_config_file, 'r', encoding='utf-8') as f:
+                    tenant_config = yaml.safe_load(f)
+                    tenant_clustering_params = tenant_config.get('clustering_parameters', {})
+                    
+                    if tenant_clustering_params:
+                        print(f"🎯 [CLUSTERING CONFIG] Caricando parametri personalizzati per tenant {tenant_id}")
+                        config_status = "custom"
+                        custom_config_info = {
+                            "file_path": tenant_config_file,
+                            "last_updated": tenant_config.get('last_updated', 'unknown'),
+                            "updated_by": tenant_config.get('updated_by', 'unknown'),
+                            "custom_parameters": list(tenant_clustering_params.keys())
+                        }
+                        
+                        for param, value in tenant_clustering_params.items():
+                            old_value = clustering_config.get(param, 'non_definito')
+                            clustering_config[param] = value
+                            print(f"   {param}: {old_value} -> {value}")
+                    else:
+                        print(f"📋 [CLUSTERING CONFIG] File config personalizzata esiste ma è vuoto per tenant {tenant_id}")
+                        config_status = "default"
+                        custom_config_info = {"reason": "empty_custom_config"}
+                        
+            except Exception as e:
+                print(f"⚠️ [CLUSTERING CONFIG] Errore caricamento config personalizzata tenant {tenant_id}: {e}")
+                print("🔄 [CLUSTERING CONFIG] Fallback alla configurazione default")
+                config_status = "error"
+                custom_config_info = {
+                    "error": str(e),
+                    "fallback": "default_config"
+                }
+        else:
+            print(f"📋 [CLUSTERING CONFIG] Nessun file di configurazione personalizzata per tenant {tenant_id}")
+            print(f"🔄 [CLUSTERING CONFIG] Usando configurazione default da config.yaml")
+            config_status = "default"
+            custom_config_info = {"reason": "no_custom_config_file"}
+        
+        # Parametri con spiegazioni user-friendly
+        parameters = {
+            'min_cluster_size': {
+                'value': clustering_config.get('min_cluster_size', 5),
+                'default': 5,
+                'min': 2,
+                'max': 50,
+                'description': 'Dimensione minima del cluster',
+                'explanation': 'Numero minimo di conversazioni necessarie per formare un cluster. Valori più alti creano cluster più grandi ma meno numerosi.',
+                'impact': {
+                    'low': 'Molti cluster piccoli, classificazione molto specifica',
+                    'medium': 'Bilanciamento tra specificità e generalizzazione',
+                    'high': 'Pochi cluster grandi, classificazione più generale'
+                }
+            },
+            'min_samples': {
+                'value': clustering_config.get('min_samples', 3),
+                'default': 3,
+                'min': 1,
+                'max': 20,
+                'description': 'Campioni minimi per punto core',
+                'explanation': 'Numero di conversazioni vicine necessarie perché un punto sia considerato "core". Controlla la densità richiesta.',
+                'impact': {
+                    'low': 'Cluster più aperti, include più conversazioni borderline',
+                    'medium': 'Bilanciamento tra inclusione e qualità',
+                    'high': 'Cluster più chiusi, solo conversazioni molto simili'
+                }
+            },
+            'cluster_selection_epsilon': {
+                'value': clustering_config.get('cluster_selection_epsilon', 0.08),
+                'default': 0.08,
+                'min': 0.01,
+                'max': 0.5,
+                'step': 0.01,
+                'description': 'Soglia di raggruppamento semantico',
+                'explanation': 'Controlla quanto devono essere simili le conversazioni per essere nello stesso cluster. IL PARAMETRO PIÙ IMPORTANTE!',
+                'impact': {
+                    'low': 'Tanti micro-cluster, rischio etichette simili',
+                    'medium': 'Raggruppamento bilanciato',
+                    'high': 'Pochi cluster grandi, raggruppamento aggressivo'
+                },
+                'recommendation': 'AUMENTA a 0.15-0.25 se hai troppe etichette simili!'
+            },
+            'metric': {
+                'value': clustering_config.get('metric', 'euclidean'),
+                'default': 'cosine',
+                'options': ['cosine', 'euclidean', 'manhattan'],
+                'description': 'Metrica di distanza',
+                'explanation': 'Come calcolare la distanza tra conversazioni.',
+                'impact': {
+                    'cosine': 'Migliore per testi - considera l\'angolo tra vettori',
+                    'euclidean': 'Distanza geometrica standard',
+                    'manhattan': 'Somma delle differenze assolute'
+                },
+                'recommendation': 'Usa COSINE per conversazioni testuali!'
+            }
+        }
+        
+        # Statistiche tenant (se disponibili)
+        try:
+            tenant_stats = {
+                'tenant_id': tenant_id,
+                'name': tenant_id  # Placeholder, potresti caricare il nome da DB
+            }
+        except:
+            tenant_stats = {'tenant_id': tenant_id}
+        
+        response = {
+            'success': True,
+            'tenant_id': tenant_id,
+            'parameters': parameters,
+            'tenant_info': tenant_stats,
+            'last_updated': datetime.now().isoformat(),
+            'config_source': config_status,  # default, custom, error
+            'config_details': {
+                'status': config_status,
+                'is_using_default': config_status != 'custom',
+                'custom_config_info': custom_config_info,
+                'base_config_file': 'config.yaml'
+            }
+        }
+        
+        return jsonify(response), 200
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Errore recupero parametri clustering: {str(e)}',
+            'tenant_id': tenant_id
+        }), 500
+
+@app.route('/api/clustering/<tenant_id>/parameters', methods=['POST'])
+def update_clustering_parameters(tenant_id):
+    """
+    Aggiorna i parametri di clustering per un tenant
+    Salva in un file di override specifico del tenant
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'parameters' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'Dati parametri mancanti'
+            }), 400
+        
+        # Validazione parametri
+        new_params = data['parameters']
+        
+        # Validazione range valori
+        validations = {
+            'min_cluster_size': (2, 50),
+            'min_samples': (1, 20),
+            'cluster_selection_epsilon': (0.01, 0.5),
+            'metric': ['cosine', 'euclidean', 'manhattan']
+        }
+        
+        for param_name, param_value in new_params.items():
+            if param_name in validations:
+                validation = validations[param_name]
+                
+                if isinstance(validation, tuple):  # Range numerico
+                    min_val, max_val = validation
+                    if not (min_val <= param_value <= max_val):
+                        return jsonify({
+                            'success': False,
+                            'error': f'Parametro {param_name}: valore {param_value} fuori range [{min_val}, {max_val}]'
+                        }), 400
+                elif isinstance(validation, list):  # Opzioni
+                    if param_value not in validation:
+                        return jsonify({
+                            'success': False,
+                            'error': f'Parametro {param_name}: valore {param_value} non valido. Opzioni: {validation}'
+                        }), 400
+        
+        # Salva configurazione personalizzata per tenant
+        tenant_config_dir = os.path.join(os.path.dirname(__file__), 'tenant_configs')
+        os.makedirs(tenant_config_dir, exist_ok=True)
+        
+        tenant_config_file = os.path.join(tenant_config_dir, f'{tenant_id}_clustering.yaml')
+        
+        # Prepara configurazione
+        tenant_clustering_config = {
+            'tenant_id': tenant_id,
+            'last_updated': datetime.now().isoformat(),
+            'updated_by': 'web_interface',
+            'clustering_parameters': new_params,
+            'previous_config_backup': {}
+        }
+        
+        # Backup configurazione precedente se esiste
+        if os.path.exists(tenant_config_file):
+            try:
+                with open(tenant_config_file, 'r', encoding='utf-8') as f:
+                    old_config = yaml.safe_load(f)
+                    tenant_clustering_config['previous_config_backup'] = old_config.get('clustering_parameters', {})
+            except:
+                pass
+        
+        # Salva nuova configurazione
+        with open(tenant_config_file, 'w', encoding='utf-8') as f:
+            yaml.dump(tenant_clustering_config, f, default_flow_style=False, allow_unicode=True)
+        
+        # Log dell'aggiornamento
+        print(f"📊 Parametri clustering aggiornati per tenant {tenant_id}:")
+        for param_name, param_value in new_params.items():
+            print(f"   {param_name}: {param_value}")
+        
+        response = {
+            'success': True,
+            'message': 'Parametri clustering aggiornati con successo',
+            'tenant_id': tenant_id,
+            'updated_parameters': new_params,
+            'config_file': tenant_config_file,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        return jsonify(response), 200
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Errore aggiornamento parametri: {str(e)}',
+            'tenant_id': tenant_id
+        }), 500
+
+@app.route('/api/clustering/<tenant_id>/parameters/reset', methods=['POST'])
+def reset_clustering_parameters(tenant_id):
+    """
+    Reset parametri clustering ai valori di default
+    """
+    try:
+        # Rimuovi file configurazione personalizzata
+        tenant_config_dir = os.path.join(os.path.dirname(__file__), 'tenant_configs')
+        tenant_config_file = os.path.join(tenant_config_dir, f'{tenant_id}_clustering.yaml')
+        
+        if os.path.exists(tenant_config_file):
+            # Backup prima della rimozione
+            backup_file = tenant_config_file + f'.backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+            os.rename(tenant_config_file, backup_file)
+            print(f"🔄 Configurazione personalizzata salvata in backup: {backup_file}")
+        
+        # Carica parametri default da config.yaml
+        config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+        with open(config_path, 'r', encoding='utf-8') as file:
+            config = yaml.safe_load(file)
+        
+        default_params = config.get('clustering', {})
+        
+        response = {
+            'success': True,
+            'message': 'Parametri clustering ripristinati ai valori default',
+            'tenant_id': tenant_id,
+            'default_parameters': default_params,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        return jsonify(response), 200
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Errore reset parametri: {str(e)}',
+            'tenant_id': tenant_id
+        }), 500
+
 
 if __name__ == "__main__":
     # Configurazione per evitare loop di ricaricamento con il virtual environment
@@ -4310,11 +4812,14 @@ if __name__ == "__main__":
     # Disabilita il debug se ci sono problemi con il virtual environment
     debug_mode = os.environ.get('FLASK_DEBUG', 'True').lower() == 'true'
     
+    print(f"🚀 Avvio server Flask - Debug: {debug_mode}")
+    
     # Avvio del server con configurazione ottimizzata
+    # FORZA use_reloader=False per evitare problemi con watchdog
     app.run(
         host="0.0.0.0", 
         port=5000, 
         debug=debug_mode,
-        use_reloader=debug_mode,
+        use_reloader=False,  # SEMPRE False per evitare blocco watchdog
         extra_files=None  # Non monitorare file extra per evitare loop
     )

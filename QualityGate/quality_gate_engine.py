@@ -145,7 +145,8 @@ class QualityGateEngine:
                               llm_result: Dict[str, Any],
                               tenant: str,
                               embedding: Optional[np.ndarray] = None,
-                              cluster_id: Optional[str] = None) -> QualityDecision:
+                              cluster_id: Optional[str] = None,
+                              cluster_metadata: Optional[Dict[str, Any]] = None) -> QualityDecision:
         """
         Valuta se una classificazione necessita di revisione umana.
         
@@ -157,6 +158,7 @@ class QualityGateEngine:
             tenant: Tenant di appartenenza
             embedding: Embedding della conversazione per novelty detection
             cluster_id: ID del cluster se disponibile
+            cluster_metadata: Metadati completi del cluster (cluster_id, is_representative, propagated_from, etc.)
             
         Returns:
             QualityDecision con la decisione e i dettagli
@@ -238,7 +240,8 @@ class QualityGateEngine:
                 final_decision=final_decision,
                 conversation_text=conversation_text,
                 needs_review=needs_review,
-                review_reason=reason if needs_review else None
+                review_reason=reason if needs_review else None,
+                cluster_metadata=cluster_metadata  # 🔧 FIX: Aggiunti metadati cluster
             )
             
             if mongo_saved:

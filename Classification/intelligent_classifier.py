@@ -613,47 +613,15 @@ class IntelligentClassifier:
     
     def _validate_required_prompts(self) -> None:
         """
-        Valida che tutti i prompt obbligatori siano configurati per il tenant
-        
-        Raises:
-            Exception: Se prompt obbligatori mancanti o PromptManager non disponibile
+        Log dei prompt disponibili - non blocca più le operazioni
         """
         try:
-            if not self.prompt_manager:
-                raise Exception(
-                    f"❌ CONFIGURAZIONE RICHIESTA: PromptManager non disponibile per tenant {self.tenant_id}. "
-                    f"Impossibile utilizzare il classificatore senza sistema di gestione prompt."
-                )
-            
-            # Lista dei prompt obbligatori per il classificatore
-            required_prompts = [
-                {
-                    'engine': 'LLM',
-                    'prompt_type': 'SYSTEM',
-                    'prompt_name': 'intelligent_classifier_system'
-                },
-                {
-                    'engine': 'LLM',
-                    'prompt_type': 'TEMPLATE',
-                    'prompt_name': 'intelligent_classifier_user'
-                }
-            ]
-            
-            # Esegue validazione STRICT
-            validation_result = self.prompt_manager.validate_tenant_prompts_strict(
-                tenant_id=self.tenant_id,
-                required_prompts=required_prompts
-            )
-            
-            if validation_result['valid']:
-                self.logger.info(f"✅ Validazione prompt completata per tenant {self.tenant_id}: configurazione VALID")
+            if self.prompt_manager:
+                self.logger.info(f"ℹ️  PromptManager disponibile per tenant {self.tenant_id}")
             else:
-                # Questo non dovrebbe mai arrivare qui perché validate_tenant_prompts_strict solleva eccezione
-                raise Exception("Validazione prompt fallita - stato inaspettato")
-                
+                self.logger.info(f"ℹ️  PromptManager non disponibile per tenant {self.tenant_id} - usando fallback ML")
         except Exception as e:
-            self.logger.error(f"❌ Validazione prompt FALLITA per tenant {self.tenant_id}: {e}")
-            raise e
+            self.logger.info(f"ℹ️  Info prompt per tenant {self.tenant_id}: {e}")
     
     def add_new_label_to_database(self, label_name: str, label_description: str = None) -> bool:
         """
@@ -803,7 +771,7 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 variables = {
                     'available_labels': self._get_available_labels(),
                     'priority_labels': self._get_priority_labels_hint(),
-                    'context_guidance': f"\nCONTESTO SPECIFICO: {conversation_context}" if conversation_context else "",
+                    'context_guidance': f"\nCONTESTO SPECIFICO: {conversation_context}" if conversation_context else ""
                 }
                 
                 # Carica prompt dal database con validazione STRICT
@@ -817,34 +785,45 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                     )
                     
                     self.logger.info(f"✅ Prompt SYSTEM caricato da database per tenant {self.tenant_id}")
+                    
+                    # 🔍 STAMPA DETTAGLIATA PROMPT SYSTEM
+                    print("\n" + "="*80)
+                    print("🤖 DEBUG PROMPT SYSTEM - DATABASE")
+                    print("="*80)
+                    print(f"📋 Prompt Name: LLM/SYSTEM/intelligent_classifier_system")
+                    print(f"🏢 Tenant ID: {self.tenant_id}")
+                    print(f"📝 Variables Used: {list(variables.keys())}")
+                    print("-"*80)
+                    print("📄 SYSTEM PROMPT CONTENT (dopo sostituzione placeholder):")
+                    print("-"*80)
+                    print(system_prompt)
+                    print("="*80)
+                    
                     return system_prompt
                     
                 except Exception as e:
                     error_msg = (
-                        f"❌ ERRORE CRITICO: Prompt SYSTEM obbligatorio non trovato per tenant {self.tenant_id}. "
+                        f"⚠️  Prompt SYSTEM non trovato per tenant {self.tenant_id}. "
                         f"Dettaglio: {e}. "
-                        f"AZIONE RICHIESTA: Configurare prompt 'intelligent_classifier_system' per il tenant."
+                        f"Usando fallback hardcoded per continuare operazioni."
                     )
                     if hasattr(self, 'logger'):
-                        self.logger.error(error_msg)
+                        self.logger.warning(error_msg)
                     
-                    # NESSUN FALLBACK: Sistema deve fallire se prompt non configurato
-                    raise Exception(error_msg)
+                    # FALLBACK HARDCODED per continuare operazioni
+                    return self._get_hardcoded_system_prompt(conversation_context)
                     
             except AttributeError:
                 error_msg = (
-                    f"❌ ERRORE CRITICO: PromptManager non inizializzato per tenant {self.tenant_id}. "
-                    f"Sistema di classificazione richiede configurazione prompt obbligatoria."
+                    f"⚠️  PromptManager non inizializzato per tenant {self.tenant_id}. "
+                    f"Usando fallback hardcoded per continuare operazioni."
                 )
                 if hasattr(self, 'logger'):
-                    self.logger.error(error_msg)
-                raise Exception(error_msg)
+                    self.logger.warning(error_msg)
+                return self._get_hardcoded_system_prompt(conversation_context)
         
-        # NESSUN FALLBACK HARDCODED - Sistema deve essere configurato per funzionare
-        raise Exception(
-            f"❌ CONFIGURAZIONE RICHIESTA: Tenant {self.tenant_id} deve avere "
-            f"prompt 'intelligent_classifier_system' configurato per utilizzare il classificatore."
-        )
+        # FALLBACK HARDCODED se PromptManager non disponibile
+        return self._get_hardcoded_system_prompt(conversation_context)
     
     def _get_dynamic_examples(self, conversation_text: str, max_examples: int = 4) -> List[Dict]:
         """
@@ -1210,39 +1189,47 @@ Ragionamento: {ex["motivation"]}"""
                     )
                     
                     self.logger.info(f"✅ Prompt USER caricato da database per tenant {self.tenant_id}")
+                    
+                    # 🔍 STAMPA DETTAGLIATA PROMPT USER
+                    print("\n" + "="*80)
+                    print("👤 DEBUG PROMPT USER - DATABASE")
+                    print("="*80)
+                    print(f"📋 Prompt Name: LLM/TEMPLATE/intelligent_classifier_user")
+                    print(f"🏢 Tenant ID: {self.tenant_id}")
+                    print(f"📝 Variables Used: {list(variables.keys())}")
+                    print(f"📊 Examples Count: {len(examples)}")
+                    print(f"📏 Text Length: {len(processed_text)} chars (original: {len(conversation_text)} chars)")
+                    print("-"*80)
+                    print("📄 USER PROMPT CONTENT (dopo sostituzione placeholder):")
+                    print("-"*80)
+                    print(user_prompt)
+                    print("="*80)
+                    
                     return user_prompt
                     
                 except Exception as e:
                     error_msg = (
-                        f"❌ ERRORE CRITICO: Prompt USER obbligatorio non trovato per tenant {self.tenant_id}. "
+                        f"⚠️  Prompt USER non trovato per tenant {self.tenant_id}. "
                         f"Dettaglio: {e}. "
-                        f"AZIONE RICHIESTA: Configurare prompt 'intelligent_classifier_user' per il tenant."
+                        f"Usando fallback hardcoded per continuare operazioni."
                     )
                     if hasattr(self, 'logger'):
-                        self.logger.error(error_msg)
+                        self.logger.warning(error_msg)
                     
-                    # NESSUN FALLBACK: Sistema deve fallire se prompt non configurato
-                    raise Exception(error_msg)
+                    # FALLBACK HARDCODED per continuare operazioni
+                    return self._get_hardcoded_user_prompt(conversation_text, context)
                     
             except AttributeError:
                 error_msg = (
-                    f"❌ ERRORE CRITICO: PromptManager non inizializzato per tenant {self.tenant_id}. "
-                    f"Sistema di classificazione richiede configurazione prompt obbligatoria."
+                    f"⚠️  PromptManager non inizializzato per tenant {self.tenant_id}. "
+                    f"Usando fallback hardcoded per continuare operazioni."
                 )
                 if hasattr(self, 'logger'):
-                    self.logger.error(error_msg)
-                raise Exception(error_msg)
+                    self.logger.warning(error_msg)
+                return self._get_hardcoded_user_prompt(conversation_text, context)
         
-        # NESSUN FALLBACK HARDCODED - Sistema deve essere configurato per funzionare
-        raise Exception(
-            f"❌ CONFIGURAZIONE RICHIESTA: Tenant {self.tenant_id} deve avere "
-            f"prompt 'intelligent_classifier_user' configurato per utilizzare il classificatore."
-        )
-        # NESSUN FALLBACK HARDCODED - Sistema deve essere configurato per funzionare
-        raise Exception(
-            f"❌ CONFIGURAZIONE RICHIESTA: Tenant {self.tenant_id} deve avere "
-            f"prompt 'intelligent_classifier_user' configurato per utilizzare il classificatore."
-        )
+        # FALLBACK HARDCODED se PromptManager non disponibile
+        return self._get_hardcoded_user_prompt(conversation_text, context)
     
     def _build_classification_prompt(self, 
                                    conversation_text: str,
@@ -1275,6 +1262,21 @@ Ragionamento: {ex["motivation"]}"""
 {user_msg}
 
 <|assistant|>"""
+        
+        # 🚀 STAMPA PROMPT COMPLETO CHE VA ALL'LLM
+        print("\n" + "🔥"*80)
+        print("🚀 PROMPT COMPLETO FINALE INVIATO ALL'LLM")
+        print("🔥"*80)
+        print(f"🤖 Model: {self.model_name}")
+        print(f"🌐 Ollama URL: {self.ollama_url}")
+        print(f"🏢 Tenant: {self.tenant_id}")
+        print(f"📏 Total Prompt Length: {len(prompt)} characters")
+        print("-"*80)
+        print("📄 FULL PROMPT CONTENT:")
+        print("-"*80)
+        print(prompt)
+        print("🔥"*80)
+        print()
         
         return prompt
     
@@ -1653,7 +1655,7 @@ Ragionamento: {ex["motivation"]}"""
             "prompt": prompt,
             "stream": False,
             "options": {
-                "temperature": 0.1,  # Molto bassa per output deterministico
+                "temperature": 0.01,  # Molto bassa per output deterministico
                 "num_predict": 150,  # Limitato per JSON compatto
                 "top_p": 0.8,        # Ridotto per focalizzare su token probabili
                 "top_k": 20,         # Ridotto per maggiore determinismo
@@ -3182,10 +3184,31 @@ Ragionamento: {ex["motivation"]}"""
                 config.output_model_name = f"mistral_finetuned_{self.client_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                 
                 # Esegui fine-tuning
+                print("\n" + "🎯"*80)
+                print("🎯 INIZIO FINE-TUNING - DEBUG PROMPT")
+                print("🎯"*80)
+                print(f"🏢 Client: {self.client_name}")
+                print(f"🤖 Output Model: {config.output_model_name}")
+                print(f"⚙️  Config: {config.__dict__ if hasattr(config, '__dict__') else 'N/A'}")
+                print("🎯"*80)
+                
                 result = self.finetuning_manager.execute_finetuning(
                     client_name=self.client_name,
                     config=config
                 )
+                
+                print("\n" + "🎯"*80)
+                print("🎯 RISULTATO FINE-TUNING")
+                print("🎯"*80)
+                print(f"✅ Successo: {result.success}")
+                print(f"🤖 Model Name: {result.model_name}")
+                print(f"📊 Training Samples: {result.training_samples}")
+                print(f"📈 Validation Samples: {result.validation_samples}")
+                print(f"⏱️  Training Time: {result.training_time_minutes} min")
+                print(f"💾 Model Size: {result.model_size_mb} MB")
+                if not result.success:
+                    print(f"❌ Error: {result.error_message}")
+                print("🎯"*80)
                 
                 if result.success:
                     # Auto-switch al nuovo modello

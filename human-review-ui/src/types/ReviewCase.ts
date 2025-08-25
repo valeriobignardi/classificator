@@ -12,6 +12,19 @@ export interface ReviewCase {
   created_at: string;
   tenant: string;
   cluster_id?: string;
+  // 🆕 Nuovi campi per cluster organization
+  is_representative?: boolean;
+  propagated_from?: string;
+  propagation_indicator?: string;
+}
+
+// 🆕 Nuovo tipo per cluster view
+export interface ClusterCase {
+  cluster_id: string;
+  representative: ReviewCase;
+  propagated_sessions: ReviewCase[];
+  total_sessions: number;
+  cluster_size: number;
 }
 
 export interface ReviewStats {

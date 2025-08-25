@@ -73,13 +73,16 @@ except ImportError:
     MySqlConnettore = None
     MYSQL_AVAILABLE = False
 
-# Import per MongoDB
+# Import per MongoDB - USA IL CONNETTORE GIUSTO
 try:
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'MongoDB'))
-    from connettore_mongo import MongoDBConnector
+    sys.path.append(os.path.dirname(__file__))
+    from mongo_classification_reader import MongoClassificationReader
     MONGODB_AVAILABLE = True
+    # DISABILITATO IL VECCHIO CONNETTORE CHE GENERA NOMI SBAGLIATI:
+    # from connettore_mongo import MongoDBConnector
+    MongoDBConnector = None  # Force disabling
 except ImportError:
-    MongoDBConnector = None
+    MongoClassificationReader = None
     MONGODB_AVAILABLE = False
 
 # Import per BERTopic provider
@@ -232,17 +235,17 @@ class IntelligentClassifier:
                     print(f"⚠️ MySQL connector non disponibile: {e}")
                 self.mysql_connector = None
 
-        # MongoDB connector (se disponibile)
-        self.mongo_connector = None
+        # MongoDB connector (se disponibile) - USA IL CONNETTORE GIUSTO
+        self.mongo_reader = None
         if MONGODB_AVAILABLE:
             try:
-                self.mongo_connector = MongoDBConnector(config_path=config_path)
+                self.mongo_reader = MongoClassificationReader()
                 if enable_logging:
-                    print(f"🗄️ MongoDB connector inizializzato")
+                    print(f"🗄️ MongoDB reader inizializzato")
             except Exception as e:
                 if enable_logging:
-                    print(f"⚠️ MongoDB connector non disponibile: {e}")
-                self.mongo_connector = None
+                    print(f"⚠️ MongoDB reader non disponibile: {e}")
+                self.mongo_reader = None
         
         # Carica configurazione
         self.config = self._load_config(config_path)
@@ -262,6 +265,7 @@ class IntelligentClassifier:
         self.bertopic_fallback_threshold = self.config.get('pipeline', {}).get('bertopic_fallback_threshold', 0.70)
         self.new_tag_similarity_threshold = self.config.get('pipeline', {}).get('new_tag_similarity_threshold', 0.75)  
         self.auto_tag_creation = self.config.get('pipeline', {}).get('auto_tag_creation', True)
+        self.llm_confidence_threshold = self.config.get('pipeline', {}).get('llm_confidence_threshold', 0.85)
         
         # Inizializzazione BERTopic provider (se disponibile ed abilitato)
         self.bertopic_provider = None
@@ -283,6 +287,9 @@ class IntelligentClassifier:
             self.logger = logging.getLogger(__name__)
             self.logger.addHandler(logging.NullHandler())
         
+        # Imposta tenant_id PRIMA di usarlo
+        self.tenant_id = client_name or "humanitas"  # Default tenant
+        
         # INTEGRAZIONE MYSQL: Inizializzazione connector database con supporto multi-tenant
         self.mysql_connector = None
         try:
@@ -299,7 +306,6 @@ class IntelligentClassifier:
         
         # INIZIALIZZAZIONE PROMPT MANAGER: Sistema database-driven per prompt
         self.prompt_manager = None
-        self.tenant_id = client_name or "humanitas"  # Default tenant
         try:
             self.prompt_manager = PromptManager(config_path=config_path)
             if enable_logging:
@@ -307,8 +313,11 @@ class IntelligentClassifier:
         except Exception as e:
             if enable_logging:
                 self.logger.error(f"❌ Errore inizializzazione PromptManager: {e}")
-                self.logger.info("🔄 Continuo con prompt hardcoded come fallback")
+                self.logger.error("❌ PromptManager obbligatorio - sistema non può funzionare senza configurazione prompt")
             self.prompt_manager = None
+        
+        # VALIDAZIONE PROMPT OBBLIGATORI per il tenant
+        self._validate_required_prompts()
         
         # Cache per le predizioni
         self._prediction_cache = {}
@@ -602,6 +611,50 @@ class IntelligentClassifier:
                 # Mantieni solo i 800 più recenti
                 self._prediction_cache = dict(sorted_items[-800:])
     
+    def _validate_required_prompts(self) -> None:
+        """
+        Valida che tutti i prompt obbligatori siano configurati per il tenant
+        
+        Raises:
+            Exception: Se prompt obbligatori mancanti o PromptManager non disponibile
+        """
+        try:
+            if not self.prompt_manager:
+                raise Exception(
+                    f"❌ CONFIGURAZIONE RICHIESTA: PromptManager non disponibile per tenant {self.tenant_id}. "
+                    f"Impossibile utilizzare il classificatore senza sistema di gestione prompt."
+                )
+            
+            # Lista dei prompt obbligatori per il classificatore
+            required_prompts = [
+                {
+                    'engine': 'LLM',
+                    'prompt_type': 'SYSTEM',
+                    'prompt_name': 'intelligent_classifier_system'
+                },
+                {
+                    'engine': 'LLM',
+                    'prompt_type': 'TEMPLATE',
+                    'prompt_name': 'intelligent_classifier_user'
+                }
+            ]
+            
+            # Esegue validazione STRICT
+            validation_result = self.prompt_manager.validate_tenant_prompts_strict(
+                tenant_id=self.tenant_id,
+                required_prompts=required_prompts
+            )
+            
+            if validation_result['valid']:
+                self.logger.info(f"✅ Validazione prompt completata per tenant {self.tenant_id}: configurazione VALID")
+            else:
+                # Questo non dovrebbe mai arrivare qui perché validate_tenant_prompts_strict solleva eccezione
+                raise Exception("Validazione prompt fallita - stato inaspettato")
+                
+        except Exception as e:
+            self.logger.error(f"❌ Validazione prompt FALLITA per tenant {self.tenant_id}: {e}")
+            raise e
+    
     def add_new_label_to_database(self, label_name: str, label_description: str = None) -> bool:
         """
         Aggiunge una nuova etichetta al database TAG se non esiste già
@@ -753,57 +806,45 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                     'context_guidance': f"\nCONTESTO SPECIFICO: {conversation_context}" if conversation_context else "",
                 }
                 
-                # Carica prompt dal database
-                system_prompt = self.prompt_manager.get_prompt(
-                    tenant_id=self.tenant_id,
-                    engine="LLM",
-                    prompt_type="SYSTEM", 
-                    prompt_name="intelligent_classifier_system",
-                    variables=variables
-                )
-                
-                if system_prompt:
+                # Carica prompt dal database con validazione STRICT
+                try:
+                    system_prompt = self.prompt_manager.get_prompt_strict(
+                        tenant_id=self.tenant_id,
+                        engine="LLM",
+                        prompt_type="SYSTEM", 
+                        prompt_name="intelligent_classifier_system",
+                        variables=variables
+                    )
+                    
+                    self.logger.info(f"✅ Prompt SYSTEM caricato da database per tenant {self.tenant_id}")
                     return system_prompt
                     
-            except Exception as e:
+                except Exception as e:
+                    error_msg = (
+                        f"❌ ERRORE CRITICO: Prompt SYSTEM obbligatorio non trovato per tenant {self.tenant_id}. "
+                        f"Dettaglio: {e}. "
+                        f"AZIONE RICHIESTA: Configurare prompt 'intelligent_classifier_system' per il tenant."
+                    )
+                    if hasattr(self, 'logger'):
+                        self.logger.error(error_msg)
+                    
+                    # NESSUN FALLBACK: Sistema deve fallire se prompt non configurato
+                    raise Exception(error_msg)
+                    
+            except AttributeError:
+                error_msg = (
+                    f"❌ ERRORE CRITICO: PromptManager non inizializzato per tenant {self.tenant_id}. "
+                    f"Sistema di classificazione richiede configurazione prompt obbligatoria."
+                )
                 if hasattr(self, 'logger'):
-                    self.logger.warning(f"⚠️ Errore caricamento prompt database: {e}")
-                    self.logger.info("🔄 Utilizzo prompt hardcoded come fallback")
+                    self.logger.error(error_msg)
+                raise Exception(error_msg)
         
-        # FALLBACK: Sistema hardcoded se PromptManager non disponibile
-        available_labels = self._get_available_labels()
-        priority_labels = self._get_priority_labels_hint()
-        context_guidance = ""
-        if conversation_context:
-            context_guidance = f"\nCONTESTO SPECIFICO: {conversation_context}"
-        
-        return f"""Sei un classificatore esperto per l'ospedale Humanitas con profonda conoscenza del dominio sanitario.
-
-MISSIONE: Classifica conversazioni con pazienti/utenti in base al loro intento principale.
-
-APPROCCIO ANALITICO:
-1. Identifica l'intento principale (non dettagli secondari)
-2. Considera il contesto ospedaliero (prenotazioni, referti, informazioni)
-3. Distingui richieste operative da richieste informative
-4. Se incerto tra 2 etichette, scegli la più specifica
-
-CONFIDENCE GUIDELINES:
-- 0.9-1.0: Intento chiarissimo e inequivocabile
-- 0.7-0.8: Intento probabile con piccole ambiguità
-- 0.5-0.6: Intento possibile ma con dubbi ragionevoli  
-- 0.3-0.4: Molto incerto, probabilmente "altro"
-- 0.0-0.2: Impossibile classificare
-
-ETICHETTE DISPONIBILI:
-{available_labels}
-
-{priority_labels}
-{context_guidance}
-
-OUTPUT FORMAT (SOLO JSON):
-{{"predicted_label": "etichetta_precisa", "confidence": 0.X, "motivation": "ragionamento_breve"}}
-
-CRITICAL: Genera ESCLUSIVAMENTE JSON valido. Zero testo aggiuntivo."""
+        # NESSUN FALLBACK HARDCODED - Sistema deve essere configurato per funzionare
+        raise Exception(
+            f"❌ CONFIGURAZIONE RICHIESTA: Tenant {self.tenant_id} deve avere "
+            f"prompt 'intelligent_classifier_system' configurato per utilizzare il classificatore."
+        )
     
     def _get_dynamic_examples(self, conversation_text: str, max_examples: int = 4) -> List[Dict]:
         """
@@ -1158,56 +1199,50 @@ Ragionamento: {ex["motivation"]}"""
                     'processed_text': processed_text,
                 }
                 
-                # Carica prompt dal database
-                user_prompt = self.prompt_manager.get_prompt(
-                    tenant_id=self.tenant_id,
-                    engine="LLM",
-                    prompt_type="TEMPLATE",
-                    prompt_name="intelligent_classifier_user",
-                    variables=variables
-                )
-                
-                if user_prompt:
+                # Carica prompt dal database con validazione STRICT
+                try:
+                    user_prompt = self.prompt_manager.get_prompt_strict(
+                        tenant_id=self.tenant_id,
+                        engine="LLM",
+                        prompt_type="TEMPLATE",
+                        prompt_name="intelligent_classifier_user",
+                        variables=variables
+                    )
+                    
+                    self.logger.info(f"✅ Prompt USER caricato da database per tenant {self.tenant_id}")
                     return user_prompt
                     
-            except Exception as e:
+                except Exception as e:
+                    error_msg = (
+                        f"❌ ERRORE CRITICO: Prompt USER obbligatorio non trovato per tenant {self.tenant_id}. "
+                        f"Dettaglio: {e}. "
+                        f"AZIONE RICHIESTA: Configurare prompt 'intelligent_classifier_user' per il tenant."
+                    )
+                    if hasattr(self, 'logger'):
+                        self.logger.error(error_msg)
+                    
+                    # NESSUN FALLBACK: Sistema deve fallire se prompt non configurato
+                    raise Exception(error_msg)
+                    
+            except AttributeError:
+                error_msg = (
+                    f"❌ ERRORE CRITICO: PromptManager non inizializzato per tenant {self.tenant_id}. "
+                    f"Sistema di classificazione richiede configurazione prompt obbligatoria."
+                )
                 if hasattr(self, 'logger'):
-                    self.logger.warning(f"⚠️ Errore caricamento user prompt database: {e}")
-                    self.logger.info("🔄 Utilizzo prompt hardcoded come fallback")
+                    self.logger.error(error_msg)
+                raise Exception(error_msg)
         
-        # FALLBACK: Sistema hardcoded se PromptManager non disponibile
-        processed_text = self._summarize_if_long(conversation_text)
-        examples = self._get_dynamic_examples(conversation_text, max_examples=5)
-        
-        examples_text = ""
-        for i, ex in enumerate(examples, 1):
-            confidence_hint = "ALTA CERTEZZA" if i <= 2 else "MEDIA CERTEZZA"
-            examples_text += f"""
-ESEMPIO {i} ({confidence_hint}):
-Input: "{ex["text"]}"
-Output: {ex["label"]}
-Ragionamento: {ex["motivation"]}"""
-        
-        context_section = ""
-        if context:
-            context_section = f"\n\nCONTESTO AGGIUNTIVO:\n{context}"
-        
-        user_message = f"""Analizza questo testo seguendo l'approccio degli esempi:
-{examples_text}
-{context_section}
-
-TESTO DA CLASSIFICARE:
-"{processed_text}"
-
-RAGIONA STEP-BY-STEP:
-1. Identifica l'intento principale
-2. Confronta con gli esempi
-3. Scegli l'etichetta più appropriata
-4. Valuta la tua certezza
-
-OUTPUT (SOLO JSON):"""
-        
-        return user_message
+        # NESSUN FALLBACK HARDCODED - Sistema deve essere configurato per funzionare
+        raise Exception(
+            f"❌ CONFIGURAZIONE RICHIESTA: Tenant {self.tenant_id} deve avere "
+            f"prompt 'intelligent_classifier_user' configurato per utilizzare il classificatore."
+        )
+        # NESSUN FALLBACK HARDCODED - Sistema deve essere configurato per funzionare
+        raise Exception(
+            f"❌ CONFIGURAZIONE RICHIESTA: Tenant {self.tenant_id} deve avere "
+            f"prompt 'intelligent_classifier_user' configurato per utilizzare il classificatore."
+        )
     
     def _build_classification_prompt(self, 
                                    conversation_text: str,
@@ -1221,10 +1256,14 @@ OUTPUT (SOLO JSON):"""
             
         Returns:
             Prompt strutturato e ottimizzato con context-awareness
+            
+        Raises:
+            Exception: Se i prompt obbligatori non sono configurati per il tenant
         """
         # Analizza il testo per determinare context hints
         conversation_context = self._analyze_conversation_context(conversation_text)
         
+        # Carica prompt con validazione STRICT
         system_msg = self._build_system_message(conversation_context)
         user_msg = self._build_user_message(conversation_text, context)
         
@@ -1235,8 +1274,8 @@ OUTPUT (SOLO JSON):"""
 <|user|>
 {user_msg}
 
-<|assistant|>
-"""
+<|assistant|>"""
+        
         return prompt
     
     def _analyze_conversation_context(self, conversation_text: str) -> Optional[str]:
@@ -1416,6 +1455,9 @@ OUTPUT (SOLO JSON):"""
                 final_confidence = min(confidence, semantic_confidence + 0.1)
             elif resolution_method == "BERTOPIC_NEW_CATEGORY":
                 final_confidence = min(confidence, semantic_confidence)
+            elif resolution_method == "AUTO_CREATED":
+                final_confidence = semantic_confidence  # Mantieni confidence LLM originale
+                self.logger.info(f"✨ Nuovo tag creato automaticamente da LLM: '{resolved_label}' (conf: {final_confidence:.3f})")
             elif resolution_method == "BERTOPIC_FALLBACK_NEW_TAG":
                 final_confidence = semantic_confidence  # Usa confidence BERTopic per nuovo tag
                 self.logger.info(f"🆕 Nuovo tag scoperto da fallback BERTopic: '{resolved_label}' (conf: {final_confidence:.3f})")
@@ -2190,7 +2232,7 @@ OUTPUT (SOLO JSON):"""
             conversation_text: Testo della conversazione classificata
             result: Risultato della classificazione
         """
-        if not self.mongo_connector or not self.client_name:
+        if not self.mongo_reader or not self.client_name:
             return
         
         try:
@@ -2218,24 +2260,18 @@ OUTPUT (SOLO JSON):"""
             tenant_id = hashlib.md5(self.client_name.encode()).hexdigest()[:16]
             tenant_name = self.client_name
             
-            # Salva in MongoDB
-            success = self.mongo_connector.save_session_classification(
-                client=self.client_name,
+            # Salva in MongoDB usando il metodo corretto
+            success = self.mongo_reader.save_classification_result(
                 session_id=session_id,
-                tenant_id=tenant_id,
-                tenant_name=tenant_name,
-                testo=conversation_text,
-                conversazione=conversation_text,  # Per ora sono uguali
-                embedding=embedding,
-                embedding_model=embedding_model,
-                classificazione=result.predicted_label,
-                confidence=result.confidence,
-                motivazione=result.motivation,
-                metadata={
+                client_name=self.client_name,
+                final_decision={
+                    'predicted_label': result.predicted_label,
+                    'confidence': result.confidence,
                     'method': result.method,
-                    'processing_time': result.processing_time,
-                    'timestamp': result.timestamp
-                }
+                    'reasoning': result.motivation
+                },
+                conversation_text=conversation_text,
+                needs_review=False  # Per ora auto-classifica sempre
             )
             
             if success:
@@ -2650,47 +2686,29 @@ OUTPUT (SOLO JSON):"""
         
         self.logger.debug(f"🎯 Inizio risoluzione semantica: '{proposed_label}' (confidence: {initial_confidence:.3f})")
         
-        # CONTROLLO SOGLIA FALLBACK: Se confidence bassa → salta direttamente a BERTopic
-        if initial_confidence < self.bertopic_fallback_threshold:
-            self.logger.info(f"🔀 Confidence {initial_confidence:.3f} < soglia {self.bertopic_fallback_threshold:.3f} → Attivo fallback BERTopic")
-            
-            # Salta direttamente alla FASE 3: BERTopic per discovery
-            if hasattr(self, 'bertopic_provider') and self.bertopic_provider:
-                bertopic_result = self._evaluate_new_category_with_bertopic(
-                    original_label, conversation_text
-                )
-                if bertopic_result['is_valid_new_category']:
-                    # Nuova categoria scoperta da BERTopic
-                    new_label = bertopic_result['refined_label']
-                    
-                    # Auto-creazione tag se abilitata
-                    if self.auto_tag_creation:
-                        success = self._create_new_tag_automatically(new_label, conversation_text, bertopic_result)
-                        if success:
-                            self.logger.info(f"✅ Nuovo tag creato automaticamente: '{new_label}'")
-                        else:
-                            self.logger.warning(f"⚠️ Fallimento creazione automatica tag: '{new_label}'")
-                    
-                    return (
-                        new_label,
-                        "BERTOPIC_FALLBACK_NEW_TAG", 
-                        bertopic_result['confidence']
-                    )
-                else:
-                    # BERTopic suggerisce tag esistente
-                    return (
-                        bertopic_result['refined_label'],
-                        "BERTOPIC_FALLBACK_EXISTING",
-                        bertopic_result['confidence']
-                    )
-            else:
-                self.logger.warning("🚨 Fallback BERTopic richiesto ma provider non disponibile")
-        
-        # FLUSSO NORMALE: FASE 1: Verifica diretta (se è già nel dominio)
+        # FASE 1: Verifica diretta (se è già nel dominio)
         if original_label in self.domain_labels:
             return original_label, "DIRECT_MATCH", 1.0
         
-        # FASE 2: Risoluzione semantica con embeddings
+        # FASE 2: AUTO-CREAZIONE TAG (NUOVA LOGICA SEMPLIFICATA)
+        # Se il tag non esiste e l'LLM è molto sicuro, crea automaticamente il tag
+        if initial_confidence >= self.llm_confidence_threshold:
+            self.logger.info(f"🎯 LLM confidence {initial_confidence:.3f} >= {self.llm_confidence_threshold:.3f} → Tentativo auto-creazione tag '{original_label}'")
+            
+            if self.auto_tag_creation:
+                # Prova a creare il nuovo tag automaticamente
+                success = self.add_new_label_to_database(original_label)
+                if success:
+                    # Ricarica le etichette dal database per includere il nuovo tag
+                    self._load_domain_labels_from_database()
+                    self.logger.info(f"✅ Nuovo tag creato automaticamente: '{original_label}' (confidence: {initial_confidence:.3f})")
+                    return original_label, "AUTO_CREATED", initial_confidence
+                else:
+                    self.logger.warning(f"⚠️ Fallimento creazione automatica tag: '{original_label}'")
+            else:
+                self.logger.info(f"📝 Auto-creazione disabilitata, ma LLM suggerirebbe: '{original_label}'")
+
+        # FASE 3: Risoluzione semantica con embeddings
         if self.embedder is not None:
             semantic_result = self._resolve_label_semantically(
                 original_label, conversation_text

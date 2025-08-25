@@ -47,7 +47,6 @@ class HumanReviewWebInterface:
         if tenant_name not in self.quality_gates:
             self.quality_gates[tenant_name] = QualityGateEngine(
                 tenant_name=tenant_name,
-                review_db_path=f"human_review_{tenant_name}.db",
                 training_log_path=f"training_decisions_{tenant_name}.jsonl"
             )
         return self.quality_gates[tenant_name]

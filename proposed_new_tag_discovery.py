@@ -14,7 +14,7 @@ class NewTagDiscoverySystem:
     """
     
     def __init__(self, llm_classifier, tag_db_connector):
-        self.llm_classifier = llm_classifier
+        self.llm_classifier = llm_classifiercd 
         self.tag_db = tag_db_connector
         
     def discover_new_tags_from_bertopic(self, bertopic_model, conversations: List[str], 

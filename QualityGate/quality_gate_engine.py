@@ -69,7 +69,11 @@ class QualityGateEngine:
     def __init__(self, 
                  tenant_name: str,
                  training_log_path: str = None,
-                 config: Dict[str, Any] = None):
+                 config: Dict[str, Any] = None,
+                 confidence_threshold: float = None,
+                 disagreement_threshold: float = None,
+                 uncertainty_threshold: float = None,
+                 novelty_threshold: float = None):
         """
         Inizializza il QualityGateEngine per un specifico tenant.
         
@@ -77,25 +81,44 @@ class QualityGateEngine:
             tenant_name: Nome del tenant (cliente)
             training_log_path: Percorso del file di log per le decisioni di training (opzionale)
             config: Configurazione aggiuntiva (opzionale)
+            confidence_threshold: Soglia di confidenza personalizzata (sovrascrive config)
+            disagreement_threshold: Soglia di disagreement personalizzata (sovrascrive config)
+            uncertainty_threshold: Soglia di incertezza personalizzata (sovrascrive config)
+            novelty_threshold: Soglia di novità personalizzata (sovrascrive config)
         """
         self.tenant_name = tenant_name
         self.training_log_path = training_log_path or f"training_decisions_{tenant_name}.jsonl"
         
-        # Usa config fornito o default
-        self.config = config or {}
+        # Usa config fornito o carica dal file
+        if config is None:
+            # Carica il config.yaml se non fornito
+            try:
+                import yaml
+                import os
+                config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
+                with open(config_path, 'r', encoding='utf-8') as file:
+                    config = yaml.safe_load(file)
+            except Exception as e:
+                print(f"⚠️ Impossibile caricare config.yaml: {e}. Uso valori di default.")
+                config = {}
+        
+        self.config = config
         self.quality_config = self.config.get('quality_gate', {})
         self.logger = logging.getLogger(__name__)
         
-        # Soglie configurabili
-        self.confidence_threshold = self.quality_config.get('confidence_threshold', 0.7)
-        self.disagreement_threshold = self.quality_config.get('disagreement_threshold', 0.3)
-        self.uncertainty_threshold = self.quality_config.get('uncertainty_threshold', 0.5)
-        self.novelty_threshold = self.quality_config.get('novelty_threshold', 0.8)
+        # Soglie configurabili - i parametri espliciti sovrascrivono il config
+        self.confidence_threshold = confidence_threshold if confidence_threshold is not None else self.quality_config.get('confidence_threshold', 0.7)
+        self.disagreement_threshold = disagreement_threshold if disagreement_threshold is not None else self.quality_config.get('disagreement_threshold', 0.3)
+        self.uncertainty_threshold = uncertainty_threshold if uncertainty_threshold is not None else self.quality_config.get('uncertainty_threshold', 0.5)
+        self.novelty_threshold = novelty_threshold if novelty_threshold is not None else self.quality_config.get('novelty_threshold', 0.8)
         
         # Inizializza MongoReader per gestire review cases
         from mongo_classification_reader import MongoClassificationReader
         self.mongo_reader = MongoClassificationReader()
         self.mongo_reader.connect()
+        
+        # Inizializza dizionario per pending reviews (in-memory cache)
+        self.pending_reviews = {}
         
         # Inizializza SemanticMemoryManager per novelty detection
         try:
@@ -551,7 +574,7 @@ class QualityGateEngine:
     def _save_human_decision_to_database(self, case: ReviewCase, human_decision: str, 
                                        human_confidence: float, notes: str) -> bool:
         """
-        Salva la decisione umana anche nella tabella session_classifications per coerenza.
+        Salva la decisione umana in MongoDB (sistema unificato).
         
         Args:
             case: Il caso di revisione risolto
@@ -563,47 +586,110 @@ class QualityGateEngine:
             bool: True se salvato con successo
         """
         try:
-            # Importa il connettore del database
-            from TagDatabase.tag_database_connector import TagDatabaseConnector
-            
-            tag_db = TagDatabaseConnector()
-            tag_db.connetti()
-            
-            try:
-                # Salva la decisione umana nella tabella session_classifications
-                success = tag_db.classifica_sessione(
-                    session_id=case.session_id,
-                    tag_name=human_decision,
-                    tenant_slug=case.tenant,
-                    confidence_score=human_confidence,
-                    method='HUMAN_REVIEW',
-                    classified_by='human_supervisor',
-                    notes=f"Human review decision. Original ML: {case.ml_prediction} "
-                          f"(conf: {case.ml_confidence:.3f}), LLM: {case.llm_prediction} "
-                          f"(conf: {case.llm_confidence:.3f}). Reason: {case.reason}. "
-                          f"Notes: {notes}" if notes else f"Human review decision. "
-                          f"Original ML: {case.ml_prediction} (conf: {case.ml_confidence:.3f}), "
-                          f"LLM: {case.llm_prediction} (conf: {case.llm_confidence:.3f}). "
-                          f"Reason: {case.reason}"
-                )
+            # Usa MongoDB come sistema unificato per tutte le classificazioni
+            success = self.mongo_reader.save_classification_result(
+                session_id=case.session_id,
+                client_name=case.tenant,
+                ml_result={
+                    'predicted_label': case.ml_prediction,
+                    'confidence': case.ml_confidence
+                } if case.ml_prediction else None,
+                llm_result={
+                    'predicted_label': case.llm_prediction,
+                    'confidence': case.llm_confidence
+                } if case.llm_prediction else None,
+                final_decision={
+                    'predicted_label': human_decision,
+                    'confidence': human_confidence,
+                    'method': 'HUMAN_REVIEW',
+                    'reasoning': f"Human review decision. Original ML: {case.ml_prediction} "
+                                f"(conf: {case.ml_confidence:.3f}), LLM: {case.llm_prediction} "
+                                f"(conf: {case.llm_confidence:.3f}). Reason: {case.reason}"
+                },
+                conversation_text=case.conversation_text,
+                needs_review=False,  # Risolto dall'umano
+                classified_by='human_supervisor',
+                notes=notes
+            )
                 
-                if success:
-                    self.logger.info(f"✅ Decisione umana salvata in session_classifications: "
-                                   f"session_id={case.session_id}, tag={human_decision}, "
-                                   f"confidence={human_confidence:.3f}")
-                else:
-                    self.logger.error(f"❌ Errore nel salvataggio in session_classifications per "
-                                    f"session_id={case.session_id}")
+            if success:
+                self.logger.info(f"✅ Decisione umana salvata in MongoDB: "
+                               f"session_id={case.session_id}, tag={human_decision}, "
+                               f"confidence={human_confidence:.3f}")
+            else:
+                self.logger.error(f"❌ Errore nel salvataggio MongoDB per "
+                                f"session_id={case.session_id}")
                 
-                return success
-                
-            finally:
-                tag_db.disconnetti()
+            return success
                 
         except Exception as e:
-            self.logger.error(f"❌ Errore nel salvataggio decisione umana nel database: {e}")
+            self.logger.error(f"❌ Errore nel salvataggio decisione umana: {e}")
             self.logger.error(f"Stack trace: {traceback.format_exc()}")
             return False
+
+    def add_to_review_queue(self, session_id: str, conversation_text: str, 
+                           reason: str = "manual_addition",
+                           ml_prediction: str = "",
+                           ml_confidence: float = 0.0,
+                           llm_prediction: str = "manual_review",
+                           llm_confidence: float = 0.0) -> str:
+        """
+        Aggiunge manualmente una sessione alla coda di revisione.
+        
+        Args:
+            session_id: ID della sessione
+            conversation_text: Testo della conversazione
+            reason: Motivo dell'aggiunta alla coda
+            ml_prediction: Predizione ML (opzionale)
+            ml_confidence: Confidenza ML (opzionale)
+            llm_prediction: Predizione LLM (opzionale)
+            llm_confidence: Confidenza LLM (opzionale)
+            
+        Returns:
+            case_id: ID del caso creato nella review queue
+        """
+        try:
+            # Genera un case_id unico
+            case_id = f"{self.tenant_name}_{session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_manual"
+            
+            # Crea il caso di review
+            review_case = ReviewCase(
+                case_id=case_id,
+                session_id=session_id,
+                conversation_text=conversation_text,
+                ml_prediction=ml_prediction,
+                ml_confidence=ml_confidence,
+                llm_prediction=llm_prediction,
+                llm_confidence=llm_confidence,
+                uncertainty_score=0.5,
+                novelty_score=0.3,
+                reason=reason,
+                created_at=datetime.now(),
+                tenant=self.tenant_name,
+                cluster_id=-1
+            )
+            
+            # Aggiungi alla cache in-memory
+            self.pending_reviews[case_id] = review_case
+            
+            # Salva anche in MongoDB per persistenza
+            success = self.mongo_reader.mark_session_for_review(
+                session_id=session_id,
+                client_name=self.tenant_name,
+                review_reason=reason,
+                conversation_text=conversation_text
+            )
+            
+            if success:
+                self.logger.info(f"✅ Sessione {session_id} aggiunta alla review queue come {case_id}")
+            else:
+                self.logger.warning(f"⚠️ Sessione {session_id} aggiunta alla cache ma non salvata in MongoDB")
+            
+            return case_id
+            
+        except Exception as e:
+            self.logger.error(f"❌ Errore nell'aggiunta alla review queue: {e}")
+            raise
 
     def _update_human_tags_cache(self, tag: str):
         """

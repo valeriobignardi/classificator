@@ -25,6 +25,10 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Embedd
 from tag_database_connector import TagDatabaseConnector
 from labse_embedder import LaBSEEmbedder
 
+# Import per MongoDB (sostituisce MySQL per le classificazioni)
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__))))
+from mongo_classification_reader import MongoClassificationReader
+
 class SemanticMemoryManager:
     """
     Gestisce la memoria semantica delle classificazioni esistenti per
@@ -71,6 +75,9 @@ class SemanticMemoryManager:
         # Componenti
         self.embedder = embedder or LaBSEEmbedder()
         self.db_connector = TagDatabaseConnector()
+        
+        # MongoDB reader per classificazioni (sostituisce MySQL session_classifications)
+        self.mongo_reader = MongoClassificationReader()
         
         # Crea directory cache prima di tutto
         os.makedirs(self.cache_path, exist_ok=True)
@@ -193,26 +200,24 @@ class SemanticMemoryManager:
         return self._load_from_database()
     
     def _load_from_database(self) -> bool:
-        """Carica la memoria semantica dal database TAG"""
+        """Carica la memoria semantica dal database MongoDB (sostituisce MySQL)"""
         try:
-            self.db_connector.connetti()
+            print(f"🔄 Caricamento memoria semantica da MongoDB...")
             
-            # Query semplificata - prende solo le classificazioni esistenti
-            # I testi delle sessioni verranno ricostruiti al bisogno dal database remoto
-            query = """
-            SELECT session_id, tag_name, confidence_score, classification_method, created_at, notes
-            FROM session_classifications
-            WHERE classification_method IN ('AUTOMATIC', 'MANUAL')
-            ORDER BY created_at DESC
-            """
+            # Usa MongoDB invece di MySQL per le classificazioni
+            # Recupera tutte le sessioni classificate per il tenant corrente
+            tenant_slug = self.tenant_name or "humanitas"  # Default fallback
             
-            classificazioni = self.db_connector.esegui_query(query)
+            classificazioni = self.mongo_reader.get_all_sessions(
+                client_name=tenant_slug, 
+                limit=None  # Tutte le classificazioni
+            )
             
             if not classificazioni:
-                print("📭 Nessuna classificazione trovata nel database")
+                print("📭 Nessuna classificazione trovata nel database MongoDB")
                 return self._initialize_empty_memory()
             
-            print(f"📚 Trovate {len(classificazioni)} classificazioni esistenti")
+            print(f"📚 Trovate {len(classificazioni)} classificazioni esistenti in MongoDB")
             
             # Reset memoria
             self.semantic_memory = {
@@ -227,8 +232,18 @@ class SemanticMemoryManager:
             metadata_by_tag = {}
             label_mappings = {}  # originale -> normalizzata
             
-            for row in classificazioni:
-                session_id, tag_name, confidence, method, created_at, notes = row
+            for doc in classificazioni:
+                # Estrae informazioni dal documento MongoDB
+                session_id = doc.get('session_id', '')
+                tag_name = doc.get('classification', 'altro')  # Campo principale
+                confidence = doc.get('confidence', 0.0)
+                method = doc.get('method', 'UNKNOWN')
+                created_at = doc.get('timestamp', '')
+                conversation_text = doc.get('conversation_text', '')
+                
+                # Skip se dati incompleti
+                if not session_id or not tag_name or not conversation_text:
+                    continue
                 
                 # Normalizza l'etichetta
                 normalized_tag = self._normalize_label(tag_name)
@@ -249,7 +264,7 @@ class SemanticMemoryManager:
                     'confidence': confidence,
                     'method': method,
                     'created_at': created_at,
-                    'notes': notes
+                    'conversation_text': conversation_text[:200] + '...' if len(conversation_text) > 200 else conversation_text
                 })
             
             # Salva i metadati nella memoria semantica
@@ -488,26 +503,23 @@ class SemanticMemoryManager:
         # Se total_sessions è 0 o non presente, prova a recuperarlo fresco dal database
         if total_sessions_database == 0:
             try:
-                self.db_connector.connetti()
-                
-                # Query per ottenere i conteggi per tag
-                query = """
-                SELECT tag_name, COUNT(*) as count
-                FROM session_classifications
-                WHERE classification_method IN ('AUTOMATIC', 'MANUAL')
-                GROUP BY tag_name
-                """
-                
-                results = self.db_connector.esegui_query(query)
+                # Usa MongoDB per ottenere i conteggi freschi
+                tenant_slug = self.tenant_name or "humanitas"
+                all_classifications = self.mongo_reader.get_all_sessions(
+                    client_name=tenant_slug, 
+                    limit=None
+                )
                 
                 total_fresh_count = 0
-                for tag_name, count in results:
-                    normalized_tag = self._normalize_label(tag_name)
-                    if normalized_tag in tags_distribution_database:
-                        tags_distribution_database[normalized_tag] += count
-                    else:
-                        tags_distribution_database[normalized_tag] = count
-                    total_fresh_count += count
+                for doc in all_classifications:
+                    tag_name = doc.get('classification', 'altro')
+                    if tag_name:
+                        normalized_tag = self._normalize_label(tag_name)
+                        if normalized_tag in tags_distribution_database:
+                            tags_distribution_database[normalized_tag] += 1
+                        else:
+                            tags_distribution_database[normalized_tag] = 1
+                        total_fresh_count += 1
                 
                 # Aggiorna la memoria con i conteggi freschi
                 total_sessions_database = total_fresh_count
@@ -655,17 +667,25 @@ class SemanticMemoryManager:
         print("🧹 Analisi duplicati etichette...")
         
         try:
-            self.db_connector.connetti()
+            # Usa MongoDB per ottenere le etichette uniche
+            tenant_slug = self.tenant_name or "humanitas"
+            all_classifications = self.mongo_reader.get_all_sessions(
+                client_name=tenant_slug, 
+                limit=None
+            )
             
-            # Ottieni tutte le etichette uniche
-            query = "SELECT DISTINCT tag_name FROM session_classifications ORDER BY tag_name"
-            result = self.db_connector.esegui_query(query)
-            
-            if not result:
+            if not all_classifications:
                 print("📭 Nessuna etichetta trovata")
                 return {'status': 'no_labels'}
             
-            labels = [row[0] for row in result]
+            # Estrai le etichette uniche
+            labels = set()
+            for doc in all_classifications:
+                tag_name = doc.get('classification', '')
+                if tag_name and tag_name.strip():
+                    labels.add(tag_name)
+            
+            labels = sorted(list(labels))
             print(f"📋 Trovate {len(labels)} etichette uniche: {labels}")
             
             # Trova duplicati
@@ -690,36 +710,31 @@ class SemanticMemoryManager:
                 print(f"  🔄 Unifica: {similar_labels}")
                 
                 if not dry_run:
-                    # Esegui unificazione
+                    # Esegui unificazione usando MongoDB
                     for similar_label in similar_labels[1:]:  # Salta il primo (quello da mantenere)
-                        update_query = """
-                        UPDATE session_classifications 
-                        SET tag_name = %s 
-                        WHERE tag_name = %s
-                        """
+                        # Per ora skip l'unificazione automatica su MongoDB
+                        # Questo richiederebbe una funzione update_many sul mongo_reader
+                        print(f"    ⚠️ Unificazione {similar_label} → {canonical} SKIPPED (MongoDB)")
+                        print(f"    💡 Implementare update_classification_tags nel MongoClassificationReader")
                         
-                        affected_rows = self.db_connector.esegui_comando(
-                            update_query, 
-                            (canonical, similar_label)
-                        )
-                        
-                        if affected_rows is not None:
-                            print(f"    ✅ {similar_label} → {canonical} ({affected_rows} righe)")
-                            report['operations'].append({
-                                'from': similar_label,
-                                'to': canonical,
-                                'affected_rows': affected_rows
-                            })
-                        else:
-                            print(f"    ❌ Errore aggiornamento {similar_label}")
+                        report['operations'].append({
+                            'from': similar_label,
+                            'to': canonical,
+                            'affected_rows': 0,  # Non implementato ancora
+                            'status': 'skipped_mongodb'
+                        })
                 else:
-                    # Solo dry run
+                    # Solo dry run - conta usando MongoDB
                     for similar_label in similar_labels[1:]:
-                        count_query = "SELECT COUNT(*) FROM session_classifications WHERE tag_name = %s"
-                        count_result = self.db_connector.esegui_query(count_query, (similar_label,))
-                        count = count_result[0][0] if count_result else 0
+                        # Conta documenti con questo tag in MongoDB
+                        tenant_slug = self.tenant_name or "humanitas"
+                        all_docs = self.mongo_reader.get_all_sessions(
+                            client_name=tenant_slug, 
+                            limit=None
+                        )
+                        count = sum(1 for doc in all_docs if doc.get('classification') == similar_label)
                         
-                        print(f"    🔄 {similar_label} → {canonical} ({count} righe)")
+                        print(f"    🔄 {similar_label} → {canonical} ({count} documenti)")
                         report['operations'].append({
                             'from': similar_label,
                             'to': canonical,

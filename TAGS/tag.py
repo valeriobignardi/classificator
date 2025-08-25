@@ -45,32 +45,57 @@ class IntelligentTagSuggestionManager:
             raise Exception(f"Errore nel parsing del file YAML: {e}")
     
     def _setup_logger(self):
-        """Setup del logger per questo modulo"""
-        logger = logging.getLogger(f"{__name__}.IntelligentTagSuggestionManager")
-        if not logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-            logger.setLevel(logging.INFO)
+        """Setup del logger per il modulo"""
+        logger = logging.getLogger('IntelligentTagSuggestion')
+        
+        if logger.hasHandlers():
+            logger.handlers.clear()
+        
+        logger.setLevel(logging.INFO)
+        
+        # Handler per console
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        
+        # Formatter
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        console_handler.setFormatter(formatter)
+        
+        logger.addHandler(console_handler)
+        
         return logger
     
-    def has_existing_classifications(self, client_name: str) -> bool:
+    def _resolve_tenant_id_from_name(self, client_name: str) -> str:
         """
-        Controlla se esistono classificazioni nel database per il cliente.
+        Risolve un client_name nel tenant_id corrispondente riutilizzando
+        la logica esistente di mongo_classification_reader.
+        
+        SICUREZZA MULTI-TENANT: Questo metodo garantisce che ogni client
+        veda solo i tag del proprio tenant, prevenendo data leak.
         
         Args:
-            client_name (str): Nome del cliente (es. 'Humanitas')
+            client_name (str): Nome del cliente/tenant (es. "alleanza", "bosch")
             
         Returns:
-            bool: True se il cliente ha classificazioni esistenti, False altrimenti
+            str: tenant_id UUID del tenant corrispondente
+            
+        Raises:
+            Exception: Se il tenant non è trovato o non è attivo
+            
+        Note:
+            Riutilizza la logica testata di mongo_classification_reader.get_tenant_info_from_name()
+            per garantire coerenza nell'architettura multi-tenant.
+            
+        Last modified: 23/08/2025 - Valerio Bignardi
         """
         try:
-            # Connessione diretta al database delle classificazioni (database locale TAG)
+            # Connessione al database locale TAG per tabella tenants
             import mysql.connector
             from mysql.connector import Error
             
-            db_config = self.config['tag_database']  # Usa il database locale TAG
+            db_config = self.config['tag_database']  # Database locale TAG 
             connection = mysql.connector.connect(
                 host=db_config['host'],
                 port=db_config['port'],
@@ -82,45 +107,119 @@ class IntelligentTagSuggestionManager:
             
             cursor = connection.cursor()
             
-            # Query per verificare se esistono classificazioni per questo tenant
+            # Query identica a mongo_classification_reader.get_tenant_info_from_name()
+            # Cerca per tenant_name OR tenant_slug per massima flessibilità
             query = """
-            SELECT COUNT(*) as count
-            FROM session_classifications 
-            WHERE tenant_name = %s AND tag_name IS NOT NULL AND tag_name != ''
+            SELECT tenant_id, tenant_slug, tenant_name 
+            FROM tenants 
+            WHERE (tenant_name = %s OR tenant_slug = %s) AND is_active = 1 
+            LIMIT 1
             """
             
-            cursor.execute(query, (client_name,))
+            cursor.execute(query, (client_name, client_name))
             result = cursor.fetchone()
             
             cursor.close()
             connection.close()
             
             if result:
-                count = result[0]
-                exists = count > 0
-                self.logger.info(f"Cliente '{client_name}': {count} classificazioni esistenti - {'Esistente' if exists else 'Nuovo'}")
-                return exists
+                tenant_id, tenant_slug, tenant_name = result
+                self.logger.info(f"✅ Risolto client '{client_name}' → tenant_id: {tenant_id} ({tenant_name})")
+                return tenant_id
+            else:
+                error_msg = f"❌ MULTI-TENANT SECURITY: Tenant '{client_name}' non trovato o non attivo"
+                self.logger.error(error_msg)
+                raise Exception(error_msg)
+                
+        except Error as e:
+            error_msg = f"❌ Errore risoluzione tenant_id per '{client_name}': {e}"
+            self.logger.error(error_msg)
+            raise Exception(error_msg)
+    
+    def has_existing_classifications(self, client_name: str) -> bool:
+        """
+        Controlla se esistono classificazioni in MongoDB per il cliente.
+        MIGRAZIONE: Ora cerca nella collection MongoDB del tenant invece che in MySQL.
+        
+        Args:
+            client_name (str): Nome del cliente (es. 'alleanza', 'bosch')
             
-            return False
+        Returns:
+            bool: True se il cliente ha classificazioni esistenti, False altrimenti
+            
+        Note:
+            Cerca nella collection MongoDB usando pattern {tenant_slug}_{tenant_id}
+            e conta i documenti con classificazioni valide (non 'altro').
+            
+        Last modified: 23/08/2025 - Valerio Bignardi
+        """
+        try:
+            # STEP 1: Risolvi client_name → tenant_id per MongoDB
+            tenant_id = self._resolve_tenant_id_from_name(client_name)
+            
+            # STEP 2: Genera nome collection usando pattern {tenant_slug}_{tenant_id}
+            # Per Alleanza: alleanza_a0fd7600-f4f7-11ef-9315-96000228e7fe
+            collection_name = f"{client_name.lower()}_{tenant_id}"
+            
+            # STEP 3: Connessione a MongoDB
+            from pymongo import MongoClient
+            
+            mongodb_config = self.config['mongodb']
+            client = MongoClient(mongodb_config['url'])
+            db = client[mongodb_config['database']]  # 'classificazioni'
+            collection = db[collection_name]
+            
+            # STEP 4: Conta documenti con classificazioni valide
+            # Esclude 'altro' perché è tag generico quando LLM non trova match specifico
+            count = collection.count_documents({
+                'classification': {
+                    '$exists': True, 
+                    '$ne': None, 
+                    '$ne': '', 
+                    '$ne': 'altro'
+                }
+            })
+            
+            client.close()
+            
+            exists = count > 0
+            self.logger.info(f"🔍 Cliente '{client_name}': {count} classificazioni valide in MongoDB - {'Esistente' if exists else 'Nuovo'}")
+            self.logger.debug(f"   Collection: {collection_name}")
+            
+            return exists
             
         except Exception as e:
-            self.logger.error(f"Errore nel controllo classificazioni esistenti per {client_name}: {e}")
+            self.logger.error(f"❌ Errore controllo classificazioni esistenti per '{client_name}': {e}")
+            # Fallback sicuro: assume cliente nuovo per evitare errori critici
             return False
     
     def get_suggested_tags_for_client(self, client_name: str) -> List[Dict[str, Any]]:
         """
         Ottiene i tag suggeriti per un cliente dalla tabella TAGS.tags.
-        Tutti i clienti ricevono tutti i tag disponibili come suggerimenti.
+        SICUREZZA MULTI-TENANT: Ogni cliente riceve SOLO i tag del proprio tenant.
         
         Args:
-            client_name (str): Nome del cliente
+            client_name (str): Nome del cliente/tenant
             
         Returns:
-            List[Dict]: Lista di tag suggeriti con metadati
+            List[Dict]: Lista di tag suggeriti con metadati del tenant
+            
+        Raises:
+            Exception: Se il tenant non è trovato o non attivo
+            
+        Note:
+            Implementa isolamento multi-tenant risolvendo client_name → tenant_id
+            e filtrando i tag per tenant specifico.
+            
+        Last modified: 23/08/2025 - Valerio Bignardi
         """
         try:
-            # Ottieni tutti i tag dalla tabella TAGS.tags
-            all_tags = self._get_all_available_tags()
+            # STEP 1: Risolvi client_name → tenant_id per sicurezza multi-tenant
+            tenant_id = self._resolve_tenant_id_from_name(client_name)
+            self.logger.info(f"🔒 MULTI-TENANT: Client '{client_name}' → Tenant ID: {tenant_id}")
+            
+            # STEP 2: Ottieni SOLO i tag del tenant specificato
+            all_tags = self._get_all_available_tags(tenant_id)
             
             # Se il cliente ha classificazioni esistenti, ordina i tag per uso frequente
             if self.has_existing_classifications(client_name):
@@ -156,13 +255,22 @@ class IntelligentTagSuggestionManager:
             self.logger.error(f"Errore nel recupero suggerimenti per {client_name}: {e}")
             return []
     
-    def _get_all_available_tags(self) -> List[Dict[str, Any]]:
+    def _get_all_available_tags(self, tenant_id: str) -> List[Dict[str, Any]]:
         """
-        Ottiene tutti i tag disponibili dalla tabella TAGS.tags.
-        Rimuove duplicati basandosi sul tag_name.
+        Ottiene tutti i tag disponibili dalla tabella TAGS.tags per un tenant specifico.
+        SICUREZZA MULTI-TENANT: Filtra i risultati per tenant_id.
         
+        Args:
+            tenant_id (str): ID del tenant per cui recuperare i tag
+            
         Returns:
-            List[Dict]: Lista di tutti i tag disponibili con metadati
+            List[Dict]: Lista di tag disponibili del tenant con metadati
+            
+        Note:
+            Implementa isolamento multi-tenant tramite filtro WHERE tenant_id = %s
+            nella query SQL per prevenire data leak tra tenant diversi.
+            
+        Last modified: 23/08/2025 - Valerio Bignardi
         """
         try:
             # Connessione diretta al database TAG
@@ -181,17 +289,19 @@ class IntelligentTagSuggestionManager:
             
             cursor = connection.cursor()
             
-            # Query per ottenere tutti i tag UNICI dalla tabella tags
+            # SICUREZZA MULTI-TENANT: Query filtra per tenant_id specifico
             query = """
             SELECT MIN(id) as id, tag_name, 
                    MAX(tag_description) as tag_description, 
                    MIN(created_at) as created_at
             FROM tags 
+            WHERE tenant_id = %s
             GROUP BY tag_name
             ORDER BY tag_name ASC
             """
             
-            cursor.execute(query)
+            self.logger.debug(f"🔒 Executing tenant-filtered query for tenant_id: {tenant_id}")
+            cursor.execute(query, (tenant_id,))
             result = cursor.fetchall()
             
             cursor.close()
@@ -216,60 +326,80 @@ class IntelligentTagSuggestionManager:
     
     def _get_tag_usage_stats(self, client_name: str) -> Dict[str, Dict[str, Any]]:
         """
-        Ottiene le statistiche di utilizzo dei tag per un cliente dalle classificazioni esistenti.
+        Ottiene le statistiche di utilizzo dei tag per un cliente dalle classificazioni MongoDB.
+        MIGRAZIONE: Ora cerca nella collection MongoDB del tenant invece che in MySQL.
         
         Args:
             client_name (str): Nome del cliente
             
         Returns:
             Dict: Statistiche di utilizzo per tag name
+            
+        Note:
+            Usa aggregation pipeline MongoDB per calcolare COUNT e AVG per ogni tag.
+            Equivalente alla query SQL: SELECT tag, COUNT(*), AVG(confidence) GROUP BY tag
+            
+        Last modified: 23/08/2025 - Valerio Bignardi
         """
         try:
-            # Connessione diretta al database TAG
-            import mysql.connector
-            from mysql.connector import Error
+            # STEP 1: Risolvi client_name → tenant_id per MongoDB  
+            tenant_id = self._resolve_tenant_id_from_name(client_name)
             
-            db_config = self.config['tag_database']
-            connection = mysql.connector.connect(
-                host=db_config['host'],
-                port=db_config['port'],
-                user=db_config['user'],
-                password=db_config['password'],
-                database=db_config['database'],
-                autocommit=True
-            )
+            # STEP 2: Genera nome collection usando pattern {tenant_slug}_{tenant_id}
+            collection_name = f"{client_name.lower()}_{tenant_id}"
             
-            cursor = connection.cursor()
+            # STEP 3: Connessione a MongoDB
+            from pymongo import MongoClient
             
-            # Query per statistiche di utilizzo
-            query = """
-            SELECT tag_name, COUNT(*) as count, AVG(confidence_score) as avg_confidence
-            FROM session_classifications 
-            WHERE tenant_name = %s 
-                AND tag_name IS NOT NULL 
-                AND tag_name != ''
-            GROUP BY tag_name
-            ORDER BY count DESC
-            """
+            mongodb_config = self.config['mongodb']
+            client = MongoClient(mongodb_config['url'])
+            db = client[mongodb_config['database']]
+            collection = db[collection_name]
             
-            cursor.execute(query, (client_name,))
-            result = cursor.fetchall()
-            
-            cursor.close()
-            connection.close()
-            
-            usage_stats = {}
-            if result:
-                for row in result:
-                    usage_stats[row[0]] = {
-                        'count': row[1],
-                        'avg_confidence': float(row[2]) if row[2] else 0.0
+            # STEP 4: Aggregation pipeline per statistiche utilizzo tag
+            pipeline = [
+                # Filtra solo classificazioni valide (non 'altro')
+                {
+                    '$match': {
+                        'classification': {
+                            '$exists': True,
+                            '$ne': None,
+                            '$ne': '',
+                            '$ne': 'altro'
+                        }
                     }
+                },
+                # Raggruppa per classification e calcola statistiche
+                {
+                    '$group': {
+                        '_id': '$classification',
+                        'count': {'$sum': 1},
+                        'avg_confidence': {'$avg': '$confidence'}
+                    }
+                },
+                # Ordina per frequenza decrescente
+                {
+                    '$sort': {'count': -1}
+                }
+            ]
             
+            results = list(collection.aggregate(pipeline))
+            client.close()
+            
+            # STEP 5: Converte risultati nel formato atteso
+            usage_stats = {}
+            for result in results:
+                tag_name = result['_id']
+                usage_stats[tag_name] = {
+                    'count': result['count'],
+                    'avg_confidence': float(result['avg_confidence']) if result['avg_confidence'] else 0.0
+                }
+            
+            self.logger.info(f"📊 Cliente '{client_name}': statistiche utilizzo per {len(usage_stats)} tag")
             return usage_stats
             
         except Exception as e:
-            self.logger.error(f"Errore nel recupero statistiche utilizzo per {client_name}: {e}")
+            self.logger.error(f"❌ Errore recupero statistiche utilizzo per '{client_name}': {e}")
             return {}
 
     def _get_automatic_classification_tags(self, client_name: str) -> List[Dict[str, Any]]:

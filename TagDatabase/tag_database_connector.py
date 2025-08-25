@@ -329,11 +329,11 @@ class TagDatabaseConnector:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """
             
-            # Esegue le query di creazione
+            # Esegue le query di creazione (RIMOSSA session_classifications - ora solo MongoDB)
             tables = [
                 ("tenants", create_tenants_table),
-                ("tags", create_tags_table),
-                ("session_classifications", create_session_classifications_table)
+                ("tags", create_tags_table)
+                # RIMOSSO: ("session_classifications", create_session_classifications_table) - usa MongoDB
             ]
             
             for table_name, query in tables:

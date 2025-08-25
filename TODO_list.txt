@@ -1,0 +1,5 @@
+1. controllare che il modello di addestramenot ML sia salvato con un nome multi_tenant
+2. dire di modificare affinchè sia saltata l'addestramento su tutte le conversazioni a men oche l'utente non abbia 
+premuto su FORCE_review, dove a quel punto (Se esiste per quel tenant) cancella il modello di addestramento dell'ML e lo ricrea, altrimenti carica quello esiste con fallback, dove se non trova un modello per quel teant lo genera con la funzioen apposita. 
+3. modificare il frontend per vedere in review queue solo i rappresentnti dei cluster e solo se premo su vedi ti fa vedere tutte le altre sessioni, organizzando per cluster la visualizzazione. 
+4. esportare in interfaccia grafica le impostazioni per modificare i parametri del clustering e vedere graficamente i risultati

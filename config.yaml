@@ -19,15 +19,28 @@ mongodb:
   # Collection usata: client_session_classifications
 
 # ===============================
-# Configurazione BERTopic feature
+# Configurazione BERTopic feature - OTTIMIZZATO PER DATASET GRANDI
 # ===============================
 bertopic:
-  enabled: true          # Riabilitato - i modelli corrotti sono stati rimossi
-  top_k: 15               # Numero di topic-prob da concatenare
+  enabled: true          # Abilitato con ottimizzazioni per grandi dataset
+  top_k: 10               # RIDOTTO per performance (era 15)
   return_one_hot: false   # Non includere one-hot del topic principale
   model_subdir: "bertopic" # Sotto-cartella del modello per il provider
   use_svd: true           # Abilita riduzione SVD sulle full probas
-  svd_components: 32      # Dimensione target SVD
+  svd_components: 20      # RIDOTTO per performance (era 32)
+  
+  # 🆕 Parametri UMAP ottimizzati per grandi dataset
+  umap_params:
+    n_neighbors: 10       # RIDOTTO per velocità (default 15)
+    n_components: 3       # RIDOTTO per velocità (default 5)  
+    min_dist: 0.05        # Ottimizzato per clustering
+    metric: 'euclidean'   # Più veloce di cosine
+    
+  # 🆕 Parametri HDBSCAN ottimizzati  
+  hdbscan_params:
+    min_cluster_size: 8   # Cluster più grandi per stabilità
+    min_samples: 4        # Meno sensibile al rumore
+    metric: 'euclidean'   # Consistente con UMAP
 
 # =====================================
 # CONFIGURAZIONE DEBUG LLM/ML SYSTEM
@@ -72,24 +85,24 @@ debug:
     max_file_size_mb: 50           # Dimensione massima file (MB)
     rotate_files: true             # Rotazione automatica file
 
-# Configurazione parametri di clustering HDBSCAN
+# Configurazione parametri di clustering HDBSCAN - OTTIMIZZATO PER DATASET GRANDI
 clustering:
-  # Parametri principali HDBSCAN - TUNING PER RIDURRE OUTLIER
-  min_cluster_size: 3              # Dimensione minima dei cluster (AUMENTATO a 3 per ridurre outlier)
-  min_samples: 2                   # Numero minimo di campioni per formare un cluster denso (AUMENTATO a 2)
-  cluster_selection_epsilon: 0.05  # Distanza massima per considerare punti come cluster (AUMENTATO a 0.05)
-  metric: 'cosine'                 # Metrica di distanza - RITORNATO a cosine per embeddings
+  # Parametri principali HDBSCAN - OTTIMIZZATO PER VELOCITÀ SU DATASET GRANDI
+  min_cluster_size: 5              # AUMENTATO per ridurre complessità computazionale
+  min_samples: 3                   # AUMENTATO per cluster più stabili
+  cluster_selection_epsilon: 0.08  # AUMENTATO per maggiore raggruppamento
+  metric: 'euclidean'              # CAMBIATO da cosine per performance UMAP
   
   # Parametri avanzati
-  cluster_selection_method: 'eom'  # Metodo di selezione cluster (CAMBIATO a 'eom' per meno outlier)
+  cluster_selection_method: 'eom'  # Metodo di selezione cluster ottimizzato
   allow_single_cluster: false      # Permetti un singolo cluster gigante
   
   # Parametri per rappresentanti di cluster
-  n_representatives: 3             # Numero di rappresentanti per cluster
+  n_representatives: 2             # RIDOTTO per velocità
   
   # Soglie di qualità
-  min_silhouette_score: 0.2        # Soglia minima per silhouette score
-  max_outlier_ratio: 0.3           # Ratio massimo di outlier accettabile (RIDOTTO da 0.7 a 0.3)
+  min_silhouette_score: 0.1        # RIDOTTO per accettare più cluster
+  max_outlier_ratio: 0.4           # AUMENTATO per tollerare più outlier
 
 # Configurazione clustering gerarchico adattivo
 hierarchical_clustering:
@@ -153,10 +166,11 @@ pipeline:
   new_category_detection: true             # ABILITATO: per auto-discovery tag via BERTopic
   embedding_similarity_threshold: 0.85     # Soglia similarità per matching semantico
   
-  # Sistema di fallback intelligente BERTopic
-  bertopic_fallback_threshold: 0.70        # Se confidence < soglia → BERTopic discovery
+  # Sistema di fallback intelligente BERTopic - DISABILITATO per caso "altro"
+  bertopic_fallback_threshold: 0.0         # DISABILITATO: BERTopic fallback non adatto per singole classificazioni
   new_tag_similarity_threshold: 0.75       # Se similarità < soglia → crea nuovo tag
   auto_tag_creation: true                   # Permetti creazione automatica tag
+  llm_confidence_threshold: 0.85            # Soglia per auto-creazione tag da LLM
 
   # Riaddestramento automatico all'inizializzazione
   auto_retrain_on_init: false     # DISABILITATO: Modello già trainato (90.1% accuracy)

@@ -133,6 +133,122 @@ def get_prompts_for_tenant(tenant_id: str):
         }), 500
 
 
+# COMMENTATO: Endpoint ridondante - L'UI usa direttamente /api/prompts/{tenant_id}/status
+# @app.route('/api/prompts/tenant/<tenant_id>/status', methods=['GET'])
+# def get_prompts_status_for_tenant(tenant_id: str):
+#     """
+#     Recupera lo status dei prompt per un tenant specifico (accetta tenant_slug)
+#     
+#     GET /api/prompts/tenant/alleanza/status
+#     
+#     Returns:
+#         {
+#             "tenant_id": "alleanza",
+#             "tenant_name": "Alleanza",
+#             "total_prompts": 5,
+#             "active_prompts": 3,
+#             "inactive_prompts": 2,
+#             "last_updated": "2025-01-16T10:00:00",
+#             "status": "ready"
+#         }
+#     """
+#     try:
+#         print(f"🔍 API: Recupero status prompt per tenant_slug: {tenant_id}")
+#         
+#         prompt_manager = PromptManager()
+#         prompts = prompt_manager.get_all_prompts_for_tenant(tenant_id)
+#         
+#         # Calcola statistiche
+#         total_prompts = len(prompts)
+#         active_prompts = len([p for p in prompts if p.get('is_active', False)])
+#         inactive_prompts = total_prompts - active_prompts
+#         
+#         # Trova ultimo aggiornamento
+#         last_updated = None
+#         if prompts:
+#             last_updated = max(p.get('updated_at', '') for p in prompts if p.get('updated_at'))
+#         
+#         # Determina tenant name
+#         tenant_name = prompts[0].get('tenant_name', 'unknown') if prompts else 'unknown'
+#         
+#         status = {
+#             "tenant_id": tenant_id,
+#             "tenant_name": tenant_name,
+#             "total_prompts": total_prompts,
+#             "active_prompts": active_prompts,
+#             "inactive_prompts": inactive_prompts,
+#             "last_updated": last_updated,
+#             "status": "ready" if active_prompts > 0 else "no_active_prompts"
+#         }
+#         
+#         print(f"✅ Status prompt per tenant {tenant_id}: {active_prompts}/{total_prompts} attivi")
+#         
+#         return jsonify(status)
+#         
+#     except Exception as e:
+#         print(f"❌ Errore status prompt per tenant {tenant_id}: {e}")
+#         return jsonify({
+#             'error': str(e),
+#             'tenant_id': tenant_id,
+#             'status': 'error'
+#         }), 500
+
+
+@app.route('/api/prompts/<tenant_id>/status', methods=['GET'])
+def get_prompts_status_by_tenant_id(tenant_id: str):
+    """
+    Recupera lo status dei prompt per un tenant usando tenant_id completo
+    
+    GET /api/prompts/a0fd7600-f4f7-11ef-9315-96000228e7fe/status
+    
+    Returns: Stesso formato dell'endpoint sopra
+    """
+    try:
+        print(f"🔍 API: Recupero status prompt per tenant_id completo: {tenant_id}")
+        
+        prompt_manager = PromptManager()
+        
+        # Il PromptManager ora gestisce automaticamente la conversione
+        prompts = prompt_manager.get_all_prompts_for_tenant(tenant_id)
+        
+        # Calcola statistiche
+        total_prompts = len(prompts)
+        active_prompts = len([p for p in prompts if p.get('is_active', False)])
+        inactive_prompts = total_prompts - active_prompts
+        
+        # Trova ultimo aggiornamento
+        last_updated = None
+        if prompts:
+            last_updated = max(p.get('updated_at', '') for p in prompts if p.get('updated_at'))
+        
+        # Determina tenant name
+        tenant_name = prompts[0].get('tenant_name', 'unknown') if prompts else 'unknown'
+        
+        status = {
+            "success": True,  # AGGIUNTO: Campo success richiesto dall'ApiService UI
+            "tenant_id": tenant_id,
+            "tenant_name": tenant_name,
+            "total_prompts": total_prompts,
+            "active_prompts": active_prompts,
+            "inactive_prompts": inactive_prompts,
+            "last_updated": last_updated,
+            "status": "ready" if active_prompts > 0 else "no_active_prompts"
+        }
+        
+        print(f"✅ Status prompt per tenant_id {tenant_id}: {active_prompts}/{total_prompts} attivi")
+        
+        return jsonify(status)
+        
+    except Exception as e:
+        print(f"❌ Errore status prompt per tenant_id {tenant_id}: {e}")
+        return jsonify({
+            'success': False,  # AGGIUNTO: Campo success per coerenza
+            'error': str(e),
+            'tenant_id': tenant_id,
+            'status': 'error'
+        }), 500
+
+
 @app.route('/api/prompts/<int:prompt_id>', methods=['GET'])
 def get_prompt_by_id(prompt_id: int):
     """

@@ -28,9 +28,21 @@ class ApiService {
     }
   }
 
-  async getReviewCases(tenant: string, limit: number = 20): Promise<{ cases: ReviewCase[]; total: number }> {
+  async getReviewCases(tenant: string, limit: number = 20, includePropagated: boolean = false): Promise<{ cases: ReviewCase[]; total: number }> {
     return this.handleRequest(
       axios.get(`${API_BASE_URL}/review/${tenant}/cases`, {
+        params: { 
+          limit,
+          include_propagated: includePropagated
+        }
+      })
+    );
+  }
+
+  // 🆕 Nuovo metodo per cluster view - mostra solo rappresentanti per default
+  async getClusterCases(tenant: string, limit: number = 20): Promise<{ clusters: any[]; total: number }> {
+    return this.handleRequest(
+      axios.get(`${API_BASE_URL}/review/${tenant}/clusters`, {
         params: { limit }
       })
     );

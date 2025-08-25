@@ -18,7 +18,10 @@ import {
   DialogContent,
   DialogActions,
   Tabs,
-  Tab
+  Tab,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails
 } from '@mui/material';
 import {
   Refresh as RefreshIcon,
@@ -26,14 +29,18 @@ import {
   Science as ScienceIcon,
   Assignment as AssignmentIcon,
   School as SchoolIcon,
-  Settings as SettingsIcon,
   ModelTraining as ModelTrainingIcon,
   List as ListIcon,
   CheckCircle as CheckCircleIcon,
-  Warning as WarningIcon
+  Warning as WarningIcon,
+  ExpandMore as ExpandMoreIcon,
+  Group as GroupIcon,
+  Person as PersonIcon,
+  Link as LinkIcon,
+  Star as StarIcon
 } from '@mui/icons-material';
 import { apiService } from '../services/apiService';
-import { ReviewCase } from '../types/ReviewCase';
+import { ReviewCase, ClusterCase } from '../types/ReviewCase';
 import AllSessionsView from './AllSessionsView';
 
 interface ReviewDashboardProps {
@@ -52,6 +59,12 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
   loading
 }) => {
   const [cases, setCases] = useState<ReviewCase[]>([]);
+  // 🆕 Nuovo stato per cluster view
+  const [clusters, setClusters] = useState<ClusterCase[]>([]);
+  const [showClusterView, setShowClusterView] = useState(false); // Default: mostra vista tradizionale
+  const [includePropagated, setIncludePropagated] = useState(false);
+  const [expandedClusters, setExpandedClusters] = useState<Set<string>>(new Set());
+  
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [classificationLoading, setClassificationLoading] = useState(false);
   const [trainingLoading, setTrainingLoading] = useState(false);
@@ -127,31 +140,57 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
 
     try {
       const effectiveLimit = limit || currentLimit;
-      const response = await apiService.getReviewCases(tenant, effectiveLimit);
-      setCases(response.cases);
+      
+      if (showClusterView) {
+        // 🆕 Nuova logica: carica cluster con rappresentanti
+        const response = await apiService.getClusterCases(tenant, effectiveLimit);
+        setClusters(response.clusters || []);
+        setCases([]); // Reset cases quando in cluster view
+      } else {
+        // Logica esistente: carica tutti i casi
+        const response = await apiService.getReviewCases(tenant, effectiveLimit, includePropagated);
+        setCases(response.cases);
+        setClusters([]); // Reset clusters quando in traditional view
+      }
     } catch (err) {
       setError('Errore nel caricamento dei casi');
       console.error('Error loading cases:', err);
     } finally {
       setDashboardLoading(false);
     }
-  }, [tenant, currentLimit]);
+  }, [tenant, currentLimit, showClusterView, includePropagated]);
 
-  const handleRefreshCases = () => {
-    loadCases();
+  // 🆕 Funzione per espandere/contrarre cluster
+  const toggleCluster = (clusterId: string) => {
+    const newExpanded = new Set(expandedClusters);
+    if (newExpanded.has(clusterId)) {
+      newExpanded.delete(clusterId);
+    } else {
+      newExpanded.add(clusterId);
+    }
+    setExpandedClusters(newExpanded);
   };
+
+  // 🆕 Funzione per gestire il toggle della vista
+  const handleViewToggle = () => {
+    setShowClusterView(!showClusterView);
+    // Reset expanded quando cambiamo vista
+    setExpandedClusters(new Set());
+  };
+
+  // 🆕 Funzione per gestire il toggle "include propagated" 
+  const handleIncludePropagatedToggle = () => {
+    setIncludePropagated(!includePropagated);
+  };
+
+  const handleRefreshCases = useCallback(() => {
+    loadCases();
+  }, [loadCases]);
 
   const handleLimitChange = (newLimit: number) => {
     setCurrentLimit(newLimit);
     setCustomLimit('');
     loadCases(newLimit);
-  };
-
-  const handleCustomLimitSubmit = () => {
-    const limit = typeof customLimit === 'string' ? parseInt(customLimit, 10) : customLimit;
-    if (!isNaN(limit) && limit > 0) {  // RIMOSSO LIMITE MASSIMO: ora accetta qualsiasi numero positivo
-      handleLimitChange(limit);
-    }
   };
 
   const handleStartSupervisedTraining = async () => {
@@ -396,7 +435,10 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
             label={
               <Box display="flex" alignItems="center" gap={1}>
                 <AssignmentIcon />
-                Review Queue ({cases.length})
+                {showClusterView 
+                  ? `Review Queue - Cluster (${clusters.length} cluster)`
+                  : `Review Queue - Lista (${cases.length} casi)`
+                }
               </Box>
             } 
           />
@@ -416,22 +458,74 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
         // Review Queue Content (existing content)
         <div>
 
+          {/* 🆕 Controlli Vista Cluster */}
+          <Card sx={{ mb: 3, backgroundColor: '#f0f8ff', borderLeft: '4px solid #1976d2' }}>
+            <CardContent>
+              <Box display="flex" justifyContent="space-between" alignItems="center">
+                <Box display="flex" alignItems="center" gap={2}>
+                  <GroupIcon color="primary" />
+                  <Typography variant="h6" color="primary">
+                    {showClusterView ? "👑 Vista per Cluster - Solo Rappresentanti" : "📋 Vista Tradizionale - Tutti i Casi"}
+                  </Typography>
+                </Box>
+                <Box display="flex" alignItems="center" gap={2}>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={showClusterView}
+                        onChange={handleViewToggle}
+                        disabled={dashboardLoading}
+                      />
+                    }
+                    label={showClusterView ? "Cluster View" : "Lista Completa"}
+                  />
+                  {!showClusterView && (
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={includePropagated}
+                          onChange={handleIncludePropagatedToggle}
+                          disabled={dashboardLoading}
+                          size="small"
+                        />
+                      }
+                      label="Include Propagated"
+                      sx={{ fontSize: '0.75rem' }}
+                    />
+                  )}
+                </Box>
+              </Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                {showClusterView 
+                  ? "📊 Mostra solo i rappresentanti di ogni cluster con opzione per espandere e vedere le sessioni ereditate"
+                  : "📋 Mostra tutti i casi in review queue con la logica tradizionale"
+                }
+              </Typography>
+            </CardContent>
+          </Card>
+
           {/* Rimossa sezione "Configurazione Coda Revisione" ridondante */}
-          {/* I parametri di analisi sono configurabili nel dialogo Training Supervisionato */}
+          {/* I parametri di analisi sono configurabili nel dialogo Training Supervisionado */}
           
-          {/* Info Card per guidare l'utente - mostra solo se ci sono casi */}
-          {cases.length > 0 && (
+          {/* Info Card per guidare l'utente - aggiornato per cluster view */}
+          {(showClusterView ? clusters.length > 0 : cases.length > 0) && (
             <Card sx={{ mb: 3, backgroundColor: '#e8f5e8' }}>
               <CardContent>
                 <Box display="flex" alignItems="center" gap={2}>
                   <CheckCircleIcon color="success" />
                   <Box>
                     <Typography variant="body1" fontWeight="bold">
-                      🎯 Casi Pronti per Revisione ({cases.length})
+                      {showClusterView 
+                        ? `🎯 Cluster Pronti per Revisione (${clusters.length} cluster)`
+                        : `🎯 Casi Pronti per Revisione (${cases.length})`
+                      }
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
-                      Il training supervisionato ha identificato questi casi per la revisione umana. 
-                      <strong>Prossimo passo:</strong> Clicca sui casi per rivederli, poi usa "Riaddestra Modello" per aggiornare l'AI.
+                      {showClusterView 
+                        ? "Il training supervisionato ha organizzato i casi in cluster. Ogni cluster ha un rappresentante e sessioni propagate. Clicca sui rappresentanti o espandi per vedere il dettaglio."
+                        : "Il training supervisionado ha identificato questi casi per la revisione umana."
+                      }
+                      <strong>Prossimo passo:</strong> Rivedi i casi selezionati, poi usa "Riaddestra Modello" per aggiornare l'AI.
                     </Typography>
                   </Box>
                 </Box>
@@ -440,7 +534,7 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
           )}
 
           {/* Info Card per quando non ci sono casi */}
-          {cases.length === 0 && !dashboardLoading && (
+          {(showClusterView ? clusters.length === 0 : cases.length === 0) && !dashboardLoading && (
             <Card sx={{ mb: 3, backgroundColor: '#f5f5f5' }}>
               <CardContent>
                 <Box display="flex" alignItems="center" gap={2}>
@@ -453,208 +547,550 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
             </Card>
           )}
 
-          {/* Cases Grid */}
-          {cases.length === 0 && !dashboardLoading ? (
-            <Card>
-              <CardContent sx={{ textAlign: 'center', py: 6 }}>
-                <AssignmentIcon sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
-                <Typography variant="h5" gutterBottom>
-                  Nessun caso da rivedere
-                </Typography>
-                <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-                  Tutti i casi sono stati processati correttamente o non ci sono nuovi casi che richiedono supervisione umana.
-                </Typography>
-                <Button
-                  variant="contained"
-                  startIcon={<ScienceIcon />}
-                  onClick={() => {
-                    onCreateMockCases();
-                  }}
-                  disabled={loading || classificationLoading || !uiConfig}
-                >
-                  Crea Casi Mock per Test
-                </Button>
-              </CardContent>
-            </Card>
-          ) : (
-            <Box display="flex" flexWrap="wrap" gap={3}>
-              {cases.map((caseItem) => (
-                <Box key={caseItem.case_id} flex="1 1 calc(50% - 12px)" minWidth="300px">
-                  <Card 
-                    sx={{ 
-                      height: '100%',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s',
-                      '&:hover': {
-                        transform: 'translateY(-2px)',
-                        boxShadow: 3
-                      }
-                    }}
-                    onClick={() => onCaseSelect(caseItem)}
-                  >
-                    <CardContent>
-                      {/* Header */}
-                      <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-                        <Typography variant="h6" component="div">
-                          Sessione: {(caseItem.session_id || '').substring(0, 12)}...
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          {caseItem.created_at}
-                        </Typography>
-                      </Box>
-
-                      {/* Reason */}
-                      <Box mb={2}>
-                        {(caseItem.reason || '').split(';').map((reason, index) => (
-                          <Chip
-                            key={index}
-                            label={reason.trim()}
-                            color={getReasonColor(reason)}
-                            size="small"
-                            sx={{ mr: 0.5, mb: 0.5 }}
-                          />
-                        ))}
-                      </Box>
-
-                      {/* Predictions Comparison - ENHANCED */}
-                      <Box 
+          {/* 🆕 CONDITIONAL RENDERING: Cluster View vs Traditional View */}
+          {showClusterView ? (
+            // 🆕 CLUSTER VIEW - Mostra solo rappresentanti con opzione per espandere
+            <>
+              {clusters.length === 0 && !dashboardLoading ? (
+                <Card>
+                  <CardContent sx={{ textAlign: 'center', py: 6 }}>
+                    <GroupIcon sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
+                    <Typography variant="h5" gutterBottom>
+                      Nessun cluster da rivedere
+                    </Typography>
+                    <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
+                      Non ci sono cluster organizzati per la revisione. Prova ad eseguire il Training Supervisionado.
+                    </Typography>
+                    <Button
+                      variant="contained"
+                      startIcon={<ScienceIcon />}
+                      onClick={() => {
+                        onCreateMockCases();
+                      }}
+                      disabled={loading || classificationLoading || !uiConfig}
+                    >
+                      Crea Casi Mock per Test
+                    </Button>
+                  </CardContent>
+                </Card>
+              ) : (
+                <Box display="flex" flexDirection="column" gap={2}>
+                  {clusters.map((cluster) => (
+                    <Accordion 
+                      key={cluster.cluster_id} 
+                      expanded={expandedClusters.has(cluster.cluster_id)}
+                      onChange={() => toggleCluster(cluster.cluster_id)}
+                      sx={{ 
+                        border: '2px solid #e0e0e0',
+                        borderRadius: 2,
+                        '&:before': { display: 'none' },
+                        '&.Mui-expanded': {
+                          margin: '0 0 8px 0',
+                          borderColor: '#1976d2'
+                        }
+                      }}
+                    >
+                      <AccordionSummary
+                        expandIcon={<ExpandMoreIcon />}
                         sx={{ 
-                          border: '2px solid',
-                          borderColor: caseItem.ml_prediction === caseItem.llm_prediction ? 'success.main' : 'warning.main',
-                          borderRadius: 2,
-                          p: 2,
-                          mb: 2,
-                          background: caseItem.ml_prediction === caseItem.llm_prediction 
-                            ? 'linear-gradient(45deg, #e8f5e8 50%, #e8f5e8 50%)'
-                            : 'linear-gradient(45deg, #ffe8e8 50%, #fff3cd 50%)'
+                          backgroundColor: '#f8f9fa',
+                          borderRadius: '8px 8px 0 0',
+                          '&.Mui-expanded': {
+                            backgroundColor: '#e3f2fd'
+                          }
                         }}
                       >
-                        {/* Agreement/Disagreement Indicator */}
-                        <Box display="flex" alignItems="center" justifyContent="space-between" mb={1}>
-                          <Typography variant="subtitle2" fontWeight="bold" color="text.primary">
-                            🤖 PREDIZIONI MODELLI
-                          </Typography>
-                          <Chip
-                            icon={caseItem.ml_prediction === caseItem.llm_prediction ? 
-                              <CheckCircleIcon /> : <WarningIcon />}
-                            label={caseItem.ml_prediction === caseItem.llm_prediction ? 
-                              "ACCORDO" : "DISACCORDO"}
-                            color={caseItem.ml_prediction === caseItem.llm_prediction ? 
-                              "success" : "warning"}
-                            size="small"
-                            sx={{ fontWeight: 'bold' }}
-                          />
-                        </Box>
-
-                        <Box display="flex" gap={2}>
-                          <Box 
-                            flex={1}
-                            sx={{
-                              border: '1px solid #1976d2',
-                              borderRadius: 1,
-                              p: 1.5,
-                              backgroundColor: '#e3f2fd'
-                            }}
-                          >
-                            <Typography variant="subtitle2" fontWeight="bold" color="primary">
-                              🧠 ML Prediction
-                            </Typography>
-                            <Typography 
-                              variant="h6" 
-                              color="primary" 
-                              sx={{ fontWeight: 'bold', my: 0.5 }}
-                            >
-                              {caseItem.ml_prediction || 'N/A'}
-                            </Typography>
-                            <Chip
-                              label={`Confidenza: ${((caseItem.ml_confidence || 0) * 100).toFixed(1)}%`}
-                              color={getConfidenceColor(caseItem.ml_confidence || 0)}
-                              size="small"
-                              sx={{ fontWeight: 'bold' }}
-                            />
+                        <Box display="flex" alignItems="center" justifyContent="space-between" width="100%">
+                          <Box display="flex" alignItems="center" gap={2}>
+                            <StarIcon color="primary" />
+                            <Box>
+                              <Typography variant="h6" component="div">
+                                👑 Cluster {cluster.cluster_id} - Rappresentante
+                              </Typography>
+                              <Typography variant="body2" color="text.secondary">
+                                Sessione: {(cluster.representative?.session_id || '').substring(0, 12)}... 
+                                • {cluster.total_sessions} sessioni totali ({cluster.propagated_sessions?.length || 0} ereditate)
+                              </Typography>
+                            </Box>
                           </Box>
-                          
-                          <Box 
-                            flex={1}
-                            sx={{
-                              border: '1px solid #ff9800',
-                              borderRadius: 1,
-                              p: 1.5,
-                              backgroundColor: '#fff3e0'
-                            }}
-                          >
-                            <Typography variant="subtitle2" fontWeight="bold" color="warning.main">
-                              🤖 LLM Prediction
-                            </Typography>
-                            <Typography 
-                              variant="h6" 
-                              color="warning.main" 
-                              sx={{ fontWeight: 'bold', my: 0.5 }}
-                            >
-                              {caseItem.llm_prediction || 'N/A'}
-                            </Typography>
+                          <Box display="flex" alignItems="center" gap={1}>
                             <Chip
-                              label={`Confidenza: ${((caseItem.llm_confidence || 0) * 100).toFixed(1)}%`}
-                              color={getConfidenceColor(caseItem.llm_confidence || 0)}
+                              icon={<PersonIcon />}
+                              label="Rappresentante"
+                              color="primary"
                               size="small"
-                              sx={{ fontWeight: 'bold' }}
+                              sx={{ mr: 1 }}
                             />
+                            {(cluster.propagated_sessions?.length || 0) > 0 && (
+                              <Chip
+                                icon={<LinkIcon />}
+                                label={`${cluster.propagated_sessions?.length} Ereditate`}
+                                color="secondary"
+                                size="small"
+                                variant="outlined"
+                              />
+                            )}
                           </Box>
                         </Box>
+                      </AccordionSummary>
+                      <AccordionDetails sx={{ p: 0 }}>
+                        {/* Render del Rappresentante - Card principale */}
+                        <Box sx={{ p: 2, backgroundColor: '#f0f8ff', borderBottom: '1px solid #e0e0e0' }}>
+                          {cluster.representative && (
+                            <Card 
+                              sx={{ 
+                                cursor: 'pointer',
+                                transition: 'all 0.2s',
+                                border: '2px solid #1976d2',
+                                '&:hover': {
+                                  transform: 'translateY(-2px)',
+                                  boxShadow: 3
+                                }
+                              }}
+                              onClick={() => onCaseSelect(cluster.representative)}
+                            >
+                              <CardContent>
+                                {/* Header con indicatore rappresentante */}
+                                <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+                                  <Box display="flex" alignItems="center" gap={1}>
+                                    <StarIcon color="primary" />
+                                    <Typography variant="h6" component="div" color="primary">
+                                      👑 RAPPRESENTANTE
+                                    </Typography>
+                                  </Box>
+                                  <Typography variant="body2" color="text.secondary">
+                                    {cluster.representative.created_at}
+                                  </Typography>
+                                </Box>
 
-                        {/* Best Prediction Indicator */}
-                        {(caseItem.ml_confidence || 0) !== (caseItem.llm_confidence || 0) && (
-                          <Box mt={1} textAlign="center">
-                            <Typography variant="caption" color="text.secondary">
-                              💡 Miglior confidenza: {
-                                (caseItem.ml_confidence || 0) > (caseItem.llm_confidence || 0) 
-                                  ? `ML (${((caseItem.ml_confidence || 0) * 100).toFixed(1)}%)`
-                                  : `LLM (${((caseItem.llm_confidence || 0) * 100).toFixed(1)}%)`
-                              }
+                                {/* Reason */}
+                                <Box mb={2}>
+                                  {(cluster.representative.reason || '').split(';').map((reason, index) => (
+                                    <Chip
+                                      key={index}
+                                      label={reason.trim()}
+                                      color={getReasonColor(reason)}
+                                      size="small"
+                                      sx={{ mr: 0.5, mb: 0.5 }}
+                                    />
+                                  ))}
+                                </Box>
+
+                                {/* Predictions Comparison */}
+                                <Box 
+                                  sx={{ 
+                                    border: '2px solid',
+                                    borderColor: cluster.representative.ml_prediction === cluster.representative.llm_prediction ? 'success.main' : 'warning.main',
+                                    borderRadius: 2,
+                                    p: 2,
+                                    mb: 2,
+                                    background: cluster.representative.ml_prediction === cluster.representative.llm_prediction 
+                                      ? 'linear-gradient(45deg, #e8f5e8 50%, #e8f5e8 50%)'
+                                      : 'linear-gradient(45deg, #ffe8e8 50%, #fff3cd 50%)'
+                                  }}
+                                >
+                                  <Box display="flex" alignItems="center" justifyContent="space-between" mb={1}>
+                                    <Typography variant="subtitle2" fontWeight="bold" color="text.primary">
+                                      🤖 PREDIZIONI MODELLI
+                                    </Typography>
+                                    <Chip
+                                      icon={cluster.representative.ml_prediction === cluster.representative.llm_prediction ? 
+                                        <CheckCircleIcon /> : <WarningIcon />}
+                                      label={cluster.representative.ml_prediction === cluster.representative.llm_prediction ? 
+                                        "ACCORDO" : "DISACCORDO"}
+                                      color={cluster.representative.ml_prediction === cluster.representative.llm_prediction ? 
+                                        "success" : "warning"}
+                                      size="small"
+                                      sx={{ fontWeight: 'bold' }}
+                                    />
+                                  </Box>
+
+                                  <Box display="flex" gap={2}>
+                                    <Box 
+                                      flex={1}
+                                      sx={{
+                                        border: '1px solid #1976d2',
+                                        borderRadius: 1,
+                                        p: 1.5,
+                                        backgroundColor: '#e3f2fd'
+                                      }}
+                                    >
+                                      <Typography variant="subtitle2" fontWeight="bold" color="primary">
+                                        🧠 ML Prediction
+                                      </Typography>
+                                      <Typography 
+                                        variant="h6" 
+                                        color="primary" 
+                                        sx={{ fontWeight: 'bold', my: 0.5 }}
+                                      >
+                                        {cluster.representative.ml_prediction || 'N/A'}
+                                      </Typography>
+                                      <Chip
+                                        label={`Confidenza: ${((cluster.representative.ml_confidence || 0) * 100).toFixed(1)}%`}
+                                        color={getConfidenceColor(cluster.representative.ml_confidence || 0)}
+                                        size="small"
+                                        sx={{ fontWeight: 'bold' }}
+                                      />
+                                    </Box>
+                                    
+                                    <Box 
+                                      flex={1}
+                                      sx={{
+                                        border: '1px solid #ff9800',
+                                        borderRadius: 1,
+                                        p: 1.5,
+                                        backgroundColor: '#fff3e0'
+                                      }}
+                                    >
+                                      <Typography variant="subtitle2" fontWeight="bold" color="warning.main">
+                                        🤖 LLM Prediction
+                                      </Typography>
+                                      <Typography 
+                                        variant="h6" 
+                                        color="warning.main" 
+                                        sx={{ fontWeight: 'bold', my: 0.5 }}
+                                      >
+                                        {cluster.representative.llm_prediction || 'N/A'}
+                                      </Typography>
+                                      <Chip
+                                        label={`Confidenza: ${((cluster.representative.llm_confidence || 0) * 100).toFixed(1)}%`}
+                                        color={getConfidenceColor(cluster.representative.llm_confidence || 0)}
+                                        size="small"
+                                        sx={{ fontWeight: 'bold' }}
+                                      />
+                                    </Box>
+                                  </Box>
+                                </Box>
+
+                                {/* Conversation Preview */}
+                                <Box 
+                                  sx={{ 
+                                    backgroundColor: 'grey.100',
+                                    borderRadius: 1,
+                                    p: 2,
+                                    mb: 2,
+                                    maxHeight: 100,
+                                    overflow: 'hidden'
+                                  }}
+                                >
+                                  <Typography variant="body2">
+                                    {cluster.representative.conversation_text.length > 200
+                                      ? `${cluster.representative.conversation_text.substring(0, 200)}...`
+                                      : cluster.representative.conversation_text}
+                                  </Typography>
+                                </Box>
+
+                                {/* Metrics */}
+                                <Box display="flex" justifyContent="space-between" alignItems="center">
+                                  <Box>
+                                    <Typography variant="caption" color="text.secondary">
+                                      Uncertainty: {cluster.representative.uncertainty_score.toFixed(3)}
+                                    </Typography>
+                                  </Box>
+                                  <Box>
+                                    <Typography variant="caption" color="text.secondary">
+                                      Novelty: {cluster.representative.novelty_score.toFixed(3)}
+                                    </Typography>
+                                  </Box>
+                                  <Button size="small" variant="contained" color="primary">
+                                    👑 Rivedi Rappresentante
+                                  </Button>
+                                </Box>
+                              </CardContent>
+                            </Card>
+                          )}
+                        </Box>
+
+                        {/* Render delle Sessioni Propagate se presenti */}
+                        {cluster.propagated_sessions && cluster.propagated_sessions.length > 0 && (
+                          <Box sx={{ p: 2, backgroundColor: '#fafafa' }}>
+                            <Typography variant="h6" sx={{ mb: 2, color: 'text.secondary' }}>
+                              🔗 Sessioni Ereditate ({cluster.propagated_sessions.length})
                             </Typography>
+                            <Box display="flex" flexWrap="wrap" gap={2}>
+                              {cluster.propagated_sessions.map((propagatedCase) => (
+                                <Box key={propagatedCase.case_id} flex="1 1 calc(50% - 8px)" minWidth="300px">
+                                  <Card 
+                                    sx={{ 
+                                      cursor: 'pointer',
+                                      transition: 'all 0.2s',
+                                      border: '1px dashed #bbb',
+                                      backgroundColor: '#f9f9f9',
+                                      '&:hover': {
+                                        transform: 'translateY(-2px)',
+                                        boxShadow: 2,
+                                        backgroundColor: '#f0f0f0'
+                                      }
+                                    }}
+                                    onClick={() => onCaseSelect(propagatedCase)}
+                                  >
+                                    <CardContent>
+                                      <Box display="flex" alignItems="center" gap={1} mb={1}>
+                                        <LinkIcon color="secondary" />
+                                        <Typography variant="subtitle2" color="secondary">
+                                          🔗 Ereditata da Cluster {cluster.cluster_id}
+                                        </Typography>
+                                      </Box>
+                                      <Typography variant="body2" component="div">
+                                        Sessione: {(propagatedCase.session_id || '').substring(0, 12)}...
+                                      </Typography>
+                                      <Typography variant="caption" color="text.secondary">
+                                        {propagatedCase.created_at}
+                                      </Typography>
+                                      <Box mt={1}>
+                                        <Typography variant="body2" color="text.secondary">
+                                          {propagatedCase.conversation_text.length > 100
+                                            ? `${propagatedCase.conversation_text.substring(0, 100)}...`
+                                            : propagatedCase.conversation_text}
+                                        </Typography>
+                                      </Box>
+                                      <Box display="flex" justifyContent="space-between" alignItems="center" mt={1}>
+                                        <Typography variant="caption" color="text.secondary">
+                                          Pred: {propagatedCase.ml_prediction || 'N/A'}
+                                        </Typography>
+                                        <Button size="small" variant="outlined" color="secondary">
+                                          🔗 Rivedi Ereditata
+                                        </Button>
+                                      </Box>
+                                    </CardContent>
+                                  </Card>
+                                </Box>
+                              ))}
+                            </Box>
                           </Box>
                         )}
-                      </Box>
-
-                      {/* Conversation Preview */}
-                      <Box 
-                        sx={{ 
-                          backgroundColor: 'grey.100',
-                          borderRadius: 1,
-                          p: 2,
-                          mb: 2,
-                          maxHeight: 100,
-                          overflow: 'hidden'
-                        }}
-                      >
-                        <Typography variant="body2">
-                          {caseItem.conversation_text.length > 200
-                            ? `${caseItem.conversation_text.substring(0, 200)}...`
-                            : caseItem.conversation_text}
-                        </Typography>
-                      </Box>
-
-                      {/* Metrics */}
-                      <Box display="flex" justifyContent="space-between" alignItems="center">
-                        <Box>
-                          <Typography variant="caption" color="text.secondary">
-                            Uncertainty: {caseItem.uncertainty_score.toFixed(3)}
-                          </Typography>
-                        </Box>
-                        <Box>
-                          <Typography variant="caption" color="text.secondary">
-                            Novelty: {caseItem.novelty_score.toFixed(3)}
-                          </Typography>
-                        </Box>
-                        <Button size="small" variant="outlined">
-                          Rivedi Caso
-                        </Button>
-                      </Box>
-                    </CardContent>
-                  </Card>
+                      </AccordionDetails>
+                    </Accordion>
+                  ))}
                 </Box>
-              ))}
-            </Box>
+              )}
+            </>
+          ) : (
+            // TRADITIONAL VIEW - Rendering esistente
+            <>
+              {cases.length === 0 && !dashboardLoading ? (
+                <Card>
+                  <CardContent sx={{ textAlign: 'center', py: 6 }}>
+                    <AssignmentIcon sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
+                    <Typography variant="h5" gutterBottom>
+                      Nessun caso da rivedere
+                    </Typography>
+                    <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
+                      Tutti i casi sono stati processati correttamente o non ci sono nuovi casi che richiedono supervisione umana.
+                    </Typography>
+                    <Button
+                      variant="contained"
+                      startIcon={<ScienceIcon />}
+                      onClick={() => {
+                        onCreateMockCases();
+                      }}
+                      disabled={loading || classificationLoading || !uiConfig}
+                    >
+                      Crea Casi Mock per Test
+                    </Button>
+                  </CardContent>
+                </Card>
+              ) : (
+                <Box display="flex" flexWrap="wrap" gap={3}>
+                  {cases.map((caseItem) => (
+                    <Box key={caseItem.case_id} flex="1 1 calc(50% - 12px)" minWidth="300px">
+                      <Card 
+                        sx={{ 
+                          height: '100%',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s',
+                          // 🆕 Indicatore visivo per rappresentanti vs propagate
+                          border: caseItem.is_representative === false 
+                            ? '2px dashed #ff9800' 
+                            : '2px solid #1976d2',
+                          backgroundColor: caseItem.is_representative === false 
+                            ? '#fff8e1' 
+                            : 'white',
+                          '&:hover': {
+                            transform: 'translateY(-2px)',
+                            boxShadow: 3
+                          }
+                        }}
+                        onClick={() => onCaseSelect(caseItem)}
+                      >
+                        <CardContent>
+                          {/* Header con indicatore propagazione */}
+                          <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+                            <Box display="flex" alignItems="center" gap={1}>
+                              {caseItem.is_representative === false ? <LinkIcon color="secondary" /> : <StarIcon color="primary" />}
+                              <Typography variant="h6" component="div">
+                                Sessione: {(caseItem.session_id || '').substring(0, 12)}...
+                              </Typography>
+                            </Box>
+                            <Box display="flex" flexDirection="column" alignItems="end">
+                              <Typography variant="body2" color="text.secondary">
+                                {caseItem.created_at}
+                              </Typography>
+                              {/* 🆕 Indicatore di propagazione */}
+                              <Chip
+                                icon={caseItem.is_representative === false ? <LinkIcon /> : <StarIcon />}
+                                label={caseItem.is_representative === false ? "🔗 Ereditata" : "👑 Rappresentante"}
+                                color={caseItem.is_representative === false ? "secondary" : "primary"}
+                                size="small"
+                                variant={caseItem.is_representative === false ? "outlined" : "filled"}
+                              />
+                            </Box>
+                          </Box>
+
+                          {/* Reason */}
+                          <Box mb={2}>
+                            {(caseItem.reason || '').split(';').map((reason, index) => (
+                              <Chip
+                                key={index}
+                                label={reason.trim()}
+                                color={getReasonColor(reason)}
+                                size="small"
+                                sx={{ mr: 0.5, mb: 0.5 }}
+                              />
+                            ))}
+                          </Box>
+
+                          {/* Predictions Comparison - ENHANCED */}
+                          <Box 
+                            sx={{ 
+                              border: '2px solid',
+                              borderColor: caseItem.ml_prediction === caseItem.llm_prediction ? 'success.main' : 'warning.main',
+                              borderRadius: 2,
+                              p: 2,
+                              mb: 2,
+                              background: caseItem.ml_prediction === caseItem.llm_prediction 
+                                ? 'linear-gradient(45deg, #e8f5e8 50%, #e8f5e8 50%)'
+                                : 'linear-gradient(45deg, #ffe8e8 50%, #fff3cd 50%)'
+                            }}
+                          >
+                            {/* Agreement/Disagreement Indicator */}
+                            <Box display="flex" alignItems="center" justifyContent="space-between" mb={1}>
+                              <Typography variant="subtitle2" fontWeight="bold" color="text.primary">
+                                🤖 PREDIZIONI MODELLI
+                              </Typography>
+                              <Chip
+                                icon={caseItem.ml_prediction === caseItem.llm_prediction ? 
+                                  <CheckCircleIcon /> : <WarningIcon />}
+                                label={caseItem.ml_prediction === caseItem.llm_prediction ? 
+                                  "ACCORDO" : "DISACCORDO"}
+                                color={caseItem.ml_prediction === caseItem.llm_prediction ? 
+                                  "success" : "warning"}
+                                size="small"
+                                sx={{ fontWeight: 'bold' }}
+                              />
+                            </Box>
+
+                            <Box display="flex" gap={2}>
+                              <Box 
+                                flex={1}
+                                sx={{
+                                  border: '1px solid #1976d2',
+                                  borderRadius: 1,
+                                  p: 1.5,
+                                  backgroundColor: '#e3f2fd'
+                                }}
+                              >
+                                <Typography variant="subtitle2" fontWeight="bold" color="primary">
+                                  🧠 ML Prediction
+                                </Typography>
+                                <Typography 
+                                  variant="h6" 
+                                  color="primary" 
+                                  sx={{ fontWeight: 'bold', my: 0.5 }}
+                                >
+                                  {caseItem.ml_prediction || 'N/A'}
+                                </Typography>
+                                <Chip
+                                  label={`Confidenza: ${((caseItem.ml_confidence || 0) * 100).toFixed(1)}%`}
+                                  color={getConfidenceColor(caseItem.ml_confidence || 0)}
+                                  size="small"
+                                  sx={{ fontWeight: 'bold' }}
+                                />
+                              </Box>
+                              
+                              <Box 
+                                flex={1}
+                                sx={{
+                                  border: '1px solid #ff9800',
+                                  borderRadius: 1,
+                                  p: 1.5,
+                                  backgroundColor: '#fff3e0'
+                                }}
+                              >
+                                <Typography variant="subtitle2" fontWeight="bold" color="warning.main">
+                                  🤖 LLM Prediction
+                                </Typography>
+                                <Typography 
+                                  variant="h6" 
+                                  color="warning.main" 
+                                  sx={{ fontWeight: 'bold', my: 0.5 }}
+                                >
+                                  {caseItem.llm_prediction || 'N/A'}
+                                </Typography>
+                                <Chip
+                                  label={`Confidenza: ${((caseItem.llm_confidence || 0) * 100).toFixed(1)}%`}
+                                  color={getConfidenceColor(caseItem.llm_confidence || 0)}
+                                  size="small"
+                                  sx={{ fontWeight: 'bold' }}
+                                />
+                              </Box>
+                            </Box>
+
+                            {/* Best Prediction Indicator */}
+                            {(caseItem.ml_confidence || 0) !== (caseItem.llm_confidence || 0) && (
+                              <Box mt={1} textAlign="center">
+                                <Typography variant="caption" color="text.secondary">
+                                  💡 Miglior confidenza: {
+                                    (caseItem.ml_confidence || 0) > (caseItem.llm_confidence || 0) 
+                                      ? `ML (${((caseItem.ml_confidence || 0) * 100).toFixed(1)}%)`
+                                      : `LLM (${((caseItem.llm_confidence || 0) * 100).toFixed(1)}%)`
+                                  }
+                                </Typography>
+                              </Box>
+                            )}
+                          </Box>
+
+                          {/* Conversation Preview */}
+                          <Box 
+                            sx={{ 
+                              backgroundColor: 'grey.100',
+                              borderRadius: 1,
+                              p: 2,
+                              mb: 2,
+                              maxHeight: 100,
+                              overflow: 'hidden'
+                            }}
+                          >
+                            <Typography variant="body2">
+                              {caseItem.conversation_text.length > 200
+                                ? `${caseItem.conversation_text.substring(0, 200)}...`
+                                : caseItem.conversation_text}
+                            </Typography>
+                          </Box>
+
+                          {/* Metrics */}
+                          <Box display="flex" justifyContent="space-between" alignItems="center">
+                            <Box>
+                              <Typography variant="caption" color="text.secondary">
+                                Uncertainty: {caseItem.uncertainty_score.toFixed(3)}
+                              </Typography>
+                            </Box>
+                            <Box>
+                              <Typography variant="caption" color="text.secondary">
+                                Novelty: {caseItem.novelty_score.toFixed(3)}
+                              </Typography>
+                            </Box>
+                            <Button size="small" variant="outlined">
+                              {caseItem.is_representative === false ? "🔗 Rivedi Ereditata" : "👑 Rivedi Rappresentante"}
+                            </Button>
+                          </Box>
+                        </CardContent>
+                      </Card>
+                    </Box>
+                  ))}
+                </Box>
+              )}
+            </>
           )}
         </div>
       )}

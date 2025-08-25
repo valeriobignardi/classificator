@@ -95,6 +95,9 @@ class EndToEndPipeline:
         # Inizializza helper per naming tenant-aware
         self.mongo_reader = MongoClassificationReader()
         
+        # Mappa tenant_slug -> tenant_id UUID reale
+        self.tenant_id = self._resolve_tenant_id_from_slug(tenant_slug)
+        
         # Carica configurazione
         if config_path is None:
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
@@ -153,7 +156,10 @@ class EndToEndPipeline:
         )
         # Non serve più classifier separato - tutto nell'ensemble
         # self.classifier = rimosso, ora tutto in ensemble_classifier
-        self.tag_db = TagDatabaseConnector()
+        self.tag_db = TagDatabaseConnector(
+            tenant_id=self.tenant_id,
+            tenant_name=self.tenant_slug.title()
+        )
         
         # Inizializza il gestore della memoria semantica
         print("🧠 Inizializzazione memoria semantica...")
@@ -173,8 +179,11 @@ class EndToEndPipeline:
             confidence_threshold=self.confidence_threshold,
             adaptive_weights=True,
             performance_tracking=True,
-            client_name=self.tenant_slug  # Passa il nome del tenant come client_name per fine-tuning
+            client_name=self.tenant_slug  # CORRETTO: Passa il tenant_slug per MongoDB collections
         )
+        
+        # Assegna client_name per retrocompatibilità
+        self.client_name = self.tenant_slug
         
         # Prova a caricare l'ultimo modello ML salvato
         self._try_load_latest_model()
@@ -203,7 +212,7 @@ class EndToEndPipeline:
         self.interactive_trainer = InteractiveTrainer(
             llm_classifier=llm_classifier, 
             auto_mode=self.auto_mode,
-            tenant_id=self.client_name,  # Usa client_name come tenant_id
+            tenant_id=self.tenant_id,  # Usa tenant_id UUID corretto
             bertopic_model=None  # Sarà inizializzato dopo il clustering
         )
         
@@ -306,6 +315,48 @@ class EndToEndPipeline:
             
         return sessioni_filtrate
     
+    def _resolve_tenant_id_from_slug(self, tenant_slug: str) -> str:
+        """
+        Risolve il tenant_slug (es: 'alleanza') nel corretto tenant_id UUID.
+        
+        Args:
+            tenant_slug: Slug del tenant (es: 'alleanza', 'humanitas')
+            
+        Returns:
+            str: Tenant ID UUID corretto per il database TAG
+        """
+        try:
+            # Import del connettore per database remoto
+            sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'MySql'))
+            from connettore import MySqlConnettore
+            
+            # Connessione al database remoto per recuperare il tenant_id
+            remote = MySqlConnettore()
+            
+            # Query per trovare il tenant_id dal tenant_database (slug)
+            query = """
+            SELECT tenant_id, tenant_name 
+            FROM common.tenants 
+            WHERE tenant_database = %s AND tenant_status = 1
+            """
+            
+            result = remote.esegui_query(query, (tenant_slug,))
+            remote.disconnetti()
+            
+            if result and len(result) > 0:
+                tenant_id, tenant_name = result[0]
+                print(f"🔍 Risoluzione tenant: '{tenant_slug}' -> '{tenant_id}' ({tenant_name})")
+                return tenant_id
+            else:
+                print(f"⚠️ Tenant '{tenant_slug}' non trovato, uso fallback 'humanitas'")
+                # Fallback al tenant humanitas se non trovato
+                return "humanitas"
+                
+        except Exception as e:
+            print(f"❌ Errore risoluzione tenant '{tenant_slug}': {e}")
+            print(f"   Uso fallback 'humanitas'")
+            return "humanitas"
+    
     def _addestra_bertopic_anticipato(self, sessioni: Dict[str, Dict], embeddings: np.ndarray) -> Optional[Any]:
         """
         Addestra BERTopic sui testi completi PRIMA del clustering per ottimizzare le features.
@@ -324,6 +375,31 @@ class EndToEndPipeline:
         if not _BERTopic_AVAILABLE:
             print("❌ BERTopic SALTATO: Dipendenze non installate")
             print("   💡 Installare: pip install bertopic umap hdbscan")
+            return None
+            
+        n_samples = len(sessioni)
+        
+        # 🛠️ CONTROLLO DATASET SIZE: se troppo piccolo, salta BERTopic
+        if n_samples < 25:  # Soglia minima per BERTopic affidabile
+            print(f"⚠️ Dataset troppo piccolo per BERTopic ({n_samples} < 25 campioni)")
+            print("   🔄 Salto training BERTopic - il sistema userà solo clustering LLM")
+            
+            # 🆕 SALVA WARNING PER INTERFACCIA UTENTE
+            warning_info = {
+                'type': 'dataset_too_small_for_bertopic',
+                'current_size': n_samples,
+                'minimum_required': 25,
+                'recommended_size': 50,
+                'message': f'Dataset troppo piccolo ({n_samples} campioni) per BERTopic clustering. ' +
+                          f'Minimo: 25, raccomandato: 50+ campioni. Clustering semplificato in uso.',
+                'impact': 'BERTopic clustering disabilitato, features ridotte per ML ensemble'
+            }
+            
+            # Salva warning in un attributo della classe per il retrieval
+            if not hasattr(self, 'training_warnings'):
+                self.training_warnings = []
+            self.training_warnings.append(warning_info)
+            
             return None
             
         try:
@@ -397,6 +473,10 @@ class EndToEndPipeline:
         self._bertopic_provider_trained = self._addestra_bertopic_anticipato(sessioni, embeddings)
         if self._bertopic_provider_trained:
             print(f"   ✅ BERTopic provider disponibile per augmentation features")
+            # Assegna il modello BERTopic al trainer interattivo per validazione "altro"
+            if hasattr(self._bertopic_provider_trained, 'model'):
+                self.interactive_trainer.bertopic_model = self._bertopic_provider_trained.model
+                print(f"   🔗 BERTopic model assegnato al trainer per validazione ALTRO")
         else:
             print(f"   ⚠️ BERTopic provider non disponibile, proseguo con sole embeddings")
         
@@ -760,6 +840,23 @@ class EndToEndPipeline:
         print("🎓 Training ensemble ML avanzato...")
         metrics = self.ensemble_classifier.train_ml_ensemble(ml_features, train_labels)
         
+        # 🆕 ASSICURA CHE BERTOPIC PROVIDER SIA SEMPRE INIETTATO NELL'ENSEMBLE
+        # Inietta il provider anche se non è stato usato per il training
+        final_bertopic_provider = bertopic_provider or getattr(self, '_bertopic_provider_trained', None)
+        if final_bertopic_provider is not None:
+            print(f"🔗 INIEZIONE FINALE BERTOPIC PROVIDER NELL'ENSEMBLE:")
+            try:
+                self.ensemble_classifier.set_bertopic_provider(
+                    final_bertopic_provider,
+                    top_k=self.bertopic_config.get('top_k', 15),
+                    return_one_hot=self.bertopic_config.get('return_one_hot', False)
+                )
+                print(f"   ✅ BERTopic provider definitivamente iniettato per inferenza futura")
+            except Exception as e:
+                print(f"   ⚠️ Errore iniezione finale BERTopic: {e}")
+        else:
+            print(f"🔗 Nessun BERTopic provider disponibile per iniezione finale")
+        
         # Salva il modello ensemble e l'eventuale provider BERTopic
         model_name = self.mongo_reader.generate_model_name(self.tenant_slug, "classifier")
         self.ensemble_classifier.save_ensemble_model(f"models/{model_name}")
@@ -826,6 +923,51 @@ class EndToEndPipeline:
             metrics.update({
                 'propagation_stats': propagation_stats
             })
+            
+            # 🆕 RIADDESTRAMENTO AUTOMATICO POST-TRAINING INTERATTIVO
+            print(f"\n🔄 RIADDESTRAMENTO AUTOMATICO POST-TRAINING INTERATTIVO")
+            print(f"   📊 Training labels disponibili: {len(train_labels)}")
+            print(f"   🎯 Classi unique: {len(set(train_labels))}")
+            
+            if len(train_labels) >= 10 and len(set(train_labels)) >= 2:
+                print(f"   ✅ Dati sufficienti per riaddestramento automatico")
+                print(f"   🔄 Avvio riaddestramento forzato ML ensemble con etichette umane...")
+                
+                try:
+                    # Forza riaddestramento ML ensemble con le etichette corrette dall'umano
+                    retrain_metrics = self.ensemble_classifier.train_ml_ensemble(
+                        ml_features, train_labels, force_retrain=True
+                    )
+                    print(f"   ✅ Riaddestramento completato con successo")
+                    print(f"   📊 Nuova accuracy: {retrain_metrics.get('accuracy', 'N/A'):.3f}")
+                    
+                    # Aggiorna il modello salvato con la versione riaddestrata
+                    model_name_retrained = self.mongo_reader.generate_model_name(
+                        self.tenant_slug, f"classifier_retrained_{datetime.now().strftime('%H%M%S')}"
+                    )
+                    self.ensemble_classifier.save_ensemble_model(f"models/{model_name_retrained}")
+                    print(f"   💾 Modello riaddestrato salvato come: {model_name_retrained}")
+                    
+                    # Aggiorna metrics con info riaddestramento
+                    metrics.update({
+                        'auto_retrained': True,
+                        'retrain_metrics': retrain_metrics,
+                        'retrained_model_name': model_name_retrained
+                    })
+                    
+                except Exception as retrain_error:
+                    print(f"   ❌ ERRORE nel riaddestramento automatico: {retrain_error}")
+                    metrics.update({
+                        'auto_retrained': False,
+                        'retrain_error': str(retrain_error)
+                    })
+            else:
+                print(f"   ⚠️ Dati insufficienti per riaddestramento automatico")
+                print(f"   💡 Minimo richiesto: 10 campioni e 2+ classi")
+                metrics.update({
+                    'auto_retrained': False,
+                    'retrain_skip_reason': f'insufficient_data_{len(train_labels)}_samples_{len(set(train_labels))}_classes'
+                })
         else:
             metrics['interactive_review'] = False
         
@@ -1069,6 +1211,30 @@ class EndToEndPipeline:
                     confidence = prediction.get('ensemble_confidence', prediction['confidence'])
                     predicted_label = prediction['predicted_label']
                     
+                    # 🆕 VALIDAZIONE "ALTRO" CON LLM + BERTopic + SIMILARITÀ
+                    if predicted_label == 'altro' and hasattr(self, 'interactive_trainer') and self.interactive_trainer.altro_validator:
+                        try:
+                            conversation_text = sessioni[session_id].get('testo_completo', '')
+                            if conversation_text:
+                                # Esegui validazione del tag "altro"
+                                validated_label, validated_confidence, validation_info = self.interactive_trainer.handle_altro_classification(
+                                    conversation_text=conversation_text,
+                                    force_human_decision=False  # Automatico durante training
+                                )
+                                
+                                # Usa il risultato della validazione se diverso da "altro"
+                                if validated_label != 'altro':
+                                    predicted_label = validated_label
+                                    confidence = validated_confidence
+                                    method = f"{method}_ALTRO_VAL"  # Marca che è stato validato
+                                    
+                                    if i < 10:  # Debug per le prime 10
+                                        print(f"🔍 Sessione {i+1}: ALTRO→'{validated_label}' (path: {validation_info.get('validation_path', 'unknown')})")
+                        
+                        except Exception as e:
+                            print(f"⚠️ Errore validazione ALTRO per sessione {i+1}: {e}")
+                            # Continua con predicted_label = 'altro' originale
+                    
                     # Debug delle classificazioni interessanti
                     if i < 5 or (i + 1) % 50 == 0:  # Prime 5 e ogni 50
                         print(f"🏷️  Sessione {i+1}: '{predicted_label}' (conf: {confidence:.3f}, metodo: {method})")
@@ -1089,23 +1255,146 @@ class EndToEndPipeline:
                     method = 'ML_AUTO'
                     confidence = prediction['confidence']
                     predicted_label = prediction['predicted_label']
+                    
+                    # 🆕 VALIDAZIONE "ALTRO" ANCHE PER ML_AUTO 
+                    if predicted_label == 'altro' and hasattr(self, 'interactive_trainer') and self.interactive_trainer.altro_validator:
+                        try:
+                            conversation_text = sessioni[session_id].get('testo_completo', '')
+                            if conversation_text:
+                                # Esegui validazione del tag "altro"
+                                validated_label, validated_confidence, validation_info = self.interactive_trainer.handle_altro_classification(
+                                    conversation_text=conversation_text,
+                                    force_human_decision=False  # Automatico durante training
+                                )
+                                
+                                # Usa il risultato della validazione se diverso da "altro"
+                                if validated_label != 'altro':
+                                    predicted_label = validated_label
+                                    confidence = validated_confidence
+                                    method = f"{method}_ALTRO_VAL"  # Marca che è stato validato
+                                    
+                                    if i < 10:  # Debug per le prime 10
+                                        print(f"🔍 Sessione {i+1}: ALTRO→'{validated_label}' (path: {validation_info.get('validation_path', 'unknown')})")
+                        
+                        except Exception as e:
+                            print(f"⚠️ Errore validazione ALTRO per sessione {i+1}: {e}")
+                            # Continua con predicted_label = 'altro' originale
                 
                 # Determina se è alta confidenza
                 is_high_confidence = confidence >= self.confidence_threshold
                 
-                # Salva nel database TAG
-                success = self.tag_db.classifica_sessione(
+                # 🆕 SALVA USANDO SOLO MONGODB (SISTEMA UNIFICATO)
+                from mongo_classification_reader import MongoClassificationReader
+                
+                mongo_reader = MongoClassificationReader()
+                
+                # Estrai dati ensemble se disponibili
+                ml_result = None
+                llm_result = None
+                has_disagreement = False
+                disagreement_score = 0.0
+                
+                if prediction:
+                    # 🆕 SUPPORTO TRAINING SUPERVISIONATO: Converte risultato LLM in struttura ensemble
+                    if prediction.get('method') == 'LLM' and 'ml_prediction' not in prediction:
+                        # Training supervisionato - solo LLM disponibile  
+                        llm_result = {
+                            'predicted_label': prediction.get('predicted_label'),
+                            'confidence': prediction.get('confidence', 0.0),
+                            'motivation': prediction.get('motivation', 'LLM training supervisionato'),
+                            'method': 'LLM'
+                        }
+                        ml_result = None  # ML non disponibile durante training
+                    else:
+                        # Ensemble completo - estrai predizioni separate
+                        ml_prediction_data = prediction.get('ml_prediction')
+                        llm_prediction_data = prediction.get('llm_prediction')
+                        
+                        # Solo se non sono None, preparali per il salvataggio
+                        if ml_prediction_data is not None:
+                            ml_result = ml_prediction_data
+                        
+                        if llm_prediction_data is not None:
+                            llm_result = llm_prediction_data
+                    
+                    # Calcola disagreement se entrambi disponibili
+                    if ml_result and llm_result:
+                        ml_label = ml_result.get('predicted_label', '')
+                        llm_label = llm_result.get('predicted_label', '')
+                        ml_conf = ml_result.get('confidence', 0.0)
+                        llm_conf = llm_result.get('confidence', 0.0)
+                        
+                        has_disagreement = (ml_label != llm_label)
+                        if has_disagreement:
+                            disagreement_score = 1.0
+                        else:
+                            disagreement_score = abs(ml_conf - llm_conf)
+                
+                # Determina se serve review basandosi su ensemble disagreement
+                needs_review = (has_disagreement and disagreement_score > 0.3) or (confidence < 0.7)
+                review_reason = None
+                if needs_review:
+                    if has_disagreement:
+                        review_reason = f"ensemble_disagreement_{disagreement_score:.2f}"
+                    else:
+                        review_reason = f"low_confidence_{confidence:.2f}"
+                
+                # Ottieni dati sessione
+                session_data = sessioni[session_id]
+                
+                # 🆕 COSTRUISCI CLUSTER METADATA per classificazione ottimizzata
+                cluster_metadata = None
+                if optimize_clusters and prediction:
+                    # Estrai metadati dalla classificazione ottimizzata
+                    method = prediction.get('method', '')
+                    cluster_id = prediction.get('cluster_id', -1)
+                    
+                    if 'REPRESENTATIVE' in method:
+                        cluster_metadata = {
+                            'cluster_id': cluster_id,
+                            'is_representative': True,
+                            'cluster_size': None,  # Potremmo calcolarlo se necessario
+                            'confidence': confidence,
+                            'method': method
+                        }
+                    elif method == 'CLUSTER_PROPAGATED':
+                        cluster_metadata = {
+                            'cluster_id': cluster_id,
+                            'is_representative': False,
+                            'propagated_from': prediction.get('source_representative'),
+                            'propagation_confidence': confidence,
+                            'method': method
+                        }
+                    elif 'OUTLIER' in method:
+                        cluster_metadata = {
+                            'cluster_id': -1,
+                            'is_representative': False,
+                            'outlier_score': 1.0 - confidence,  # Outlier score inversamente correlato alla confidenza
+                            'method': method
+                        }
+                
+                success = mongo_reader.save_classification_result(
                     session_id=session_id,
-                    tag_name=predicted_label,
-                    tenant_slug=self.tenant_slug,
-                    confidence_score=confidence,
-                    method=method,
+                    client_name=self.tenant_slug,
+                    ml_result=ml_result,
+                    llm_result=llm_result,
+                    final_decision={
+                        'predicted_label': predicted_label,
+                        'confidence': confidence,
+                        'method': method,
+                        'reasoning': f"Auto-classificato con confidenza {confidence:.3f}"
+                    },
+                    conversation_text=session_data['testo_completo'],
+                    needs_review=needs_review,
+                    review_reason=review_reason,
                     classified_by='ens_pipe' if use_ensemble else 'ml_pipe',
-                    notes=f"Auto-classificato con confidenza {confidence:.3f}"
+                    notes=f"Auto-classificato con confidenza {confidence:.3f}",
+                    cluster_metadata=cluster_metadata  # 🆕 Aggiunto supporto cluster metadata
                 )
                 
                 if success:
                     stats['saved_successfully'] += 1
+                    stats['mongo_saves'] = stats.get('mongo_saves', 0) + 1
                     
                     # Aggiorna statistiche
                     tag_name = prediction['predicted_label']
@@ -1755,7 +2044,10 @@ class EndToEndPipeline:
                     'clusters_excluded': selection_stats['excluded_clusters'],
                     'selection_strategy': selection_stats.get('strategy', 'unknown')
                 },
-                'training_metrics': training_metrics
+                'training_metrics': training_metrics,
+                
+                # 🆕 INCLUDI WARNING PER INTERFACCIA UTENTE  
+                'warnings': getattr(self, 'training_warnings', [])
             }
             
             print("-" * 50)
@@ -2127,7 +2419,7 @@ class EndToEndPipeline:
     
     def _try_load_latest_model(self):
         """
-        Prova a caricare l'ultimo modello ML salvato dal disco
+        Prova a caricare il modello ML più recente specifico per il tenant corrente
         """
         try:
             import os
@@ -2137,11 +2429,15 @@ class EndToEndPipeline:
                 print("⚠️ Directory models/ non trovata, nessun modello da caricare")
                 return
             
-            config_files = glob.glob(os.path.join(models_dir, "*_config.json"))
+            # Cerca modelli specifici per questo tenant
+            tenant_pattern = os.path.join(models_dir, f"{self.tenant_slug}_*_config.json")
+            config_files = glob.glob(tenant_pattern)
+            
             if not config_files:
-                print("⚠️ Nessun modello trovato nella directory models/")
+                print(f"⚠️ Nessun modello trovato per tenant '{self.tenant_slug}' nella directory models/")
                 return
             
+            # Ordina per data (più recente per ultimo)
             config_files.sort()
             latest_config = config_files[-1]
             model_base_name = latest_config.replace("_config.json", "")
@@ -2150,7 +2446,7 @@ class EndToEndPipeline:
                 print(f"⚠️ File ML non trovato: {ml_file}")
                 return
             
-            print(f"📥 Caricamento ultimo modello: {os.path.basename(model_base_name)}")
+            print(f"📥 Caricamento ultimo modello per {self.tenant_slug}: {os.path.basename(model_base_name)}")
             self.ensemble_classifier.load_ensemble_model(model_base_name)
             print("✅ Modello caricato con successo")
 
@@ -2347,6 +2643,300 @@ class EndToEndPipeline:
         
         return nuove_sessioni, updated_labels
 
+    def _classifica_ottimizzata_cluster(self, 
+                                      sessioni: Dict[str, Dict], 
+                                      session_ids: List[str],
+                                      session_texts: List[str],
+                                      batch_size: int = 32) -> List[Dict[str, Any]]:
+        """
+        Classificazione ottimizzata basata su cluster:
+        1. Re-esegue clustering delle sessioni 
+        2. Seleziona rappresentanti per ogni cluster
+        3. Classifica SOLO i rappresentanti con ML+LLM 
+        4. Propaga automaticamente etichette a tutte le sessioni del cluster
+        5. Gestisce outlier separatamente
+        
+        Args:
+            sessioni: Dizionario delle sessioni {session_id: session_data}
+            session_ids: Lista degli ID sessioni in ordine
+            session_texts: Lista dei testi corrispondenti
+            batch_size: Dimensione batch per ottimizzazione
+            
+        Returns:
+            Lista predizioni per tutte le sessioni (stesso ordine di session_ids)
+        """
+        print(f"🎯 CLASSIFICAZIONE OTTIMIZZATA PER CLUSTER")
+        print(f"   📊 Sessioni totali: {len(sessioni)}")
+        
+        try:
+            # STEP 1: Re-clustering delle sessioni correnti (riutilizzando BERTopic esistente)
+            print(f"🔄 STEP 1: Re-clustering sessioni per classificazione ottimizzata...")
+            
+            # ✅ OTTIMIZZAZIONE: Riutilizza BERTopic provider dall'ensemble invece di riaddestramento
+            bertopic_provider = getattr(self.ensemble_classifier, 'bertopic_provider', None)
+            if bertopic_provider is not None:
+                print(f"   ✅ Riutilizzo BERTopic provider esistente dall'ensemble")
+                # Genera solo embedding e clustering semplice senza riaddestramento BERTopic
+                testi = [sessioni[sid]['testo_completo'] for sid in session_ids]
+                embeddings = self.embedder.encode(testi)
+                
+                # Clustering semplice con HDBSCAN sui puri embeddings
+                cluster_labels = self.clusterer.fit_predict(embeddings)
+                cluster_info = self._generate_cluster_info_from_labels(cluster_labels, session_texts)
+            else:
+                print(f"   ⚠️ Nessun BERTopic provider nell'ensemble, fallback a clustering completo")
+                cluster_labels, cluster_info = self.esegui_clustering(sessioni)
+                
+            n_clusters = len([l for l in cluster_labels if l != -1])
+            n_outliers = sum(1 for l in cluster_labels if l == -1)
+            
+            print(f"   📈 Cluster trovati: {n_clusters}")
+            print(f"   🔍 Outliers: {n_outliers}")
+            
+            # STEP 2: Selezione rappresentanti per ogni cluster 
+            print(f"👥 STEP 2: Selezione rappresentanti per classificazione...")
+            representatives = {}
+            suggested_labels = {}
+            
+            # Raggruppa sessioni per cluster
+            cluster_sessions = {}
+            for i, (session_id, cluster_id) in enumerate(zip(session_ids, cluster_labels)):
+                if cluster_id not in cluster_sessions:
+                    cluster_sessions[cluster_id] = []
+                cluster_sessions[cluster_id].append({
+                    'session_id': session_id,
+                    'index': i,
+                    'testo_completo': session_texts[i],
+                    **sessioni[session_id]
+                })
+            
+            # Seleziona rappresentanti per cluster validi (non outlier)
+            for cluster_id, sessions in cluster_sessions.items():
+                if cluster_id == -1:  # Salta outlier per ora
+                    continue
+                    
+                # Seleziona max 3 rappresentanti per cluster
+                max_reps = min(3, len(sessions))
+                representatives[cluster_id] = sessions[:max_reps]
+                suggested_labels[cluster_id] = cluster_info.get(cluster_id, {}).get('intent_string', f'cluster_{cluster_id}')
+                
+                print(f"   🏷️  Cluster {cluster_id}: {len(sessions)} sessioni, {max_reps} rappresentanti")
+            
+            # STEP 3: Classificazione dei soli rappresentanti
+            print(f"🤖 STEP 3: Classificazione rappresentanti con ML+LLM...")
+            representative_predictions = {}
+            total_representatives = sum(len(reps) for reps in representatives.values())
+            print(f"   🎯 Classificando {total_representatives} rappresentanti invece di {len(sessioni)} sessioni totali")
+            
+            rep_count = 0
+            for cluster_id, reps in representatives.items():
+                cluster_predictions = []
+                
+                for rep in reps:
+                    rep_count += 1
+                    rep_text = rep['testo_completo']
+                    
+                    # Classifica il rappresentante con ensemble ML+LLM
+                    try:
+                        prediction = self.ensemble_classifier.predict_with_ensemble(
+                            rep_text,
+                            return_details=True,
+                            embedder=self.embedder
+                        )
+                        prediction['representative_session_id'] = rep['session_id']
+                        prediction['cluster_id'] = cluster_id
+                        cluster_predictions.append(prediction)
+                        
+                        if rep_count % 5 == 0:  # Progress ogni 5 reps
+                            print(f"   🔍 Progresso: {rep_count}/{total_representatives} rappresentanti classificati")
+                        
+                    except Exception as e:
+                        print(f"   ⚠️ Errore classificazione rappresentante {rep['session_id']}: {e}")
+                        # Fallback con bassa confidenza
+                        cluster_predictions.append({
+                            'predicted_label': 'altro',
+                            'confidence': 0.3,
+                            'ensemble_confidence': 0.3,
+                            'method': 'REP_FALLBACK',
+                            'representative_session_id': rep['session_id'],
+                            'cluster_id': cluster_id,
+                            'llm_prediction': None,
+                            'ml_prediction': {'predicted_label': 'altro', 'confidence': 0.3}
+                        })
+                
+                representative_predictions[cluster_id] = cluster_predictions
+            
+            # STEP 4: Propagazione etichette ai cluster
+            print(f"📡 STEP 4: Propagazione etichette dai rappresentanti ai cluster...")
+            cluster_final_labels = {}
+            
+            for cluster_id, predictions in representative_predictions.items():
+                if not predictions:
+                    continue
+                    
+                # Strategia: usa etichetta più confidente tra i rappresentanti
+                best_prediction = max(predictions, key=lambda p: p.get('ensemble_confidence', p.get('confidence', 0)))
+                cluster_final_labels[cluster_id] = {
+                    'label': best_prediction['predicted_label'],
+                    'confidence': best_prediction.get('ensemble_confidence', best_prediction.get('confidence', 0)),
+                    'method': 'CLUSTER_PROPAGATED',
+                    'source_representative': best_prediction['representative_session_id']
+                }
+                
+                print(f"   📋 Cluster {cluster_id}: '{best_prediction['predicted_label']}' (conf: {cluster_final_labels[cluster_id]['confidence']:.3f})")
+            
+            # STEP 5: Costruzione predizioni finali per tutte le sessioni
+            print(f"🏗️  STEP 5: Costruzione predizioni finali...")
+            all_predictions = []
+            
+            for i, (session_id, cluster_id) in enumerate(zip(session_ids, cluster_labels)):
+                
+                if cluster_id != -1 and cluster_id in cluster_final_labels:
+                    # Sessione in cluster: usa etichetta propagata
+                    cluster_label_info = cluster_final_labels[cluster_id]
+                    
+                    # Verifica se questa sessione è un rappresentante
+                    is_representative = any(
+                        rep['session_id'] == session_id 
+                        for reps in representatives.get(cluster_id, []) 
+                        for rep in ([reps] if isinstance(reps, dict) else reps)
+                    )
+                    
+                    if is_representative:
+                        # Trova la predizione originale del rappresentante
+                        original_pred = None
+                        for pred in representative_predictions.get(cluster_id, []):
+                            if pred.get('representative_session_id') == session_id:
+                                original_pred = pred
+                                break
+                        
+                        if original_pred:
+                            # Usa predizione originale per rappresentante
+                            prediction = original_pred.copy()
+                            prediction['method'] = 'REPRESENTATIVE_ORIGINAL'
+                        else:
+                            # Fallback se non troviamo predizione originale
+                            prediction = {
+                                'predicted_label': cluster_label_info['label'],
+                                'confidence': cluster_label_info['confidence'],
+                                'ensemble_confidence': cluster_label_info['confidence'],
+                                'method': 'REPRESENTATIVE_FALLBACK',
+                                'cluster_id': cluster_id,
+                                'llm_prediction': None,
+                                'ml_prediction': {'predicted_label': cluster_label_info['label'], 'confidence': cluster_label_info['confidence']}
+                            }
+                    else:
+                        # Sessione normale: usa etichetta propagata
+                        prediction = {
+                            'predicted_label': cluster_label_info['label'],
+                            'confidence': cluster_label_info['confidence'],
+                            'ensemble_confidence': cluster_label_info['confidence'],
+                            'method': 'CLUSTER_PROPAGATED',
+                            'cluster_id': cluster_id,
+                            'source_representative': cluster_label_info['source_representative'],
+                            'llm_prediction': None,
+                            'ml_prediction': {'predicted_label': cluster_label_info['label'], 'confidence': cluster_label_info['confidence']}
+                        }
+                
+                else:
+                    # Outlier: classificazione diretta con ensemble
+                    print(f"   🎯 Outlier {session_id}: classificazione diretta...")
+                    try:
+                        prediction = self.ensemble_classifier.predict_with_ensemble(
+                            session_texts[i],
+                            return_details=True,
+                            embedder=self.embedder
+                        )
+                        prediction['method'] = 'OUTLIER_DIRECT'
+                        prediction['cluster_id'] = -1
+                        
+                    except Exception as e:
+                        print(f"   ⚠️ Errore classificazione outlier {session_id}: {e}")
+                        prediction = {
+                            'predicted_label': 'altro',
+                            'confidence': 0.2,
+                            'ensemble_confidence': 0.2,
+                            'method': 'OUTLIER_FALLBACK',
+                            'cluster_id': -1,
+                            'llm_prediction': None,
+                            'ml_prediction': {'predicted_label': 'altro', 'confidence': 0.2}
+                        }
+                
+                all_predictions.append(prediction)
+            
+            # Statistiche finali
+            propagated_count = sum(1 for p in all_predictions if p.get('method') == 'CLUSTER_PROPAGATED')
+            representative_count = sum(1 for p in all_predictions if 'REPRESENTATIVE' in p.get('method', ''))
+            outlier_count = sum(1 for p in all_predictions if 'OUTLIER' in p.get('method', ''))
+            
+            print(f"✅ CLASSIFICAZIONE OTTIMIZZATA COMPLETATA:")
+            print(f"   🎯 Rappresentanti classificati: {representative_count}")
+            print(f"   📡 Propagate da cluster: {propagated_count}")
+            print(f"   🔍 Outlier classificati: {outlier_count}")
+            print(f"   🚀 Efficienza: {representative_count + outlier_count}/{len(sessioni)} classificazioni ML+LLM effettive")
+            print(f"      (risparmio: {len(sessioni) - (representative_count + outlier_count)} classificazioni)")
+            
+            return all_predictions
+            
+        except Exception as e:
+            print(f"❌ ERRORE in classificazione ottimizzata: {e}")
+            print(f"🔄 Fallback alla classificazione standard...")
+            
+            # Fallback: classificazione standard di tutte le sessioni
+            predictions = []
+            for text in session_texts:
+                try:
+                    pred = self.ensemble_classifier.predict_with_ensemble(
+                        text, 
+                        return_details=True,
+                        embedder=self.embedder
+                    )
+                    pred['method'] = 'OPTIMIZE_FALLBACK'
+                    predictions.append(pred)
+                except Exception as e2:
+                    predictions.append({
+                        'predicted_label': 'altro',
+                        'confidence': 0.1,
+                        'ensemble_confidence': 0.1,
+                        'method': 'OPTIMIZE_FALLBACK_ERROR',
+                        'llm_prediction': None,
+                        'ml_prediction': {'predicted_label': 'altro', 'confidence': 0.1}
+                    })
+            
+            return predictions
+
+    def _generate_cluster_info_from_labels(self, cluster_labels: np.ndarray, session_texts: List[str]) -> Dict[int, Dict]:
+        """
+        Genera informazioni cluster dai soli labels HDBSCAN (senza BERTopic riaddestramento)
+        
+        Args:
+            cluster_labels: Labels cluster da HDBSCAN
+            session_texts: Testi delle sessioni
+            
+        Returns:
+            Dizionario con informazioni cluster
+        """
+        cluster_info = {}
+        
+        for cluster_id in set(cluster_labels):
+            if cluster_id == -1:  # Skip outlier
+                continue
+                
+            # Trova sessioni nel cluster
+            cluster_indices = [i for i, label in enumerate(cluster_labels) if label == cluster_id]
+            cluster_texts = [session_texts[i] for i in cluster_indices]
+            
+            # Genera nome cluster semplice
+            cluster_info[cluster_id] = {
+                'size': len(cluster_indices),
+                'intent': f'cluster_{cluster_id}',
+                'intent_string': f'Cluster {cluster_id}',
+                'confidence': 0.8,  # Confidenza media
+                'method': 'HDBSCAN_SIMPLE'
+            }
+            
+        return cluster_info
+
     def _propagate_labels_to_sessions(self, 
                                     sessioni: Dict[str, Dict],
                                     cluster_labels: np.ndarray,
@@ -2420,20 +3010,46 @@ class EndToEndPipeline:
                 conf_range = f"{int(confidence*10)*10}%-{int(confidence*10)*10+10}%"
                 stats['confidence_distribution'][conf_range] = stats['confidence_distribution'].get(conf_range, 0) + 1
                 
-                # Salva nel database TAG (MySQL)
+                # Salva usando MongoDB (nuovo sistema unificato)
                 try:
-                    success = self.tag_db.classifica_sessione(
+                    # Usa il connettore MongoDB per salvataggio unificato
+                    from mongo_classification_reader import MongoClassificationReader
+                    
+                    mongo_reader = MongoClassificationReader()
+                    
+                    success = mongo_reader.save_classification_result(
                         session_id=session_id,
-                        tag_name=final_label,
-                        tenant_slug=self.tenant_slug,
-                        confidence_score=confidence,
-                        method=method,
+                        client_name=self.tenant_slug,
+                        # 🆕 SIMULA ml_result e llm_result per training supervisionado
+                        ml_result=None,  # Non disponibile durante training supervisionado
+                        llm_result={
+                            'predicted_label': final_label,
+                            'confidence': confidence,
+                            'method': method,
+                            'reasoning': notes
+                        },
+                        final_decision={
+                            'predicted_label': final_label,
+                            'confidence': confidence,
+                            'method': method,
+                            'reasoning': notes
+                        },
+                        conversation_text=session_data['testo_completo'],
+                        needs_review=False,  # Propagazione automatica
                         classified_by='cluster_propagation',
-                        notes=notes
+                        notes=notes,
+                        # 🆕 METADATI CLUSTER per nuova UI
+                        cluster_metadata={
+                            'cluster_id': cluster_id,
+                            'is_representative': False,  # Sessione propagata
+                            'propagated_from': 'cluster_propagation',
+                            'propagation_confidence': confidence
+                        }
                     )
                     
                     if success:
                         stats['save_successes'] += 1
+                        stats['mongo_saves'] += 1
                     else:
                         stats['save_errors'] += 1
                         
@@ -2447,33 +3063,42 @@ class EndToEndPipeline:
                 
                 # Salva anche in MongoDB per l'interfaccia web
                 try:
-                    # Usa il connettore MongoDB esistente
-                    from MongoDB.connettore_mongo import MongoDBConnector
+                    # Usa il connettore MongoDB corretto
+                    from mongo_classification_reader import MongoClassificationReader
                     
                     # Genera tenant_id consistente
                     tenant_id = hashlib.md5(self.tenant_slug.encode()).hexdigest()[:16]
                     
-                    with MongoDBConnector() as mongo_connector:
-                        success = mongo_connector.save_session_classification(
-                            client=self.tenant_slug,
-                            session_id=session_id,
-                            tenant_id=tenant_id,
-                            tenant_name=self.tenant_slug,
-                            testo=session_data['testo_completo'],
-                            conversazione=session_data['testo_completo'],
-                            embedding=[],  # Embedding vuoto per propagazione
-                            embedding_model='cluster_propagation',
-                            classificazione=final_label,
-                            confidence=confidence,
-                            motivazione=notes,
-                            metadata={
-                                'method': method,
-                                'processing_time': 0.0,
-                                'timestamp': datetime.now().isoformat(),
-                                'cluster_id': int(cluster_id) if cluster_id != -1 else None,
-                                'propagation_source': 'cluster_representative'
-                            }
-                        )
+                    mongo_reader = MongoClassificationReader()
+                    
+                    # Usa il metodo corretto save_classification_result
+                    success = mongo_reader.save_classification_result(
+                        session_id=session_id,
+                        client_name=self.tenant_slug,
+                        # 🆕 SIMULA ml_result e llm_result per training supervisionado
+                        ml_result=None,  # Non disponibile durante training supervisionado  
+                        llm_result={
+                            'predicted_label': final_label,
+                            'confidence': confidence,
+                            'method': method,
+                            'reasoning': notes
+                        },
+                        final_decision={
+                            'predicted_label': final_label,
+                            'confidence': confidence,
+                            'method': method,
+                            'reasoning': notes
+                        },
+                        conversation_text=session_data['testo_completo'],
+                        needs_review=False,  # Propagazione automatica, non serve review
+                        # 🆕 METADATI CLUSTER per nuova UI
+                        cluster_metadata={
+                            'cluster_id': cluster_id,
+                            'is_representative': False,  # Sessione propagata
+                            'propagated_from': 'cluster_propagation',
+                            'propagation_confidence': confidence
+                        }
+                    )
                     
                     if success:
                         stats['mongo_saves'] += 1

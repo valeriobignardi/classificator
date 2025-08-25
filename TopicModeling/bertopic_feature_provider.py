@@ -119,28 +119,143 @@ class BERTopicFeatureProvider:
             embeddings: Optional[np.ndarray] = None) -> "BERTopicFeatureProvider":
         """
         Addestra BERTopic su un corpus. Usa embeddings LaBSE se forniti.
+        Adatta automaticamente i parametri per dataset piccoli.
 
         Parametri:
         - texts: lista testi (len N)
         - embeddings: array (N x D) opzionale
 
         Ritorno: self
-        Ultimo aggiornamento: 2025-08-07
+        Ultimo aggiornamento: 2025-08-23 - Fix parametri per dataset piccoli
         """
         if not self.available:
             raise RuntimeError("BERTopic non disponibile: installa dipendenze.")
 
-        reducer = umap.UMAP(**self.umap_params)
+        n_samples = len(texts)
+        print(f"📊 BERTopic training su {n_samples} campioni")
+        
+        # 🛠️ ADATTA PARAMETRI PER DATASET PICCOLI
+        # Per evitare l'errore "k must be less than or equal to the number of training points"
+        adapted_umap_params = self.umap_params.copy()
+        adapted_hdbscan_params = self.hdbscan_params.copy()
+        
+        # 🔧 FIX METRICA: HDBSCAN supporta limitatamente 'cosine', usa 'euclidean' per robustezza
+        if adapted_hdbscan_params.get('metric') == 'cosine':
+            adapted_hdbscan_params['metric'] = 'euclidean'
+            print(f"🔧 Metrica HDBSCAN: cosine → euclidean (compatibilità)")
+            
+        # Assicurati che HDBSCAN abbia parametri compatibili con prediction_data
+        # prediction_data viene generato solo con certe configurazioni
+        adapted_hdbscan_params['prediction_data'] = True  # Forza generazione prediction_data
+        adapted_hdbscan_params['match_reference_implementation'] = True  # Compatibilità
+        
+        if n_samples < 50:  # Dataset piccolo
+            print(f"⚠️ Dataset piccolo ({n_samples} campioni) - Adattamento parametri...")
+            
+            # UMAP: n_neighbors deve essere <= n_samples - 1
+            max_neighbors = max(2, n_samples - 1)
+            original_neighbors = adapted_umap_params.get('n_neighbors', 15)
+            adapted_umap_params['n_neighbors'] = min(original_neighbors, max_neighbors)
+            
+            # HDBSCAN: min_cluster_size deve essere ragionevole per il dataset
+            max_cluster_size = max(2, n_samples // 3)
+            original_cluster_size = adapted_hdbscan_params.get('min_cluster_size', 5)
+            adapted_hdbscan_params['min_cluster_size'] = min(original_cluster_size, max_cluster_size)
+            
+            # HDBSCAN: min_samples deve essere <= min_cluster_size
+            adapted_hdbscan_params['min_samples'] = min(
+                adapted_hdbscan_params.get('min_samples', 2),
+                adapted_hdbscan_params['min_cluster_size']
+            )
+            
+            print(f"   🔧 UMAP n_neighbors: {original_neighbors} → {adapted_umap_params['n_neighbors']}")
+            print(f"   🔧 HDBSCAN min_cluster_size: {original_cluster_size} → {adapted_hdbscan_params['min_cluster_size']}")
+            print(f"   🔧 HDBSCAN min_samples: {adapted_hdbscan_params['min_samples']}")
+            print(f"   🔧 HDBSCAN metric: {adapted_hdbscan_params['metric']}")
+
+        # Crea modelli con parametri adattati
+        reducer = umap.UMAP(**adapted_umap_params)
+        
+        # Crea HDBSCAN con parametri adattati
+        from hdbscan import HDBSCAN
+        clusterer = HDBSCAN(**adapted_hdbscan_params)
+        
+        # 🛠️ GESTIONE INTELLIGENTE calculate_probabilities
+        # Solo disabilita per dataset DAVVERO piccoli dove matematicamente impossibile
+        min_safe_size = 20
+        
+        calculate_probs = self.calculate_probabilities and (n_samples >= min_safe_size)
+        
+        if not calculate_probs and self.calculate_probabilities:
+            if n_samples < min_safe_size:
+                print(f"⚠️ Disabilito calculate_probabilities per dataset piccolo ({n_samples} < {min_safe_size} campioni)")
+            else:
+                print(f"⚠️ Disabilito calculate_probabilities per sicurezza ({n_samples} campioni)")
+        
         self.model = BERTopic(
             umap_model=reducer,
-            calculate_probabilities=self.calculate_probabilities,
-            hdbscan_model=None,  # usa default (metric allineata da embeddings)
+            hdbscan_model=clusterer,  # Usa configurazione personalizzata
+            calculate_probabilities=calculate_probs,  # Disabilita per dataset piccoli
             verbose=False,
             low_memory=True,
             nr_topics=None,
             seed_topic_list=None,
         )
-        self.model.fit(texts, embeddings=embeddings)
+        
+        try:
+            self.model.fit(texts, embeddings=embeddings)
+            print(f"✅ BERTopic FIT completato su {n_samples} campioni")
+        except Exception as e:
+            error_msg = str(e).lower()
+            print(f"❌ Errore BERTopic fit: {e}")
+            
+            # Fallback 1: Se errore specifico "prediction data", disabilita calculate_probabilities
+            if "prediction data" in error_msg or "no prediction data" in error_msg:
+                print("🔄 Fallback specifico: errore prediction_data → disabilito calculate_probabilities...")
+                try:
+                    self.model = BERTopic(
+                        umap_model=reducer,
+                        hdbscan_model=clusterer,
+                        calculate_probabilities=False,  # Disabilita solo per questo errore specifico
+                        verbose=False,
+                        low_memory=True,
+                        nr_topics=None,
+                        seed_topic_list=None,
+                    )
+                    self.model.fit(texts, embeddings=embeddings)
+                    print(f"✅ BERTopic FIT fallback completato su {n_samples} campioni (prediction_data fix)")
+                    return  # Successo con fallback specifico
+                except Exception as e2:
+                    print(f"❌ Errore anche con fallback prediction_data: {e2}")
+            
+            # Fallback 2: Se errore memoria/parametri, prova parametri ultra-conservativi
+            if n_samples < 50:
+                print("🔄 Tentativo fallback con parametri ultra-conservativi...")
+                adapted_umap_params['n_neighbors'] = max(2, min(5, n_samples - 1))
+                adapted_hdbscan_params['min_cluster_size'] = max(2, min(3, n_samples // 4))
+                adapted_hdbscan_params['min_samples'] = 1
+                adapted_hdbscan_params['metric'] = 'euclidean'  # Forza metrica compatibile
+                
+                # Rimuovi parametri problematici per dataset micro
+                if 'cluster_selection_method' in adapted_hdbscan_params:
+                    adapted_hdbscan_params['cluster_selection_method'] = 'eom'
+                
+                reducer = umap.UMAP(**adapted_umap_params)
+                clusterer = HDBSCAN(**adapted_hdbscan_params)
+                
+                self.model = BERTopic(
+                    umap_model=reducer,
+                    hdbscan_model=clusterer,
+                    calculate_probabilities=False,  # SEMPRE disabilita per fallback
+                    verbose=False,
+                    low_memory=True,
+                    nr_topics=None,
+                    seed_topic_list=None,
+                )
+                self.model.fit(texts, embeddings=embeddings)
+                print(f"✅ BERTopic FIT completato con parametri fallback")
+            else:
+                raise
 
         # Allena SVD sulle full probas se richiesto
         if self.use_svd:
@@ -194,11 +309,17 @@ class BERTopicFeatureProvider:
         if not self.model:
             raise RuntimeError("Modello BERTopic non addestrato.")
 
-        topic_ids, probs = self.model.transform(texts, embeddings=embeddings)
+        try:
+            topic_ids, probs = self.model.transform(texts, embeddings=embeddings)
+        except Exception as e:
+            print(f"❌ Errore transform BERTopic: {e}")
+            # Se il transform fallisce, ritorna topic vuoti
+            topic_ids = np.array([-1] * len(texts))  # Tutti outlier
+            probs = None
 
         if probs is None:
             # Probabilità non disponibili (calculate_probabilities=False)
-            T = int(max(topic_ids) + 1) if len(topic_ids) else 0
+            T = int(max(topic_ids) + 1) if len(topic_ids) and max(topic_ids) >= 0 else 1
             probs = np.zeros((len(texts), T), dtype=float)
             for i, t in enumerate(topic_ids):
                 if t >= 0:
@@ -210,6 +331,9 @@ class BERTopicFeatureProvider:
                             mode="constant"
                         )
                     probs[i, t] = 1.0
+        elif probs.ndim == 1:
+            # Se probs è 1D (caso raro), convertilo in 2D
+            probs = probs.reshape(-1, 1)
 
         # Se SVD attivo e modello addestrato, applica riduzione
         if self.use_svd and self._svd_model is not None and probs.size > 0:
@@ -236,7 +360,7 @@ class BERTopicFeatureProvider:
                 # falls-through a logica standard
 
         # Logica standard (senza SVD): opzionale top_k per documento
-        if top_k is not None and probs.size > 0:
+        if top_k is not None and probs.size > 0 and probs.ndim == 2:
             idx = np.argsort(-probs, axis=1)[:, :top_k]
             probs = np.take_along_axis(probs, idx, axis=1)
 

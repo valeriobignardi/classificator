@@ -29,6 +29,10 @@ from quality_gate_engine import QualityGateEngine
 from mongo_classification_reader import MongoClassificationReader
 from prompt_manager import PromptManager
 
+# Import del blueprint per validazione prompt
+sys.path.append(os.path.join(os.path.dirname(__file__), 'APIServer'))
+from APIServer.prompt_validation_api import prompt_validation_bp
+
 app = Flask(__name__)
 # Configurazione CORS generica per sviluppo
 CORS(app, 
@@ -36,6 +40,9 @@ CORS(app,
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
      allow_headers=["Content-Type", "Authorization"],
      supports_credentials=False)
+
+# Registrazione blueprint per validazione prompt
+app.register_blueprint(prompt_validation_bp, url_prefix='/api/prompt-validation')
 
 
 def sanitize_for_json(obj):
@@ -160,6 +167,27 @@ class ClassificationService:
                 print(f"✅ Embedder condiviso inizializzato")
             return self.shared_embedder
     
+    def get_mongo_reader(self, client_name: str) -> MongoClassificationReader:
+        """
+        Ottieni o crea un MongoClassificationReader per un cliente specifico
+        NUOVO: Sistema multitenant con pattern {tenant_name_sanitizzato}{tenant_id}
+        
+        Args:
+            client_name: Nome del cliente (es. 'humanitas', 'Humanitas Milano')
+            
+        Returns:
+            MongoClassificationReader configurato per il cliente con collection dedicata
+        """
+        # Per semplicità, crea una nuova istanza per ogni richiesta con tenant-aware
+        print(f"🔧 Creazione MongoClassificationReader per cliente: {client_name}")
+        
+        # Crea MongoClassificationReader tenant-aware
+        mongo_reader = MongoClassificationReader(tenant_name=client_name)
+        
+        print(f"✅ MongoClassificationReader {client_name} creato con collection: {mongo_reader.get_collection_name()}")
+        
+        return mongo_reader
+    
     def get_pipeline(self, client_name: str) -> EndToEndPipeline:
         """
         Ottieni o crea la pipeline per un cliente specifico
@@ -200,13 +228,14 @@ class ClassificationService:
                 
             return self.pipelines[client_name]
     
-    def get_quality_gate(self, client_name: str) -> QualityGateEngine:
+    def get_quality_gate(self, client_name: str, user_thresholds: Dict[str, float] = None) -> QualityGateEngine:
         """
         Ottieni o crea il QualityGateEngine per un cliente specifico
         SOLUZIONE ALLA RADICE: Usa lock per cliente per evitare inizializzazioni simultanee
         
         Args:
             client_name: Nome del cliente (es. 'humanitas')
+            user_thresholds: Soglie personalizzate dall'utente (opzionale)
             
         Returns:
             QualityGateEngine configurato per il cliente
@@ -217,22 +246,44 @@ class ClassificationService:
                 if client_name not in self._quality_gate_locks:
                     self._quality_gate_locks[client_name] = threading.Lock()
         
+        # Crea chiave che include le soglie per il cache
+        cache_key = client_name
+        if user_thresholds:
+            # Se ci sono soglie personalizzate, ricreiamo sempre il QualityGateEngine
+            cache_key = f"{client_name}_custom_{hash(tuple(sorted(user_thresholds.items())))}"
+        
         # Usa lock specifico del cliente
         with self._quality_gate_locks[client_name]:
-            if client_name not in self.quality_gates:
+            if cache_key not in self.quality_gates:
                 print(f"🔧 Inizializzazione QualityGateEngine per cliente: {client_name} (con lock)")
                 
+                # Parametri per QualityGateEngine
+                qg_params = {
+                    'tenant_name': client_name,
+                    'training_log_path': f"training_decisions_{client_name}.jsonl"
+                }
+                
+                # Aggiungi soglie personalizzate se fornite
+                if user_thresholds:
+                    print(f"🎯 Usando soglie personalizzate utente: {user_thresholds}")
+                    if 'confidence_threshold' in user_thresholds:
+                        qg_params['confidence_threshold'] = user_thresholds['confidence_threshold']
+                    if 'disagreement_threshold' in user_thresholds:
+                        qg_params['disagreement_threshold'] = user_thresholds['disagreement_threshold']
+                    if 'uncertainty_threshold' in user_thresholds:
+                        qg_params['uncertainty_threshold'] = user_thresholds['uncertainty_threshold']
+                    if 'novelty_threshold' in user_thresholds:
+                        qg_params['novelty_threshold'] = user_thresholds['novelty_threshold']
+                
                 # Crea QualityGateEngine per il cliente
-                quality_gate = QualityGateEngine(
-                    tenant_name=client_name,
-                    review_db_path=f"human_review_{client_name}.db",  # DB specifico per cliente
-                    training_log_path=f"training_decisions_{client_name}.jsonl"  # Log specifico per cliente
-                )
+                quality_gate = QualityGateEngine(**qg_params)
                 
-                self.quality_gates[client_name] = quality_gate
-                print(f"✅ QualityGateEngine {client_name} inizializzato")
+                self.quality_gates[cache_key] = quality_gate
+                print(f"✅ QualityGateEngine {client_name} inizializzato con soglie: "
+                      f"confidence={quality_gate.confidence_threshold}, "
+                      f"disagreement={quality_gate.disagreement_threshold}")
                 
-            return self.quality_gates[client_name]
+            return self.quality_gates[cache_key]
     
     def get_processed_sessions(self, client_name: str) -> set:
         """
@@ -778,7 +829,7 @@ class ClassificationService:
                 try:
                     # Prova prima con l'ensemble classifier esistente
                     classification_stats = pipeline.classifica_e_salva_sessioni(
-                        nuove_sessioni, use_ensemble=True
+                        nuove_sessioni, use_ensemble=True, optimize_clusters=True
                     )
                     training_metrics = {'note': 'Used existing trained model'}
                     
@@ -813,7 +864,7 @@ class ClassificationService:
                         )
                         
                         classification_stats = pipeline.classifica_e_salva_sessioni(
-                            nuove_sessioni, use_ensemble=True
+                            nuove_sessioni, use_ensemble=True, optimize_clusters=True
                         )
                 
             else:
@@ -831,7 +882,7 @@ class ClassificationService:
                 
                 # Classificazione
                 classification_stats = pipeline.classifica_e_salva_sessioni(
-                    nuove_sessioni, use_ensemble=True
+                    nuove_sessioni, use_ensemble=True, optimize_clusters=True
                 )
             
             end_time = datetime.now()
@@ -1438,8 +1489,15 @@ def supervised_training_advanced(client_name: str):
         print(f"📋 max_review_cases={max_review_cases}, use_optimal_selection={use_optimal_selection}")
         print(f"📋 analyze_all_or_new_only={analyze_all_or_new_only}")
         
-        # Ottieni il QualityGateEngine per questo cliente
-        quality_gate = classification_service.get_quality_gate(client_name)
+        # Prepara soglie personalizzate per il QualityGateEngine
+        user_thresholds = {
+            'confidence_threshold': min_confidence,
+            'disagreement_threshold': disagreement_threshold
+        }
+        
+        # Ottieni il QualityGateEngine per questo cliente con soglie personalizzate
+        quality_gate = classification_service.get_quality_gate(client_name, user_thresholds)
+        print(f"🎯 QualityGateEngine configurato con soglie utente: confidence={quality_gate.confidence_threshold}")
         
         # Analizza le classificazioni esistenti per identificare casi da rivedere
         print("🔍 Analisi classificazioni per identificare casi da rivedere...")
@@ -1579,12 +1637,14 @@ def create_mock_cases(client_name: str):
 @app.route('/api/review/<client_name>/cases', methods=['GET'])
 def api_get_review_cases(client_name: str):
     """
-    API per ottenere tutte le sessioni classificate (non più solo pending).
-    Ora legge da MongoDB tutte le classificazioni esistenti.
+    API per ottenere tutte le sessioni classificate con supporto Review Queue a 3 livelli.
     
     Query Parameters:
         limit: Numero massimo di casi da restituire (default: 100)
         label: Filtra per etichetta specifica (opzionale)
+        show_representatives: Se 'true', mostra solo rappresentanti di cluster (pending)
+        show_propagated: Se 'true', include conversazioni propagate dai cluster
+        show_outliers: Se 'true', include outliers con etichetta assegnata
         
     Returns:
         {
@@ -1600,14 +1660,35 @@ def api_get_review_cases(client_name: str):
         limit = int(request.args.get('limit', 100))
         label_filter = request.args.get('label', None)
         
-        # Ottieni reader MongoDB
-        mongo_reader = classification_service.mongo_reader
+        # 🆕 NUOVI PARAMETRI per Review Queue a 3 livelli
+        show_representatives = request.args.get('show_representatives', 'false').lower() == 'true'
+        show_propagated = request.args.get('show_propagated', 'false').lower() == 'true'
+        show_outliers = request.args.get('show_outliers', 'false').lower() == 'true'
         
-        # Recupera sessioni (tutte o filtrate per etichetta)
-        if label_filter and label_filter != "Tutte le etichette":
-            sessions = mongo_reader.get_sessions_by_label(client_name, label_filter, limit)
+        # Se nessun flag specifico, mostra tutto (comportamento default)
+        if not (show_representatives or show_propagated or show_outliers):
+            show_representatives = show_propagated = show_outliers = True
+        
+        # Ottieni reader MongoDB tenant-aware - AGGIORNATO
+        mongo_reader = classification_service.get_mongo_reader(client_name)
+        
+        # 🆕 RECUPERA SESSIONI CON FILTRI REVIEW QUEUE
+        if show_representatives or show_propagated or show_outliers:
+            # Usa metodo specializzato per Review Queue
+            sessions = mongo_reader.get_review_queue_sessions(
+                client_name, 
+                limit=limit,
+                label_filter=label_filter,
+                show_representatives=show_representatives,
+                show_propagated=show_propagated,
+                show_outliers=show_outliers
+            )
         else:
-            sessions = mongo_reader.get_all_sessions(client_name, limit)
+            # Comportamento legacy: recupera tutte le sessioni
+            if label_filter and label_filter != "Tutte le etichette":
+                sessions = mongo_reader.get_sessions_by_label(client_name, label_filter, limit)
+            else:
+                sessions = mongo_reader.get_all_sessions(client_name, limit)
         
         # Trasforma i dati MongoDB in formato ReviewCase per compatibilità frontend
         formatted_cases = []
@@ -1615,18 +1696,27 @@ def api_get_review_cases(client_name: str):
             case_item = {
                 'case_id': session.get('id', session.get('session_id', '')),
                 'session_id': session.get('session_id', ''),
-                'conversation_text': session.get('conversation_text', ''),
-                'ml_prediction': session.get('classification', 'non_classificata'),
-                'ml_confidence': float(session.get('confidence', 0.0)),
-                'llm_prediction': session.get('classification', 'non_classificata'),  # Stesso valore per ora
-                'llm_confidence': float(session.get('confidence', 0.0)),  # Stesso valore per ora
+                'conversation_text': session.get('conversation_text', session.get('testo_completo', '')),
+                'ml_prediction': session.get('ml_prediction', session.get('classification_ML', session.get('classification', 'non_classificata'))),
+                'ml_confidence': float(session.get('ml_confidence', session.get('precision_ML', session.get('confidence', 0.0)))),
+                'llm_prediction': session.get('llm_prediction', session.get('classification_LLM', session.get('classification', 'non_classificata'))),
+                'llm_confidence': float(session.get('llm_confidence', session.get('precision_LLM', session.get('confidence', 0.0)))),
                 'uncertainty_score': 1.0 - float(session.get('confidence', 0.0)),
                 'novelty_score': 0.0,  # Non disponibile da MongoDB
-                'reason': session.get('motivation', ''),
-                'notes': session.get('notes', session.get('motivation', '')),  # Campo notes per UI
+                'reason': session.get('motivation', session.get('motivazione', '')),
+                'notes': session.get('notes', session.get('motivation', session.get('motivazione', ''))),  # Campo notes per UI
                 'created_at': str(session.get('timestamp', '')),
                 'tenant': client_name,
-                'cluster_id': str(session.get('metadata', {}).get('cluster_id', '')) if session.get('metadata', {}).get('cluster_id') else None
+                'cluster_id': str(session.get('cluster_id', session.get('metadata', {}).get('cluster_id', ''))) if session.get('cluster_id') or session.get('metadata', {}).get('cluster_id') else None,
+                
+                # 🆕 NUOVI CAMPI REVIEW QUEUE
+                'session_type': session.get('session_type', 'unknown'),  # representative/propagated/outlier
+                'is_representative': session.get('is_representative', False),
+                'propagated_from': session.get('propagated_from'),
+                'propagation_confidence': session.get('propagation_confidence'),
+                'review_status': session.get('review_status', 'not_required'),
+                'review_reason': session.get('review_reason', ''),
+                'human_reviewed': session.get('human_reviewed', False)
             }
             formatted_cases.append(case_item)
         
@@ -1669,8 +1759,8 @@ def api_get_available_labels(client_name: str):
         }
     """
     try:
-        # Ottieni reader MongoDB
-        mongo_reader = classification_service.mongo_reader
+        # Ottieni reader MongoDB tenant-aware - AGGIORNATO
+        mongo_reader = classification_service.get_mongo_reader(client_name)
         
         # Recupera etichette disponibili
         available_labels = mongo_reader.get_available_labels(client_name)
@@ -1693,6 +1783,129 @@ def api_get_available_labels(client_name: str):
             'client': client_name,
             'labels': [],
             'statistics': {}
+        }), 500
+
+@app.route('/api/review/<client_name>/clusters', methods=['GET'])
+def api_get_clusters(client_name: str):
+    """
+    API per ottenere informazioni sui cluster per un cliente.
+    Recupera le informazioni sui cluster dalle classificazioni MongoDB.
+    
+    Query Parameters:
+        limit: Numero massimo di cluster da restituire (default: 20)
+        
+    Returns:
+        {
+            "success": true,
+            "clusters": [
+                {
+                    "cluster_id": "0",
+                    "size": 45,
+                    "representative_texts": ["esempio 1", "esempio 2"],
+                    "dominant_label": "info_esami_prestazioni",
+                    "confidence_avg": 0.85
+                }
+            ],
+            "total": 12,
+            "client": "humanitas"
+        }
+    """
+    try:
+        limit = int(request.args.get('limit', 20))
+        
+        print(f"🔍 API: Recupero cluster per tenant '{client_name}' con limite {limit}")
+        
+        # Ottieni reader MongoDB tenant-aware
+        mongo_reader = classification_service.get_mongo_reader(client_name)
+        
+        # Connettiti a MongoDB
+        if not mongo_reader.connect():
+            return jsonify({
+                'success': False,
+                'error': 'Impossibile connettersi a MongoDB',
+                'clusters': []
+            }), 500
+        
+        try:
+            # Query aggregation per recuperare informazioni sui cluster
+            collection = mongo_reader.db[mongo_reader.get_collection_name()]
+            
+            pipeline = [
+                {
+                    '$match': {
+                        'metadata.cluster_id': {'$exists': True, '$ne': None}
+                    }
+                },
+                {
+                    '$group': {
+                        '_id': '$metadata.cluster_id',
+                        'size': {'$sum': 1},
+                        'texts': {'$push': {'$substr': ['$testo_completo', 0, 100]}},  # Primi 100 caratteri
+                        'labels': {'$push': '$classification'},
+                        'confidences': {'$push': '$confidence'}
+                    }
+                },
+                {
+                    '$sort': {'size': -1}
+                },
+                {
+                    '$limit': limit
+                }
+            ]
+            
+            cursor = collection.aggregate(pipeline)
+            results = list(cursor)
+            
+            clusters = []
+            for result in results:
+                # Trova l'etichetta dominante
+                labels = [label for label in result.get('labels', []) if label]
+                dominant_label = max(set(labels), key=labels.count) if labels else 'non_classificata'
+                
+                # Calcola confidence media
+                confidences = [conf for conf in result.get('confidences', []) if conf is not None]
+                avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+                
+                # Prendi alcuni testi rappresentativi (primi 3)
+                representative_texts = result.get('texts', [])[:3]
+                
+                cluster_info = {
+                    'cluster_id': str(result['_id']),
+                    'size': result['size'],
+                    'representative_texts': representative_texts,
+                    'dominant_label': dominant_label,
+                    'confidence_avg': round(avg_confidence, 3),
+                    'all_labels': list(set(labels)) if labels else []
+                }
+                
+                clusters.append(cluster_info)
+            
+            mongo_reader.disconnect()
+            
+            return jsonify({
+                'success': True,
+                'clusters': clusters,
+                'total': len(clusters),
+                'client': client_name
+            }), 200
+            
+        except Exception as query_error:
+            mongo_reader.disconnect()
+            print(f"❌ Errore query cluster: {query_error}")
+            return jsonify({
+                'success': False,
+                'error': f'Errore nella query dei cluster: {str(query_error)}',
+                'clusters': []
+            }), 500
+            
+    except Exception as e:
+        print(f"❌ Errore generale endpoint clusters: {e}")
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'client': client_name,
+            'clusters': []
         }), 500
 
 @app.route('/api/review/<client_name>/cases/<case_id>', methods=['GET'])
@@ -1840,11 +2053,31 @@ def api_get_review_stats(client_name: str):
         # Statistiche della coda di revisione
         review_stats = quality_gate.get_review_stats()
         
-        # Statistiche generali
-        general_stats = quality_gate.get_statistics(tenant=client_name)
+        # 🆕 STATISTICHE DA MONGODB (SISTEMA UNIFICATO)
+        from mongo_classification_reader import MongoClassificationReader
+        mongo_reader = MongoClassificationReader()
         
-        # Statistiche novelty
-        novelty_stats = quality_gate.get_novelty_statistics()
+        try:
+            # Usa MongoDB per statistiche invece di MySQL
+            general_stats = mongo_reader.get_classification_stats(client_name=client_name)
+        except Exception as e:
+            print(f"⚠️ Errore statistiche MongoDB: {e}")
+            general_stats = {
+                'total_classifications': 0,
+                'by_tag': [],
+                'error': str(e)
+            }
+        
+        # Statistiche novelty (opzionale - se il metodo non esiste usa default)
+        try:
+            novelty_stats = quality_gate.get_novelty_statistics()
+        except AttributeError:
+            novelty_stats = {
+                'novelty_detection_enabled': False,
+                'total_novel_cases': 0,
+                'avg_novelty_score': 0.0,
+                'note': 'Novelty detection non disponibile'
+            }
         
         combined_stats = {
             'review_queue': review_stats,
@@ -2098,14 +2331,18 @@ def get_ui_config():
             'error': f'Errore nel caricamento configurazione UI: {str(e)}'
         }), 500
 
-@app.route('/api/review/<client_name>/available-tags', methods=['GET'])
-def api_get_available_tags(client_name: str):
+@app.route('/api/review/<tenant_id>/available-tags', methods=['GET'])
+def api_get_available_tags(tenant_id: str):
     """
-    API per ottenere tutti i tag disponibili per un cliente usando la logica intelligente.
+    API per ottenere tutti i tag disponibili per un tenant usando la logica intelligente.
+    SICUREZZA MULTI-TENANT: Usa tenant_id (univoco) invece di client_name.
+    
+    Args:
+        tenant_id (str): UUID del tenant (es. 'a0fd7600-f4f7-11ef-9315-96000228e7fe')
     
     Logica implementata:
-    - Cliente nuovo (senza classificazioni in DB) → zero suggerimenti
-    - Cliente esistente → tag da ML/LLM/revisioni umane precedenti
+    - Tenant nuovo (senza classificazioni in MongoDB) → zero suggerimenti
+    - Tenant esistente → tag da ML/LLM/revisioni umane precedenti
     
     Returns:
         {
@@ -2119,18 +2356,63 @@ def api_get_available_tags(client_name: str):
                 }
             ],
             "total_tags": 15,
-            "client": "humanitas",
+            "tenant_id": "a0fd7600-f4f7-11ef-9315-96000228e7fe",
+            "tenant_name": "Alleanza",
             "is_new_client": false
         }
+        
+    Last modified: 23/08/2025 - Valerio Bignardi
     """
     try:
-        # Usa il nuovo gestore intelligente dei suggerimenti
-        from TAGS.tag import tag_suggestion_manager
+        # STEP 1: Risolvi tenant_id → tenant_name per compatibilità con logica esistente
+        from TAGS.tag import IntelligentTagSuggestionManager
+        tag_manager = IntelligentTagSuggestionManager()
         
-        # Ottieni suggerimenti usando la logica intelligente
-        raw_suggested_tags = tag_suggestion_manager.get_suggested_tags_for_client(client_name)
+        # Connessione al database locale per risolvere tenant_id → tenant_name
+        import mysql.connector
+        from mysql.connector import Error
         
-        # Converti il formato per il frontend: tag_name -> tag, usage_count -> count
+        db_config = tag_manager.config['tag_database']
+        connection = mysql.connector.connect(
+            host=db_config['host'],
+            port=db_config['port'],
+            user=db_config['user'],
+            password=db_config['password'],
+            database=db_config['database'],
+            autocommit=True
+        )
+        
+        cursor = connection.cursor()
+        query = """
+        SELECT tenant_name, tenant_slug 
+        FROM tenants 
+        WHERE tenant_id = %s AND is_active = 1
+        LIMIT 1
+        """
+        
+        cursor.execute(query, (tenant_id,))
+        result = cursor.fetchone()
+        cursor.close()
+        connection.close()
+        
+        if not result:
+            return jsonify({
+                'success': False,
+                'error': f'Tenant non trovato o non attivo: {tenant_id}',
+                'tenant_id': tenant_id
+            }), 404
+        
+        tenant_name, tenant_slug = result
+        
+        tenant_name, tenant_slug = result
+        
+        # STEP 2: Usa tenant_slug come client_name per compatibilità con logica esistente
+        client_name = tenant_slug
+        
+        # STEP 3: Ottieni suggerimenti usando la logica intelligente
+        raw_suggested_tags = tag_manager.get_suggested_tags_for_client(client_name)
+        
+        # STEP 4: Converti il formato per il frontend: tag_name -> tag, usage_count -> count
         suggested_tags = []
         for tag_data in raw_suggested_tags:
             suggested_tags.append({
@@ -2140,23 +2422,25 @@ def api_get_available_tags(client_name: str):
                 'avg_confidence': tag_data.get('avg_confidence', 0.0)
             })
         
-        # Verifica se è un cliente nuovo
-        is_new_client = not tag_suggestion_manager.has_existing_classifications(client_name)
+        # STEP 5: Verifica se è un tenant nuovo (basato su MongoDB)
+        is_new_client = not tag_manager.has_existing_classifications(client_name)
         
         return jsonify({
             'success': True,
             'tags': suggested_tags,
             'total_tags': len(suggested_tags),
-            'client': client_name,
+            'tenant_id': tenant_id,
+            'tenant_name': tenant_name,
+            'tenant_slug': tenant_slug,
             'is_new_client': is_new_client
         }), 200
         
     except Exception as e:
         return jsonify({
             'success': False,
-            'error': str(e),
-            'client': client_name,
-            'is_new_client': True  # Fallback per errori
+            'error': f'Errore recupero tag per tenant {tenant_id}: {str(e)}',
+            'tenant_id': tenant_id,
+            'is_new_client': True  # Fallback sicuro per errori
         }), 500
 
 @app.route('/api/retrain/<client_name>', methods=['POST'])
@@ -2252,30 +2536,36 @@ def get_all_sessions(client):
         # Parametri opzionali
         include_reviewed = request.args.get('include_reviewed', 'false').lower() == 'true'
         limit = request.args.get('limit', type=int, default=None)  # RIMOSSO LIMITE HARDCODED: ora default è None (tutte le sessioni)
+        status_filter = request.args.get('status_filter', None)  # NUOVO: filtro per status
+        
+        print(f"📊 Parametri: include_reviewed={include_reviewed}, limit={limit}, status_filter={status_filter}")
         
         # NON inizializzare pipeline o QualityGate per evitare CUDA out of memory
-        # "Tutte le Sessioni" è solo lettura dal database, non serve ML
+        # "Tutte le Sessioni" è solo lettura delle CLASSIFICAZIONI GIÀ SALVATE in MongoDB
         
-        # Estrai tutte le sessioni dal database SENZA pipeline
-        from Preprocessing.session_aggregator import SessionAggregator
-        aggregator = SessionAggregator(schema='humanitas')
-        tutte_sessioni = aggregator.estrai_sessioni_aggregate(limit=limit)
-        
-        if not tutte_sessioni:
+        # CORREZIONE: Usa MongoDB per sessioni già classificate, NON MySQL raw
+        from mongo_classification_reader import MongoClassificationReader
+        mongo_reader = MongoClassificationReader()
+        if not mongo_reader.connect():
             return jsonify({
                 'success': False,
-                'error': 'Nessuna sessione trovata nel database',
+                'error': 'Errore connessione MongoDB',
+                'sessions': [],
+                'count': 0
+            }), 500
+        
+        # Estrai sessioni già classificate da MongoDB
+        sessioni_classificate = mongo_reader.get_all_sessions(client, limit=limit)
+        
+        if not sessioni_classificate:
+            return jsonify({
+                'success': False,
+                'error': 'Nessuna sessione classificata trovata in MongoDB',
                 'sessions': [],
                 'count': 0
             })
         
-        # Filtra conversazioni con più di 1 messaggio utente
-        sessioni_valide = {}
-        for session_id, dati in tutte_sessioni.items():
-            if dati['num_messaggi_user'] > 1:
-                sessioni_valide[session_id] = dati
-        
-        print(f"📊 Trovate {len(sessioni_valide)} sessioni valide su {len(tutte_sessioni)} totali")
+        print(f"📊 Trovate {len(sessioni_classificate)} sessioni già classificate in MongoDB")
         
         # Ottieni sessioni in review queue SOLO SE quality_gate è già inizializzato
         pending_session_ids = set()
@@ -2284,43 +2574,37 @@ def get_all_sessions(client):
         # Inizializza automaticamente il QualityGate se non esiste
         quality_gate = classification_service.get_quality_gate(client)
         
-        for case in quality_gate.pending_reviews.values():
-            pending_session_ids.add(case.session_id)
+        # Usa il metodo corretto per ottenere pending reviews
+        try:
+            pending_cases = quality_gate.get_pending_reviews(tenant=client, limit=1000)
+            for case in pending_cases:
+                pending_session_ids.add(case['session_id'])
+        except Exception as e:
+            print(f"⚠️ Errore nel recupero pending reviews: {e}")
         
-        if hasattr(quality_gate, 'reviewed_cases'):
-            for case in quality_gate.reviewed_cases.values():
-                reviewed_session_ids.add(case.session_id)
+        # Le sessioni classificate sono già in sessioni_classificate da MongoDB
+        print(f"📋 Sessioni pending: {len(pending_session_ids)}")
         
-        # Ottieni classificazioni esistenti dal database
-        from TagDatabase.tag_database_connector import TagDatabaseConnector
-        tag_db = TagDatabaseConnector()
-        tag_db.connetti()
-        
-        # Query per ottenere classificazioni esistenti
-        classification_query = """
-        SELECT session_id, tag_name, confidence_score, classification_method, created_at
-        FROM session_classifications 
-        WHERE tenant_name = %s AND session_id IN ({})
-        """.format(','.join(['%s'] * len(sessioni_valide)))
-        
-        classification_params = [client] + list(sessioni_valide.keys())
-        classification_results = tag_db.esegui_query(classification_query, classification_params)
-        tag_db.disconnetti()
-        
-        # Organizza classificazioni per session_id (dal database - classificazioni salvate)
+        # Organizza classificazioni per session_id (da MongoDB - sistema unificato)
         classifications_by_session = {}
-        if classification_results:
-            for row in classification_results:
-                session_id = row[0]
-                if session_id not in classifications_by_session:
-                    classifications_by_session[session_id] = []
-                classifications_by_session[session_id].append({
-                    'tag_name': row[1],
-                    'confidence': float(row[2]) if row[2] else 0.0,
-                    'method': row[3],
-                    'created_at': row[4].isoformat() if row[4] else '',
-                    'source': 'database'  # Aggiunto per distinguere la fonte
-                })
+        
+        try:
+            # Le classificazioni sono già nelle sessioni da MongoDB
+            for session_doc in sessioni_classificate:
+                session_id = session_doc.get('session_id')
+                if session_id:
+                    if session_id not in classifications_by_session:
+                        classifications_by_session[session_id] = []
+                    classifications_by_session[session_id].append({
+                        'tag_name': session_doc.get('classification', ''),
+                        'confidence': float(session_doc.get('confidence', 0.0)),
+                        'method': session_doc.get('method', 'unknown'),
+                        'created_at': session_doc.get('timestamp', ''),
+                        'source': 'mongodb'  # Nuovo sistema unificato
+                    })
+        except Exception as e:
+            print(f"⚠️ Errore recupero classificazioni da MongoDB: {e}")
+            # Continua con dizionario vuoto
         
         # NUOVO: Aggiungi auto-classificazioni in cache (pending, non ancora salvate)
         auto_classifications_by_session = {}
@@ -2332,7 +2616,7 @@ def get_all_sessions(client):
         
         for auto_class in pending_auto_classifications:
             session_id = auto_class.get('session_id')
-            if session_id and session_id in sessioni_valide:  # Solo sessioni valide
+            if session_id:  # CORREZIONE: Usa solo sessioni classificate MongoDB
                 if session_id not in auto_classifications_by_session:
                     auto_classifications_by_session[session_id] = []
                 auto_classifications_by_session[session_id].append({
@@ -2343,9 +2627,13 @@ def get_all_sessions(client):
                     'source': 'cache_pending'  # Identificatore per classificazioni in cache
                 })
         
-        # Prepara lista delle sessioni con stato
+        # Prepara lista delle sessioni con stato - USA SESSIONI DA MONGODB
         all_sessions = []
-        for session_id, dati in sessioni_valide.items():
+        for session_doc in sessioni_classificate:  # CORREZIONE: Usa sessioni da MongoDB
+            session_id = session_doc.get('session_id')
+            if not session_id:
+                continue
+                
             status = 'available'  # Disponibile per review
             if session_id in pending_session_ids:
                 status = 'in_review_queue'
@@ -2365,34 +2653,90 @@ def get_all_sessions(client):
             if session_id in auto_classifications_by_session:
                 all_classifications.extend(auto_classifications_by_session[session_id])
             
+            # Estrai informazioni dalla conversazione salvata in MongoDB
+            conversation_text = session_doc.get('conversation_text', session_doc.get('conversation', ''))
+            if isinstance(conversation_text, list):
+                # Se la conversazione è una lista di messaggi
+                conversation_text = ' '.join([msg.get('text', '') for msg in conversation_text if isinstance(msg, dict)])
+            
+            # Estrai classificazione principale per React (evita UNKNOWN)
+            final_tag = 'unknown'
+            confidence = 0.0
+            if all_classifications:
+                # Prendi la prima classificazione disponibile
+                first_classification = all_classifications[0]
+                final_tag = first_classification.get('tag_name', 'unknown')
+                confidence = first_classification.get('confidence', 0.0)
+            
+            # Determina informazioni pulsante per React
+            button_info = {
+                'can_add_to_review': status in ['available', 'reviewed'],  # REVIEWED ora selezionabile
+                'button_text': 'AGGIUNGI A REVIEW',
+                'button_disabled': False
+            }
+            
+            if status == 'in_review_queue':
+                button_info.update({
+                    'can_add_to_review': False,
+                    'button_text': 'GIÀ IN REVISIONE',
+                    'button_disabled': True
+                })
+            elif status == 'reviewed':
+                button_info.update({
+                    'can_add_to_review': True,  # CAMBIATO: ora selezionabile 
+                    'button_text': 'REVISIONA ANCORA',
+                    'button_disabled': False  # CAMBIATO: ora attivo
+                })
+            
             session_info = {
                 'session_id': session_id,
-                'conversation_text': dati['testo_completo'][:500] + '...' if len(dati['testo_completo']) > 500 else dati['testo_completo'],
-                'full_text': dati['testo_completo'],
-                'num_messages': dati['num_messaggi_totali'],
-                'num_user_messages': dati['num_messaggi_user'],
+                'conversation_text': conversation_text[:500] + '...' if len(conversation_text) > 500 else conversation_text,
+                'full_text': conversation_text,
+                'num_messages': session_doc.get('num_messages', 0),
+                'num_user_messages': session_doc.get('num_user_messages', 0),
                 'status': status,
-                'created_at': dati.get('primo_timestamp', '').isoformat() if dati.get('primo_timestamp') else '',
-                'last_activity': dati.get('ultimo_timestamp', '').isoformat() if dati.get('ultimo_timestamp') else '',
-                'classifications': all_classifications  # Combinazione di database + cache
+                'created_at': session_doc.get('created_at', ''),
+                'last_activity': session_doc.get('updated_at', session_doc.get('classified_at', '')),
+                'classifications': all_classifications,  # Combinazione di database + cache
+                # CAMPI DIRETTI PER REACT (evita UNKNOWN)
+                'final_tag': final_tag,
+                'tag': final_tag,  # Alias per compatibilità
+                'confidence': confidence,
+                # INFORMAZIONI PULSANTE PER REACT
+                'review_button': button_info
             }
             all_sessions.append(session_info)
         
         # Ordina per data di creazione (più recenti primi)
-        all_sessions.sort(key=lambda x: x['created_at'], reverse=True)
+        all_sessions.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        
+        # NUOVO: Applica filtro status se specificato
+        if status_filter:
+            valid_statuses = ['available', 'in_review_queue', 'reviewed']
+            if status_filter in valid_statuses:
+                filtered_sessions = [s for s in all_sessions if s['status'] == status_filter]
+                print(f"🔍 Filtro status '{status_filter}': {len(filtered_sessions)}/{len(all_sessions)} sessioni")
+                all_sessions = filtered_sessions
+            else:
+                print(f"⚠️ Status filter non valido: {status_filter}")
         
         return jsonify({
             'success': True,
             'sessions': all_sessions,
             'count': len(all_sessions),
-            'total_valid_sessions': len(sessioni_valide),
+            'total_classified_sessions': len(sessioni_classificate),
             'breakdown': {
                 'available': len([s for s in all_sessions if s['status'] == 'available']),
                 'in_review_queue': len([s for s in all_sessions if s['status'] == 'in_review_queue']),
                 'reviewed': len([s for s in all_sessions if s['status'] == 'reviewed']),
-                'with_db_classifications': len([s for s in all_sessions if any(c['source'] == 'database' for c in s['classifications'])]),
+                'with_db_classifications': len([s for s in all_sessions if any(c['source'] == 'mongodb' for c in s['classifications'])]),
                 'with_pending_classifications': len([s for s in all_sessions if any(c['source'] == 'cache_pending' for c in s['classifications'])]),
                 'total_classified': len([s for s in all_sessions if len(s['classifications']) > 0])
+            },
+            # NUOVO: Informazioni filtri per React
+            'filter_options': {
+                'available_statuses': ['all', 'available', 'in_review_queue', 'reviewed'],
+                'current_filter': status_filter or 'all'
             }
         })
         
@@ -2409,7 +2753,7 @@ def get_all_sessions(client):
 @app.route('/api/review/<client>/add-to-queue', methods=['POST'])
 def add_session_to_review_queue(client):
     """
-    Aggiungi manualmente una sessione alla review queue
+    Aggiungi manualmente una sessione alla review queue - USA MONGODB
     """
     try:
         data = request.get_json()
@@ -2424,56 +2768,75 @@ def add_session_to_review_queue(client):
         
         print(f"➕ Aggiunta manuale sessione {session_id} alla review queue per {client}")
         
-        quality_gate = classification_service.get_quality_gate(client)
-        
-        # Ottieni i dati della sessione
-        from Preprocessing.session_aggregator import SessionAggregator
-        aggregator = SessionAggregator(schema='humanitas')
-        sessioni = aggregator.estrai_sessioni_aggregate()
-        
-        if session_id not in sessioni:
+        # NUOVO: Usa MongoDB per ottenere i dati della sessione
+        from mongo_classification_reader import MongoClassificationReader
+        mongo_reader = MongoClassificationReader()
+        if not mongo_reader.connect():
             return jsonify({
                 'success': False,
-                'error': f'Sessione {session_id} non trovata nel database'
+                'error': 'Errore connessione MongoDB'
+            }), 500
+        
+        # Verifica se la sessione esiste in MongoDB
+        all_sessions = mongo_reader.get_all_sessions(client)
+        session_data = None
+        for session in all_sessions:
+            if session.get('session_id') == session_id:
+                session_data = session
+                break
+                
+        if not session_data:
+            return jsonify({
+                'success': False,
+                'error': f'Sessione {session_id} non trovata in MongoDB'
             }), 404
         
-        # Verifica se già in queue
-        for case in quality_gate.pending_reviews.values():
-            if case.session_id == session_id:
-                return jsonify({
-                    'success': False,
-                    'error': f'Sessione {session_id} già nella review queue'
-                }), 400
+        quality_gate = classification_service.get_quality_gate(client)
         
-        # Crea il caso di review
-        from QualityGate.quality_gate_engine import ReviewCase
-        case_id = f"{client}_{session_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_manual"
+        # Verifica se già in queue - usa il metodo corretto
+        try:
+            pending_cases = quality_gate.get_pending_reviews(tenant=client, limit=1000)
+            for case in pending_cases:
+                if case['session_id'] == session_id:
+                    return jsonify({
+                        'success': False,
+                        'error': f'Sessione {session_id} già nella review queue'
+                    }), 400
+        except Exception as e:
+            print(f"⚠️ Errore controllo pending reviews: {e}")
         
-        review_case = ReviewCase(
-            case_id=case_id,
+        # Crea il caso di review usando i dati da MongoDB
+        conversation_text = session_data.get('conversation_text', '')
+        ml_prediction = session_data.get('classification_ML', '')
+        ml_confidence = session_data.get('confidence_ML', 0.0)
+        llm_prediction = session_data.get('classification_LLM', '')
+        llm_confidence = session_data.get('confidence_LLM', 0.0)
+        
+        case_id = quality_gate.add_to_review_queue(
             session_id=session_id,
-            conversation_text=sessioni[session_id]['testo_completo'],
-            ml_prediction="",
-            ml_confidence=0.0,
-            llm_prediction="manual_review",
-            llm_confidence=0.0,
-            uncertainty_score=0.5,
-            novelty_score=0.3,
+            conversation_text=conversation_text,
             reason=f"manual_addition: {reason}",
-            created_at=datetime.now(),
-            tenant=client,
-            cluster_id=-1  # Non ha cluster per ora
+            ml_prediction=ml_prediction,
+            ml_confidence=ml_confidence,
+            llm_prediction=llm_prediction,
+            llm_confidence=llm_confidence
         )
-        
-        quality_gate.pending_reviews[case_id] = review_case
-        
+
         print(f"✅ Sessione {session_id} aggiunta alla review queue come {case_id}")
         
+        # Calcola queue size usando il metodo corretto
+        try:
+            current_pending = quality_gate.get_pending_reviews(tenant=client, limit=1000)
+            queue_size = len(current_pending)
+        except Exception as e:
+            print(f"⚠️ Errore calcolo queue size: {e}")
+            queue_size = 0
+
         return jsonify({
             'success': True,
             'message': f'Sessione {session_id} aggiunta alla review queue',
             'case_id': case_id,
-            'queue_size': len(quality_gate.pending_reviews)
+            'queue_size': queue_size
         })
         
     except Exception as e:
@@ -3214,6 +3577,123 @@ def get_prompts_for_tenant(tenant_id: str):
         }), 500
 
 
+# COMMENTATO: Endpoint ridondante - L'UI usa direttamente /api/prompts/{tenant_id}/status
+# @app.route('/api/prompts/tenant/<tenant_id>/status', methods=['GET'])
+# def get_prompts_status_for_tenant(tenant_id: str):
+#     """
+#     Recupera lo status dei prompt per un tenant specifico (accetta tenant_slug)
+#     
+#     GET /api/prompts/tenant/alleanza/status
+#     
+#     Returns:
+#         {
+#             "tenant_id": "alleanza",
+#             "tenant_name": "Alleanza",
+#             "total_prompts": 5,
+#             "active_prompts": 3,
+#             "inactive_prompts": 2,
+#             "last_updated": "2025-01-16T10:00:00",
+#             "status": "ready"
+#         }
+#     """
+#     try:
+#         print(f"🔍 API: Recupero status prompt per tenant_slug: {tenant_id}")
+#         
+#         prompt_manager = PromptManager()
+#         prompts = prompt_manager.get_all_prompts_for_tenant(tenant_id)
+#         
+#         # Calcola statistiche
+#         total_prompts = len(prompts)
+#         active_prompts = len([p for p in prompts if p.get('is_active', False)])
+#         inactive_prompts = total_prompts - active_prompts
+#         
+#         # Trova ultimo aggiornamento
+#         last_updated = None
+#         if prompts:
+#             last_updated = max(p.get('updated_at', '') for p in prompts if p.get('updated_at'))
+#         
+#         # Determina tenant name
+#         tenant_name = prompts[0].get('tenant_name', 'unknown') if prompts else 'unknown'
+#         
+#         status = {
+#             "tenant_id": tenant_id,
+#             "tenant_name": tenant_name,
+#             "total_prompts": total_prompts,
+#             "active_prompts": active_prompts,
+#             "inactive_prompts": inactive_prompts,
+#             "last_updated": last_updated,
+#             "status": "ready" if active_prompts > 0 else "no_active_prompts"
+#         }
+#         
+#         print(f"✅ Status prompt per tenant {tenant_id}: {active_prompts}/{total_prompts} attivi")
+#         
+#         return jsonify(status)
+#         
+#     except Exception as e:
+#         print(f"❌ Errore status prompt per tenant {tenant_id}: {e}")
+#         return jsonify({
+#             'error': str(e),
+#             'tenant_id': tenant_id,
+#             'status': 'error'
+#         }), 500
+
+
+@app.route('/api/prompts/<tenant_id>/status', methods=['GET'])
+def get_prompts_status_by_tenant_id(tenant_id: str):
+    """
+    Recupera lo status dei prompt per un tenant usando tenant_id completo
+    
+    GET /api/prompts/a0fd7600-f4f7-11ef-9315-96000228e7fe/status
+    
+    Returns: Stesso formato dell'endpoint sopra
+    """
+    try:
+        print(f"🔍 API: Recupero status prompt per tenant_id completo: {tenant_id}")
+        
+        prompt_manager = PromptManager()
+        
+        # Per tenant_id completo, dobbiamo trovare lo slug corrispondente
+        # Il PromptManager ora gestisce automaticamente questa conversione
+        prompts = prompt_manager.get_all_prompts_for_tenant(tenant_id)
+        
+        # Calcola statistiche
+        total_prompts = len(prompts)
+        active_prompts = len([p for p in prompts if p.get('is_active', False)])
+        inactive_prompts = total_prompts - active_prompts
+        
+        # Trova ultimo aggiornamento
+        last_updated = None
+        if prompts:
+            last_updated = max(p.get('updated_at', '') for p in prompts if p.get('updated_at'))
+        
+        # Determina tenant name
+        tenant_name = prompts[0].get('tenant_name', 'unknown') if prompts else 'unknown'
+        
+        status = {
+            "success": True,  # AGGIUNTO: Campo success richiesto dall'ApiService UI
+            "tenant_id": tenant_id,
+            "tenant_name": tenant_name,
+            "total_prompts": total_prompts,
+            "active_prompts": active_prompts,
+            "inactive_prompts": inactive_prompts,
+            "last_updated": last_updated,
+            "status": "ready" if active_prompts > 0 else "no_active_prompts"
+        }
+        
+        print(f"✅ Status prompt per tenant_id {tenant_id}: {active_prompts}/{total_prompts} attivi")
+        
+        return jsonify(status)
+        
+    except Exception as e:
+        print(f"❌ Errore status prompt per tenant_id {tenant_id}: {e}")
+        return jsonify({
+            'success': False,  # AGGIUNTO: Campo success per coerenza
+            'error': str(e),
+            'tenant_id': tenant_id,
+            'status': 'error'
+        }), 500
+
+
 @app.route('/api/prompts/<int:prompt_id>', methods=['GET'])
 def get_prompt_by_id(prompt_id: int):
     """
@@ -3824,4 +4304,17 @@ def export_tools_for_tenant(tenant_id: str):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # Configurazione per evitare loop di ricaricamento con il virtual environment
+    import os
+    
+    # Disabilita il debug se ci sono problemi con il virtual environment
+    debug_mode = os.environ.get('FLASK_DEBUG', 'True').lower() == 'true'
+    
+    # Avvio del server con configurazione ottimizzata
+    app.run(
+        host="0.0.0.0", 
+        port=5000, 
+        debug=debug_mode,
+        use_reloader=debug_mode,
+        extra_files=None  # Non monitorare file extra per evitare loop
+    )

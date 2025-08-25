@@ -21,11 +21,29 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
 
 class MongoDBConnector:
-    """
-    Connettore MongoDB per gestire le classificazioni delle sessioni con embeddings
-    """
+#!/usr/bin/env python3
+"""
+QUESTO FILE È STATO DISABILITATO PERCHÉ GENERA COLLECTION NAMES SBAGLIATI!
+
+IL PROBLEMA ERA:
+- Usava pattern {client.lower()}_{tenant_id}_classifications 
+- Generava alleanza_6a21096285265316_classifications (SBAGLIATO)
+- Invece del pattern corretto {tenant_slug}_{tenant_id}
+- Che genera alleanza_a0fd7600-f4f7-11ef-9315-96000228e7fe (GIUSTO)
+
+USA INVECE: mongo_classification_reader.py
+
+Autore: Sistema disabilitato 
+Data: 2025-08-23
+"""
+
+class MongoDBConnector:
+    """CLASSE DISABILITATA - USA mongo_classification_reader.py INVECE"""
     
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(self):
+        raise Exception("❌ QUESTA CLASSE È STATA DISABILITATA! Usa mongo_classification_reader.py invece")
+
+# TUTTO IL RESTO DEL CODICE È STATO COMMENTATO PER EVITARE COLLECTION NAMES SBAGLIATI    def __init__(self, config_path: Optional[str] = None):
         """
         Inizializza il connettore MongoDB
         
@@ -189,8 +207,13 @@ class MongoDBConnector:
                 'metadata': metadata or {}
             }
             
-            # Inserisce o aggiorna il documento
-            collection = self.db[self.collection_name]
+            # 🎯 USA COLLECTION MULTI-TENANT SEGUENDO PATTERN {tenant_slug}_{tenant_id}_classifications
+            # Pattern: alleanza_a0fd7600_classifications invece di client_session_classifications
+            tenant_collection_name = f"{client.lower()}_{tenant_id}_classifications"
+            self.logger.debug(f"🏷️  Usando collection multi-tenant: {tenant_collection_name}")
+            
+            # Inserisce o aggiorna il documento nella collection specifica del tenant
+            collection = self.db[tenant_collection_name]
             
             # Usa upsert per evitare duplicati sulla combinazione session_id+tenant_id
             filter_query = {

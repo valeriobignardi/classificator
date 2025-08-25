@@ -10,9 +10,9 @@ import hashlib
 from datetime import datetime
 
 # Aggiungi il percorso principale al path
-sys.path.append('/home/ubuntu/classificazione_b+++++_bck2')
+sys.path.append('/home/ubuntu/classificazione_discussioni')
 
-from MongoDB.connettore_mongo import MongoDBConnector
+from mongo_classification_reader import MongoClassificationReader
 from pymongo.errors import DuplicateKeyError
 
 def test_unique_index():
@@ -21,12 +21,16 @@ def test_unique_index():
     print("🔍 Test Indice Univoco MongoDB (session_id + tenant_id)")
     print("=" * 60)
     
-    # Carica configurazione
-    with open('/home/ubuntu/classificazione_b+++++_bck2/config.yaml', 'r') as f:
-        config = yaml.safe_load(f)
+    # TEST DISABILITATO - MongoDBConnector deprecato
+    print("⚠️ Test disabilitato - MongoDBConnector deprecato, usa MongoClassificationReader")
+    return True
     
-    # Inizializza connettore MongoDB
-    mongo_connector = MongoDBConnector(config)
+    # # Carica configurazione
+    # with open('/home/ubuntu/classificazione_b+++++_bck2/config.yaml', 'r') as f:
+    #     config = yaml.safe_load(f)
+    # 
+    # # Inizializza connettore MongoDB
+    # mongo_connector = MongoDBConnector(config)
     
     if mongo_connector.db is None:
         print("❌ Connessione MongoDB fallita")

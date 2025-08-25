@@ -23,6 +23,13 @@ from datetime import datetime
 from Utils.numpy_serialization import convert_numpy_types
 import json
 
+# Import EmbeddingManager per gestione dinamica embedder
+try:
+    from EmbeddingEngine.embedding_manager import embedding_manager
+except ImportError:
+    # Fallback per compatibilità
+    embedding_manager = None
+
 # Importa SemanticMemoryManager per novelty detection
 try:
     from SemanticMemory.semantic_memory_manager import SemanticMemoryManager
@@ -137,6 +144,25 @@ class QualityGateEngine:
                         f"confidence={self.confidence_threshold}, disagreement={self.disagreement_threshold}, "
                         f"uncertainty={self.uncertainty_threshold}")
         self.logger.info(f"Log training: {self.training_log_path}")
+
+    def _get_dynamic_embedder(self, tenant_name: str = None):
+        """
+        Ottiene embedder dinamico configurato per il tenant
+        
+        Args:
+            tenant_name: Nome del tenant (fallback a self.tenant_name se None)
+            
+        Returns:
+            Embedder configurato per il tenant
+        """
+        effective_tenant = tenant_name or self.tenant_name or "humanitas"
+        
+        if embedding_manager is not None:
+            return embedding_manager.get_shared_embedder(effective_tenant)
+        else:
+            # Fallback per compatibilità
+            from EmbeddingEngine.labse_embedder import LaBSEEmbedder
+            return LaBSEEmbedder()
 
     def evaluate_classification(self, 
                               session_id: str,
@@ -969,9 +995,8 @@ class QualityGateEngine:
                 self.logger.warning("Nessuna conversazione preparata per il training")
                 return None, None
             
-            # Genera embeddings per le conversazioni
-            from EmbeddingEngine.labse_embedder import LaBSEEmbedder
-            embedder = LaBSEEmbedder()
+            # Genera embeddings usando embedder dinamico per il tenant
+            embedder = self._get_dynamic_embedder()
             
             self.logger.info(f"Generazione embeddings per {len(conversations)} conversazioni...")
             X = embedder.encode(conversations)
@@ -1027,7 +1052,9 @@ class QualityGateEngine:
         try:
             # 1. Carica il modello esistente
             from Classification.advanced_ensemble_classifier import AdvancedEnsembleClassifier
-            from EmbeddingEngine.labse_embedder import LaBSEEmbedder
+            
+            # Usa embedder dinamico condiviso
+            embedder = self._get_dynamic_embedder()
             
             # Trova il modello più recente
             model_files = []
@@ -1441,8 +1468,10 @@ class QualityGateEngine:
         try:
             from MySql.connettore import MySqlConnettore
             from Classification.advanced_ensemble_classifier import AdvancedEnsembleClassifier
-            from EmbeddingEngine.labse_embedder import LaBSEEmbedder
             from Preprocessing.session_aggregator import SessionAggregator
+
+            # Ottieni embedder dinamico configurato per il tenant
+            embedder = self._get_dynamic_embedder()
 
             # ⚠️ IMPORTANTE: Aggiorna le soglie con i valori dell'utente
             old_confidence_threshold = self.confidence_threshold
@@ -1580,7 +1609,7 @@ class QualityGateEngine:
         self.logger.info(f"📊 ANALISI RAPPRESENTANTI: {len(sessioni_filtrate)} sessioni totali per clustering")
 
         # 1. CLUSTERING con modalità Mistral corretta
-        embedder = LaBSEEmbedder()
+        embedder = self._get_dynamic_embedder()
         classifier = self._create_ensemble_classifier_with_correct_mistral_mode(self.tenant_name)
         
         # Se abbiamo un modello ML esistente, caricalo nell'ensemble
@@ -1837,7 +1866,7 @@ class QualityGateEngine:
         self.logger.info(f"📊 ANALISI COMPLETA: {len(sessioni_filtrate)} sessioni da analizzare individualmente")
 
         # Inizializza ensemble con modalità Mistral corretta
-        embedder = LaBSEEmbedder()
+        embedder = self._get_dynamic_embedder()
         ensemble = self._create_ensemble_classifier_with_correct_mistral_mode(self.tenant_name)
         
         # Carica modello ML se disponibile
@@ -2077,7 +2106,7 @@ class QualityGateEngine:
             }
 
         # Inizializza ensemble con modalità Mistral corretta
-        embedder = LaBSEEmbedder()
+        embedder = self._get_dynamic_embedder()
         ensemble = self._create_ensemble_classifier_with_correct_mistral_mode(self.tenant_name)
         
         # Carica modello ML se disponibile

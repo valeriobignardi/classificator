@@ -485,6 +485,268 @@ class ApiService {
       throw error;
     }
   }
+
+  /**
+   * Testa i parametri di clustering senza LLM per ottimizzazione
+   * 
+   * @param tenantId ID del tenant
+   * @param parameters Parametri clustering personalizzati (opzionale)
+   * @param sampleSize Numero conversazioni da testare (opzionale)
+   * @returns Risultati del test clustering con statistiche e cluster
+   * 
+   * Autore: Sistema di Classificazione
+   * Data: 2025-08-25
+   * Descrizione: Test rapido clustering per validazione parametri
+   */
+  async testClustering(
+    tenantId: string, 
+    parameters?: {
+      min_cluster_size?: number;
+      min_samples?: number;
+      cluster_selection_epsilon?: number;
+      metric?: string;
+    },
+    sampleSize?: number
+  ): Promise<{
+    success: boolean;
+    tenant_id: string;
+    execution_time: number;
+    statistics: {
+      total_conversations: number;
+      n_clusters: number;
+      n_outliers: number;
+      clustering_ratio: number;
+      parameters_used: any;
+    };
+    detailed_clusters: Array<{
+      cluster_id: number;
+      label: string;
+      size: number;
+      conversations: Array<{
+        session_id: string;
+        testo_completo: string;
+        is_representative: boolean;
+      }>;
+      representatives: any[];
+      representative_count: number;
+    }>;
+    quality_metrics: {
+      silhouette_score: number;
+      outlier_ratio: number;
+      cluster_balance: string;
+      quality_assessment: string;
+    };
+    outlier_analysis: {
+      count: number;
+      ratio: number;
+      analysis: string;
+      recommendation: string;
+      sample_outliers: any[];
+    };
+    error?: string;
+  }> {
+    console.log('🧪 [DEBUG] ApiService.testClustering() - Avvio richiesta');
+    console.log('🧪 [DEBUG] Tenant:', tenantId);
+    console.log('🧪 [DEBUG] Parameters:', parameters);
+    console.log('🧪 [DEBUG] Sample size:', sampleSize);
+    
+    const url = `${API_BASE_URL}/clustering/${tenantId}/test`;
+    console.log('🧪 [DEBUG] URL chiamata:', url);
+
+    try {
+      const payload: any = {};
+      if (parameters) {
+        payload.parameters = parameters;
+      }
+      if (sampleSize) {
+        payload.sample_size = sampleSize;
+      }
+      
+      console.log('🧪 [DEBUG] Payload:', payload);
+      
+      const response = await axios.post(url, payload);
+      console.log('✅ [DEBUG] Test clustering completato:', response.status);
+      console.log('✅ [DEBUG] Risultati clustering:', response.data);
+      
+      return response.data;
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore test clustering:', error);
+      
+      // Gestione errori specifici
+      if (axios.isAxiosError(error)) {
+        const errorData = error.response?.data;
+        return {
+          success: false,
+          error: errorData?.error || error.message,
+          tenant_id: tenantId,
+          execution_time: 0,
+          statistics: { total_conversations: 0, n_clusters: 0, n_outliers: 0, clustering_ratio: 0, parameters_used: {} },
+          detailed_clusters: [],
+          quality_metrics: { silhouette_score: 0, outlier_ratio: 0, cluster_balance: 'error', quality_assessment: 'error' },
+          outlier_analysis: { count: 0, ratio: 0, analysis: 'error', recommendation: '', sample_outliers: [] }
+        };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Ottiene configurazione AI completa per tenant
+   * @param tenantId ID del tenant
+   * @returns Configurazione AI corrente
+   */
+  async getAIConfiguration(tenantId: string): Promise<any> {
+    console.log('🤖 [DEBUG] ApiService.getAIConfiguration() - Avvio richiesta');
+    console.log('🤖 [DEBUG] Tenant:', tenantId);
+    
+    const url = `${API_BASE_URL}/ai-config/${tenantId}/configuration`;
+    console.log('🤖 [DEBUG] URL chiamata:', url);
+
+    try {
+      const response = await axios.get(url);
+      console.log('✅ [DEBUG] Configurazione AI ricevuta:', response.status);
+      console.log('✅ [DEBUG] Dati configurazione:', response.data);
+      
+      return response.data;
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore get configurazione AI:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Ottiene embedding engines disponibili
+   * @param tenantId ID del tenant
+   * @returns Lista embedding engines
+   */
+  async getEmbeddingEngines(tenantId: string): Promise<any> {
+    console.log('🔧 [DEBUG] ApiService.getEmbeddingEngines() - Avvio richiesta');
+    console.log('🔧 [DEBUG] Tenant:', tenantId);
+    
+    const url = `${API_BASE_URL}/ai-config/${tenantId}/embedding-engines`;
+    console.log('🔧 [DEBUG] URL chiamata:', url);
+
+    try {
+      const response = await axios.get(url);
+      console.log('✅ [DEBUG] Embedding engines ricevuti:', response.status);
+      console.log('✅ [DEBUG] Dati engines:', response.data);
+      
+      return response.data;
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore get embedding engines:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Imposta nuovo embedding engine
+   * @param tenantId ID del tenant
+   * @param engineType Tipo di engine
+   * @param config Configurazione engine
+   * @returns Risultato operazione
+   */
+  async setEmbeddingEngine(tenantId: string, engineType: string, config: any = {}): Promise<any> {
+    console.log('🔧 [DEBUG] ApiService.setEmbeddingEngine() - Avvio richiesta');
+    console.log('🔧 [DEBUG] Tenant:', tenantId);
+    console.log('🔧 [DEBUG] Engine type:', engineType);
+    
+    const url = `${API_BASE_URL}/ai-config/${tenantId}/embedding-engines`;
+    console.log('🔧 [DEBUG] URL chiamata:', url);
+
+    try {
+      const payload = {
+        engine_type: engineType,
+        config: config
+      };
+      
+      const response = await axios.post(url, payload);
+      console.log('✅ [DEBUG] Embedding engine impostato:', response.status);
+      console.log('✅ [DEBUG] Risultato:', response.data);
+      
+      return response.data;
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore set embedding engine:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Ottiene modelli LLM disponibili
+   * @param tenantId ID del tenant
+   * @returns Lista modelli LLM
+   */
+  async getLLMModels(tenantId: string): Promise<any> {
+    console.log('🧠 [DEBUG] ApiService.getLLMModels() - Avvio richiesta');
+    console.log('🧠 [DEBUG] Tenant:', tenantId);
+    
+    const url = `${API_BASE_URL}/ai-config/${tenantId}/llm-models`;
+    console.log('🧠 [DEBUG] URL chiamata:', url);
+
+    try {
+      const response = await axios.get(url);
+      console.log('✅ [DEBUG] Modelli LLM ricevuti:', response.status);
+      console.log('✅ [DEBUG] Dati modelli:', response.data);
+      
+      return response.data;
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore get modelli LLM:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Imposta nuovo modello LLM
+   * @param tenantId ID del tenant
+   * @param modelName Nome del modello
+   * @returns Risultato operazione
+   */
+  async setLLMModel(tenantId: string, modelName: string): Promise<any> {
+    console.log('🧠 [DEBUG] ApiService.setLLMModel() - Avvio richiesta');
+    console.log('🧠 [DEBUG] Tenant:', tenantId);
+    console.log('🧠 [DEBUG] Model name:', modelName);
+    
+    const url = `${API_BASE_URL}/ai-config/${tenantId}/llm-models`;
+    console.log('🧠 [DEBUG] URL chiamata:', url);
+
+    try {
+      const payload = {
+        model_name: modelName
+      };
+      
+      const response = await axios.post(url, payload);
+      console.log('✅ [DEBUG] Modello LLM impostato:', response.status);
+      console.log('✅ [DEBUG] Risultato:', response.data);
+      
+      return response.data;
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore set modello LLM:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Ottiene informazioni debug per configurazione AI
+   * @param tenantId ID del tenant
+   * @returns Debug info dettagliate
+   */
+  async getAIDebugInfo(tenantId: string): Promise<any> {
+    console.log('🐛 [DEBUG] ApiService.getAIDebugInfo() - Avvio richiesta');
+    console.log('🐛 [DEBUG] Tenant:', tenantId);
+    
+    const url = `${API_BASE_URL}/ai-config/${tenantId}/debug`;
+    console.log('🐛 [DEBUG] URL chiamata:', url);
+
+    try {
+      const response = await axios.get(url);
+      console.log('✅ [DEBUG] Debug info ricevute:', response.status);
+      console.log('✅ [DEBUG] Dati debug:', response.data);
+      
+      return response.data;
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore get debug info:', error);
+      throw error;
+    }
+  }
 }
 
 export const apiService = new ApiService();

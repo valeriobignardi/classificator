@@ -1,0 +1,13 @@
+clustering_parameters:
+  cluster_selection_epsilon: 0.08
+  metric: cosine
+  min_cluster_size: 5
+  min_samples: 3
+last_updated: '2025-08-25T20:51:34.000375'
+previous_config_backup:
+  cluster_selection_epsilon: 0.15
+  metric: cosine
+  min_cluster_size: 5
+  min_samples: 3
+tenant_id: 16c222a9-f293-11ef-9315-96000228e7fe
+updated_by: web_interface

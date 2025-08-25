@@ -23,6 +23,7 @@ import PromptManager from './components/PromptManager';
 import ExampleManager from './components/ExampleManager';
 import ToolManager from './components/ToolManager';
 import ClusteringParametersManager from './components/ClusteringParametersManager';
+import AIConfigurationManager from './components/AIConfigurationManager';
 import TenantSelector from './components/TenantSelector';
 import { TenantProvider, useTenant } from './contexts/TenantContext';
 import { apiService } from './services/apiService';
@@ -235,6 +236,17 @@ function AppContent() {
 
           <TabPanel value={currentTab} index={2}>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {/* Sezione Configurazione AI - NUOVA SEZIONE PRIORITARIA */}
+              <Box>
+                <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>
+                  ⚙️ Configurazione AI
+                </Typography>
+                <AIConfigurationManager open={true} />
+              </Box>
+
+              {/* Separatore */}
+              <Box sx={{ borderTop: '1px solid #e0e0e0', my: 2 }} />
+
               {/* Sezione Prompts - SPOSTATA PRIMA */}
               <Box>
                 <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>

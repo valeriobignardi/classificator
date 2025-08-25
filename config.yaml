@@ -1,597 +1,368 @@
-database:
-  host: "159.69.223.201"
-  port: 3306
-  user: "taggenerator"
-  password: "zsRxiYmcVG9XX7Q3TvAT"
-  database: "common"
-
-tag_database:
-  host: "localhost"
-  port: 3306
-  user: "root"
-  password: "Valerio220693!"
-  database: "TAG"
-
-# Configurazione MongoDB per embeddings e classificazioni
-mongodb:
-  url: "mongodb://localhost:27017"
-  database: "classificazioni"
-  # Collection usata: client_session_classifications
-
-# ===============================
-# Configurazione BERTopic feature - OTTIMIZZATO PER DATASET GRANDI
-# ===============================
 bertopic:
-  enabled: true          # Abilitato con ottimizzazioni per grandi dataset
-  top_k: 10               # RIDOTTO per performance (era 15)
-  return_one_hot: false   # Non includere one-hot del topic principale
-  model_subdir: "bertopic" # Sotto-cartella del modello per il provider
-  use_svd: true           # Abilita riduzione SVD sulle full probas
-  svd_components: 20      # RIDOTTO per performance (era 32)
-  
-  # 🆕 Parametri UMAP ottimizzati per grandi dataset
-  umap_params:
-    n_neighbors: 10       # RIDOTTO per velocità (default 15)
-    n_components: 3       # RIDOTTO per velocità (default 5)  
-    min_dist: 0.05        # Ottimizzato per clustering
-    metric: 'euclidean'   # Più veloce di cosine
-    
-  # 🆕 Parametri HDBSCAN ottimizzati  
+  enabled: true
   hdbscan_params:
-    min_cluster_size: 8   # Cluster più grandi per stabilità
-    min_samples: 4        # Meno sensibile al rumore
-    metric: 'euclidean'   # Consistente con UMAP
-
-# =====================================
-# CONFIGURAZIONE DEBUG LLM/ML SYSTEM
-# =====================================
-debug:
-  # Attivazione debug generale
-  enabled: true                    # Abilita/disabilita tutto il sistema di debug
-  
-  # Debug LLM
-  llm_debug:
-    enabled: true                  # Debug specifico per LLM
-    log_input: true                # Logga input/prompt inviati al LLM
-    log_output: true               # Logga output/response dal LLM
-    log_processing: true           # Logga processing interno del LLM
-    log_confidence: true           # Logga calcolo confidenza LLM
-    log_reasoning: true            # Logga reasoning/motivazione LLM
-    save_to_file: true             # Salva debug su file dedicato
-    visual_formatting: true        # Formattazione grafica del debug
-  
-  # Debug ML/Ensemble
-  ml_debug:
-    enabled: true                  # Debug specifico per ML ensemble
-    log_features: true             # Logga features/embeddings
-    log_training: true             # Logga processo di training
-    log_prediction: true           # Logga predizioni ML
-    log_probabilities: true        # Logga distribuzioni di probabilità
-    log_ensemble_voting: true      # Logga processo di voting ensemble
-  
-  # Debug Quality Gate
-  quality_gate_debug:
-    enabled: true                  # Debug per Quality Gate Engine
-    log_decisions: true            # Logga decisioni quality gate
-    log_thresholds: true           # Logga valutazione soglie
-    log_human_review: true         # Logga invio a human review
-  
-  # Configurazione file di debug
-  debug_files:
-    base_path: "./debug_logs"      # Directory base per file di debug
-    llm_log: "llm_debug.log"       # File per debug LLM
-    ml_log: "ml_debug.log"         # File per debug ML
-    quality_log: "quality_debug.log" # File per debug Quality Gate
-    max_file_size_mb: 50           # Dimensione massima file (MB)
-    rotate_files: true             # Rotazione automatica file
-
-# Configurazione parametri di clustering HDBSCAN - OTTIMIZZATO PER DATASET GRANDI
+    metric: euclidean
+    min_cluster_size: 8
+    min_samples: 4
+  model_subdir: bertopic
+  return_one_hot: false
+  svd_components: 20
+  top_k: 10
+  umap_params:
+    metric: euclidean
+    min_dist: 0.05
+    n_components: 3
+    n_neighbors: 10
+  use_svd: true
 clustering:
-  # Parametri principali HDBSCAN - OTTIMIZZATO PER VELOCITÀ SU DATASET GRANDI
-  min_cluster_size: 5              # AUMENTATO per ridurre complessità computazionale
-  min_samples: 3                   # AUMENTATO per cluster più stabili
-  cluster_selection_epsilon: 0.08  # AUMENTATO per maggiore raggruppamento
-  metric: 'euclidean'              # CAMBIATO da cosine per performance UMAP
-  
-  # Parametri avanzati
-  cluster_selection_method: 'eom'  # Metodo di selezione cluster ottimizzato
-  allow_single_cluster: false      # Permetti un singolo cluster gigante
-  
-  # Parametri per rappresentanti di cluster
-  n_representatives: 2             # RIDOTTO per velocità
-  
-  # Soglie di qualità
-  min_silhouette_score: 0.1        # RIDOTTO per accettare più cluster
-  max_outlier_ratio: 0.4           # AUMENTATO per tollerare più outlier
-
-# Configurazione clustering gerarchico adattivo
+  allow_single_cluster: false
+  cluster_selection_epsilon: 0.08
+  cluster_selection_method: eom
+  max_outlier_ratio: 0.4
+  metric: euclidean
+  min_cluster_size: 5
+  min_samples: 3
+  min_silhouette_score: 0.1
+  n_representatives: 2
+conversation_reading:
+  only_user: false
+database:
+  database: common
+  host: 159.69.223.201
+  password: zsRxiYmcVG9XX7Q3TvAT
+  port: 3306
+  user: taggenerator
+debug:
+  debug_files:
+    base_path: ./debug_logs
+    llm_log: llm_debug.log
+    max_file_size_mb: 50
+    ml_log: ml_debug.log
+    quality_log: quality_debug.log
+    rotate_files: true
+  enabled: true
+  llm_debug:
+    enabled: true
+    log_confidence: true
+    log_input: true
+    log_output: true
+    log_processing: true
+    log_reasoning: true
+    save_to_file: true
+    visual_formatting: true
+  ml_debug:
+    enabled: true
+    log_ensemble_voting: true
+    log_features: true
+    log_prediction: true
+    log_probabilities: true
+    log_training: true
+  quality_gate_debug:
+    enabled: true
+    log_decisions: true
+    log_human_review: true
+    log_thresholds: true
 hierarchical_clustering:
-  # Abilitazione clustering gerarchico
-  enabled: false                   # Abilita clustering gerarchico (false = usa clustering standard)
-  
-  # Parametri principali
-  confidence_threshold: 0.75       # Soglia per regioni core (alta confidenza)
-  boundary_threshold: 0.45         # Soglia per regioni boundary (incertezza)
-  outlier_threshold: 0.25          # Soglia per outlier (bassa confidenza)
-  
-  # Parametri iterativi
-  max_iterations: 3                # Numero massimo di iterazioni adattive
-  convergence_threshold: 0.05      # Soglia di convergenza per fermare iterazioni
-  
-  # Parametri gerarchici
-  max_hierarchy_depth: 3           # Profondità massima della gerarchia
-  split_threshold: 0.6             # Soglia per split gerarchico di regioni
-  merge_threshold: 0.85            # Soglia per merge di regioni simili
-  
-  # Gestione conflitti
-  conflict_resolution_strategy: 'split'  # 'split', 'boundary', 'voting'
-  conflict_detection_threshold: 0.4      # Soglia per rilevare conflitti semantici
-  
-  # Parametri avanzati
-  use_semantic_analysis: true      # Usa analisi semantica per conflict resolution
-  boundary_refinement: true       # Raffina confini tra regioni
-  preserve_outliers: true         # Preserva outlier originali senza forcing
-  
-  # Soglie di qualità
-  min_region_size: 2              # Dimensione minima per una regione valida
-  min_membership_confidence: 0.3   # Confidenza minima per membership
-  
-  # Parametri di output
-  export_hierarchy_structure: true # Esporta struttura gerarchica completa
-  generate_region_reports: false   # Genera report dettagliati per regione
-  log_conflict_details: true      # Log dettagliato dei conflitti risolti
-
-# Configurazione parametri pipeline
-pipeline:
-  # Parametri predefiniti per inizializzazione pipeline
-  confidence_threshold: 0.7        # Soglia di confidenza per classificazioni automatiche
-  default_min_cluster_size: 3      # Dimensione minima cluster se non specificata
-  default_min_samples: 2           # Campioni minimi se non specificati
-  
-  # Parametri per estrazione sessioni
-  default_extraction_limit: 200    # Limite predefinito per estrazione sessioni
-  default_days_back: 7             # Giorni indietro predefiniti
-  
-  # Parametri per training interattivo
-  interactive_mode_default: true   # Modalità interattiva abilitata per default
-  ensemble_mode_default: true      # Ensemble classifier abilitato per default
-  
-  # Parametri per classificazione batch
-  classification_batch_size: 32    # Dimensione batch per classificazione
-  
-  # Parametri per IntelligentClassifier con embedding
-  intelligent_classifier_embedding: true   # ABILITATO: per sistema di fallback BERTopic
-  embedding_validation: false              # DISABILITATO: non necessario
-  semantic_fallback: true                  # ABILITATO: usa fallback intelligente BERTopic
-  new_category_detection: true             # ABILITATO: per auto-discovery tag via BERTopic
-  embedding_similarity_threshold: 0.85     # Soglia similarità per matching semantico
-  
-  # Sistema di fallback intelligente BERTopic - DISABILITATO per caso "altro"
-  bertopic_fallback_threshold: 0.0         # DISABILITATO: BERTopic fallback non adatto per singole classificazioni
-  new_tag_similarity_threshold: 0.75       # Se similarità < soglia → crea nuovo tag
-  auto_tag_creation: true                   # Permetti creazione automatica tag
-  llm_confidence_threshold: 0.85            # Soglia per auto-creazione tag da LLM
-
-  # Riaddestramento automatico all'inizializzazione
-  auto_retrain_on_init: false     # DISABILITATO: Modello già trainato (90.1% accuracy)
-                                  # - false: Per server di produzione con modello stabile
-                                  # - true: Solo per pipeline da zero con nuovi dati
-  
-  # Modalità operative - FORZATA REVIEW UMANA
-  default_auto_mode: false        # Modalità automatica DISABILITATA
-  default_confidence_threshold: 0.7  # Soglia di confidenza di default
-  
-  # Parametri clustering di default
-  default_min_cluster_size: 5
-  default_min_samples: 3
-  
-  # Gestione embedding condivisi
-  use_shared_embedder: true       # Usa embedder condiviso per evitare CUDA OOM
-
-# Configurazione UI React
-ui_config:
-  # Parametri per classificazione completa
-  classification:
-    confidence_threshold: 0.7      # Soglia di confidenza predefinita
-    force_retrain: true            # Forza ri-training dei modelli
-    max_sessions: null             # Limite sessioni (null = tutte)
-    debug_mode: false             # Modalità debug per logging dettagliato
-  
-  # Parametri per review queue
-  review:
-    default_limit: null            # RIMOSSO LIMITE: ora default è null (tutte le sessioni disponibili)
-    refresh_interval: 30           # Secondi tra refresh automatici
-    auto_refresh: false           # Refresh automatico abilitato
-  
-  # Parametri per mock cases
-  mock_cases:
-    default_count: 3               # Numero predefinito di casi mock da creare
-
-# Configurazione soglie di similarità per classificazione semantica
-similarity_thresholds:
-  # Soglia per riutilizzare etichette esistenti (cosine similarity)
-  # Se similarità > threshold -> usa etichetta esistente
-  # Se similarità < threshold -> crea nuova etichetta
-  reuse_existing_label: 0.80
-  
-  # Soglia di confidenza per classificazioni automatiche
-  # Classificazioni con confidenza > threshold sono considerate affidabili
-  classification_confidence: 0.80
-  
-  # Soglia per considerare due sessioni semanticamente simili
-  # Usata per determinare se una nuova sessione appartiene a una categoria esistente
-  semantic_similarity: 0.80
-  
-  # Soglia minima per clustering HDBSCAN
-  # Controlla quanto devono essere simili i punti per formare un cluster
-  clustering_similarity: 0.80
-
-# Configurazione avanzata per gestione memoria semantica
-semantic_memory:
-  # Numero massimo di campioni per etichetta da mantenere in memoria
-  max_samples_per_label: 50
-  
-  # Soglia per refresh automatico della memoria semantica
-  # Se il numero di nuove classificazioni supera questa soglia, ricarica lo storico
-  refresh_threshold: 100
-  
-  # Abilitazione logging dettagliato per debugging
-  enable_detailed_logging: true
-  
-  # Percorso per salvare cache della memoria semantica
-  cache_path: "semantic_cache/"
-
-# Configurazione clustering basato su intent
-intent_clustering:
-  # Abilitazione clustering intent-based (se false, usa HDBSCAN normale)
-  enabled: true
-  
-  # Numero minimo di conversazioni per formare un cluster per intent
-  min_conversations_per_intent: 2
-  
-  # Pattern di intent per identificazione automatica
-  # Ogni intent ha una lista di pattern regex che lo identificano
-  intent_patterns:
-    # Problemi di accesso e login (MIGLIORATI)
-    accesso_problemi:
-      - "non\\s+riesco.*accedere"
-      - "errore.*login"
-      - "problema.*password"
-      - "problemi.*login"
-      - "errore.*accesso"
-      - "non\\s+funziona.*app"
-      - "impossibile.*entrare"
-      - "non\\s+si\\s+apre"
-      - "credenziali.*non.*funziona"
-      - "non.*entra"
-      
-    # Richieste di parlare con operatore umano  
-    richiesta_operatore:
-      - "operatore\\s+umano"
-      - "parlare\\s+con.*operatore"
-      - "contattare.*operatore"
-      - "trasferire.*operatore"
-      - "assistenza\\s+diretta"
-      - "persona\\s+reale"
-      - "operatore.*reale"
-      - "umano.*assistenza"
-      
-    # Prenotazioni di visite/esami
-    prenotazione_esami:
-      - "prenotare.*visita"
-      - "fissare.*appuntamento"
-      - "nuovo.*appuntamento"
-      - "prenotazione.*esame"
-      - "quando\\s+posso.*prenotare"
-      - "disponibilità.*appuntamento"
-      - "vorrei.*prenotare"
-      - "dovrei.*prenotare"
-      - "posso.*prenotare"
-      
-    # Informazioni su esami specifici (preparazione, modalità)
-    info_esami_specifici:
-      - "come\\s+si\\s+svolge.*esame"
-      - "preparazione.*esame"
-      - "modalità.*esame"
-      - "cosa\\s+devo\\s+fare.*esame"
-      - "digiuno.*esame"
-      - "portare.*esame"
-      - "prepara.*esame"
-      - "prima.*esame"
-      
-    # Ritiro referti e risultati (MIGLIORATI)
-    ritiro_referti:
-      - "ritirare.*referto"
-      - "scaricare.*risultat"
-      - "vedere.*esito"
-      - "consultare.*referto"
-      - "quando.*pronti.*risultati"
-      - "dove.*trovo.*referto"
-      - "quando.*posso.*ritirare"
-      - "risultati.*esami"
-      - "esito.*radiografia"
-      - "referto.*piattaforma"
-      
-    # Problemi con fatturazione
-    fatturazione_problemi:
-      - "non.*ricevuto.*fattura"
-      - "problema.*pagamento"
-      - "errore.*fatturazione"
-      - "mancata.*fattura"
-      - "pagamento.*fallito"
-      - "non\\s+riesco.*pagare"
-      
-    # Modifiche/cancellazioni appuntamenti (MIGLIORATO)
-    modifica_appuntamenti:
-      - "modificare.*appuntamento"
-      - "cambiare.*prenotazione"
-      - "spostare.*visita"
-      - "cancellare.*appuntamento"
-      - "disdire.*prenotazione"
-      - "annullare.*visita"
-      - "modificare.*telefonicamente"
-      - "cambiare.*orario"
-      - "spostato.*luglio"
-      - "posticipare.*appuntamento"
-      
-    # Verifica stato appuntamenti (NUOVO)
-    verifica_appuntamenti:
-      - "verifica.*appuntamento"
-      - "stato.*prenotazione"
-      - "conferma.*appuntamento"
-      - "è\\s+stato\\s+spostato"
-      - "quando.*ho.*visita"
-      - "controllare.*appuntamento"
-      - "informazioni.*mio.*appuntamento"
-      
-    # Informazioni su orari e contatti (PIÙ SPECIFICO)
-    orari_contatti:
-      - "orari.*apertura"
-      - "orari.*ambulatorio"
-      - "orari.*visita.*degenti"
-      - "quando.*aperto"
-      - "ore.*apertura"
-      - "fino.*che.*ora"
-      
-    # Contatti e numeri telefonici (NUOVO - SEPARATO DA ORARI)
-    contatti_info:
-      - "numero.*telefono"
-      - "contatti.*struttura"
-      - "come.*contattare"
-      - "centralino"
-      - "telefono.*reparto"
-      - "numero.*assistenza"
-      
-    # Indicazioni e come arrivare (NUOVO)
-    indicazioni_sede:
-      - "dove\\s+siete"
-      - "indirizzo.*ospedale"
-      - "come.*arrivare"
-      - "mezzi.*pubblici"
-      - "indicazioni.*strada"
-      - "raggiungere.*sede"
-      - "parcheggio.*dove"
-      
-    # Accesso problemi tecnici (PIÙ SPECIFICO)
-    accesso_problemi:
-      - "non\\s+riesco.*accedere"
-      - "password.*sbagliata"
-      - "problema.*login"
-      - "account.*bloccato"
-      - "errore.*accesso"
-      - "email.*sbagliata"
-      - "profilo.*errato"
-      
-    # Servizi supporto e parcheggio (NUOVO)
-    servizi_supporto:
-      - "assistenza.*parcheggio"
-      - "contatto.*guardiania"
-      - "parcheggio.*pagamento"
-      - "ticket.*parcheggio"
-      - "dove.*parcheggiare"
-      
-    # Problemi tecnici generali
-    problemi_tecnici:
-      - "errore.*sistema"
-      - "non\\s+funziona.*sito"
-      - "problema.*tecnico"
-      - "bug.*applicazione"
-      - "errore.*caricamento"
-      - "lento.*sistema"
-      
-    # Richieste di informazioni generali
-    info_generali:
-      - "informazioni.*servizi"
-      - "cosa\\s+offrite"
-      - "quali\\s+esami"
-      - "specializzazioni"
-      - "reparti.*disponibili"
-      - "servizi.*offerti"
-  
-  # Pattern di fallback per categorie generiche
-  fallback_patterns:
-    # Se contiene parole di saluto/cortesia -> categoria cortesia
-    cortesia:
-      - "\\bgrazie\\b"
-      - "\\bbuongiorno\\b"
-      - "\\bbuonasera\\b"
-      - "\\barrivederci\\b"
-      - "\\bprego\\b"
-      
-    # Se contiene solo domande vaghe -> categoria domande_vaghe  
-    domande_vaghe:
-      - "^(come|cosa|quando|dove|perché).*\\?$"
-      - "mi\\s+serve\\s+aiuto"
-      - "ho\\s+bisogno"
-      
-    # Default per tutto il resto
-    altro:
-      - ".*"  # Pattern catch-all
-  
-  # Configurazione per clustering semantico fine (dopo intent grouping)
-  semantic_refinement:
-    enabled: true
-    # Per cluster con molte conversazioni, applica sub-clustering semantico
-    min_size_for_refinement: 10
-    # Soglia di similarità per sub-clustering
-    similarity_threshold: 0.85
-
-# Configurazione Quality Gate e Human Supervision
-quality_gate:
-  # Soglia di riaddestramento automatico (ogni N decisioni umane)
-  retraining_threshold: 5   # RIDOTTO da 10 a 5 per testing più frequente
-  
-  # Soglie per quality gate - ABBASSATE PER PIÙ REVIEW UMANA
-  uncertainty_threshold: 0.2      # Soglia di incertezza per human review (abbassata da 0.3)
-  novelty_threshold: 0.6          # Soglia di novità per human review (abbassata da 0.7)
-  confidence_threshold: 0.9       # Soglia di confidenza minima (alzata da 0.8 a 0.9)
-  
-  # Configurazione training automatico
-  auto_retrain_enabled: true      # Abilita riaddestramento automatico
-  min_decisions_for_retrain: 5    # Minimo decisioni prima del riaddestramento
-  max_training_examples: 1000     # Massimo esempi per training (per performance)
-  
-  # Configurazione backup modelli
-  model_backup_enabled: true      # Backup automatico modelli precedenti
-  max_model_backups: 5           # Numero massimo di backup da mantenere
-
-# =====================================
-# CONFIGURAZIONE TRAINING SUPERVISIONATO
-# =====================================
-supervised_training:
-  # Estrazione completa dal database
-  extraction:
-    use_full_dataset: true          # SEMPRE estrarre TUTTE le discussioni dal database
-    ignore_session_limits: true     # Ignora qualsiasi limite su numero sessioni estratte
-    full_clustering_required: true  # Il clustering deve essere fatto su tutto il dataset
-  
-  # Limiti per revisione umana
-  human_review:
-    max_total_sessions: 500         # Limite massimo sessioni da sottoporre all'umano
-    representatives_per_cluster: 3  # Numero di rappresentanti per cluster (di default)
-    min_representatives_per_cluster: 1  # Minimo rappresentanti per cluster piccoli
-    max_representatives_per_cluster: 5  # Massimo rappresentanti per cluster grandi
-    
-    # Strategia di selezione quando ci sono troppi cluster
-    selection_strategy: "prioritize_by_size"  # "prioritize_by_size", "prioritize_by_confidence", "balanced"
-    
-    # Prioritizzazione cluster per review umana
-    priority_large_clusters: true   # Priorità ai cluster più grandi
-    priority_low_confidence: true   # Priorità ai cluster a bassa confidenza
-    confidence_threshold_priority: 0.7  # Soglia sotto cui il cluster ha priorità
-    
-    # Gestione overflow
-    overflow_handling: "proportional"  # "proportional", "truncate", "ask_user"
-    min_cluster_size_for_review: 2  # Dimensione minima cluster per essere incluso nella review
-  
-  # Configurazione output dettagliato
-  reporting:
-    show_extraction_stats: true     # Mostra statistiche estrazione completa
-    show_clustering_stats: true     # Mostra statistiche clustering completo
-    show_selection_stats: true      # Mostra statistiche selezione per review umana
-    log_excluded_clusters: true     # Logga cluster esclusi dalla review umana
-
-# Configurazione clustering intelligente (SISTEMA PRINCIPALE)
+  boundary_refinement: true
+  boundary_threshold: 0.45
+  confidence_threshold: 0.75
+  conflict_detection_threshold: 0.4
+  conflict_resolution_strategy: split
+  convergence_threshold: 0.05
+  enabled: false
+  export_hierarchy_structure: true
+  generate_region_reports: false
+  log_conflict_details: true
+  max_hierarchy_depth: 3
+  max_iterations: 3
+  merge_threshold: 0.85
+  min_membership_confidence: 0.3
+  min_region_size: 2
+  outlier_threshold: 0.25
+  preserve_outliers: true
+  split_threshold: 0.6
+  use_semantic_analysis: true
 intelligent_clustering:
-  # Abilitazione clustering intelligente (SEMPRE ABILITATO per sistema puro ML+LLM)
-  enabled: true
-  
-  # Strategia: usa SOLO LLM per classificazione intent (nessun pattern)
-  use_llm_primary: true
-  
-  # NESSUN FALLBACK A PATTERN - solo ML+LLM puro
-  use_patterns_fallback: false
-  
-  # Soglia di confidenza LLM per accettare classificazione
-  llm_confidence_threshold: 0.80  # Abbassata per accettare più classificazioni LLM
-  
-  # Numero minimo di conversazioni per formare cluster
-  min_conversations_per_intent: 2
-  
-  # Soglia di confidenza minima per formare cluster
-  min_average_confidence: 0.4
-  
-  # Configurazione selezione rappresentanti diversificati
   diverse_representatives:
-    # Abilita selezione diversificata (vs solo centroide)
-    enabled: true
-    # Numero massimo di rappresentanti per cluster
-    max_representatives: 5
-    # Numero minimo di rappresentanti per cluster
-    min_representatives: 2
-    # Strategia di consenso: 'majority', 'highest_confidence', 'weighted_average'
-    consensus_strategy: 'majority'
-    # Soglia minima per consenso di maggioranza
-    majority_threshold: 0.6
-    # Bonus confidenza per consenso forte
     consensus_confidence_bonus: 0.1
-  
-  # Categorie di intent predefinite che LLM può usare
+    consensus_strategy: majority
+    enabled: true
+    majority_threshold: 0.6
+    max_representatives: 5
+    min_representatives: 2
+  enabled: true
+  human_validation:
+    ambiguous_intents:
+    - altro
+    - info_generali
+    enabled: true
+    low_confidence_threshold: 0.6
   intent_categories:
-    - "accesso_problemi"
-    - "prenotazione_esami"
-    - "info_esami_specifici"
-    - "ritiro_referti"
-    - "richiesta_operatore"
-    - "fatturazione_problemi"
-    - "modifica_appuntamenti"
-    - "orari_contatti"
-    - "problemi_tecnici"
-    - "info_generali"
-    - "cortesia"
-    - "altro"
-  
-  # Configurazione cache LLM per ottimizzazione
+  - accesso_problemi
+  - prenotazione_esami
+  - info_esami_specifici
+  - ritiro_referti
+  - richiesta_operatore
+  - fatturazione_problemi
+  - modifica_appuntamenti
+  - orari_contatti
+  - problemi_tecnici
+  - info_generali
+  - cortesia
+  - altro
   llm_cache:
     enabled: true
     max_size: 1000
-    
-  # Configurazione per validazione umana
-  human_validation:
+  llm_confidence_threshold: 0.8
+  min_average_confidence: 0.4
+  min_conversations_per_intent: 2
+  use_llm_primary: true
+  use_patterns_fallback: false
+intent_clustering:
+  enabled: true
+  fallback_patterns:
+    altro:
+    - .*
+    cortesia:
+    - \bgrazie\b
+    - \bbuongiorno\b
+    - \bbuonasera\b
+    - \barrivederci\b
+    - \bprego\b
+    domande_vaghe:
+    - ^(come|cosa|quando|dove|perché).*\?$
+    - mi\s+serve\s+aiuto
+    - ho\s+bisogno
+  intent_patterns:
+    accesso_problemi:
+    - non\s+riesco.*accedere
+    - password.*sbagliata
+    - problema.*login
+    - account.*bloccato
+    - errore.*accesso
+    - email.*sbagliata
+    - profilo.*errato
+    contatti_info:
+    - numero.*telefono
+    - contatti.*struttura
+    - come.*contattare
+    - centralino
+    - telefono.*reparto
+    - numero.*assistenza
+    fatturazione_problemi:
+    - non.*ricevuto.*fattura
+    - problema.*pagamento
+    - errore.*fatturazione
+    - mancata.*fattura
+    - pagamento.*fallito
+    - non\s+riesco.*pagare
+    indicazioni_sede:
+    - dove\s+siete
+    - indirizzo.*ospedale
+    - come.*arrivare
+    - mezzi.*pubblici
+    - indicazioni.*strada
+    - raggiungere.*sede
+    - parcheggio.*dove
+    info_esami_specifici:
+    - come\s+si\s+svolge.*esame
+    - preparazione.*esame
+    - modalità.*esame
+    - cosa\s+devo\s+fare.*esame
+    - digiuno.*esame
+    - portare.*esame
+    - prepara.*esame
+    - prima.*esame
+    info_generali:
+    - informazioni.*servizi
+    - cosa\s+offrite
+    - quali\s+esami
+    - specializzazioni
+    - reparti.*disponibili
+    - servizi.*offerti
+    modifica_appuntamenti:
+    - modificare.*appuntamento
+    - cambiare.*prenotazione
+    - spostare.*visita
+    - cancellare.*appuntamento
+    - disdire.*prenotazione
+    - annullare.*visita
+    - modificare.*telefonicamente
+    - cambiare.*orario
+    - spostato.*luglio
+    - posticipare.*appuntamento
+    orari_contatti:
+    - orari.*apertura
+    - orari.*ambulatorio
+    - orari.*visita.*degenti
+    - quando.*aperto
+    - ore.*apertura
+    - fino.*che.*ora
+    prenotazione_esami:
+    - prenotare.*visita
+    - fissare.*appuntamento
+    - nuovo.*appuntamento
+    - prenotazione.*esame
+    - quando\s+posso.*prenotare
+    - disponibilità.*appuntamento
+    - vorrei.*prenotare
+    - dovrei.*prenotare
+    - posso.*prenotare
+    problemi_tecnici:
+    - errore.*sistema
+    - non\s+funziona.*sito
+    - problema.*tecnico
+    - bug.*applicazione
+    - errore.*caricamento
+    - lento.*sistema
+    richiesta_operatore:
+    - operatore\s+umano
+    - parlare\s+con.*operatore
+    - contattare.*operatore
+    - trasferire.*operatore
+    - assistenza\s+diretta
+    - persona\s+reale
+    - operatore.*reale
+    - umano.*assistenza
+    ritiro_referti:
+    - ritirare.*referto
+    - scaricare.*risultat
+    - vedere.*esito
+    - consultare.*referto
+    - quando.*pronti.*risultati
+    - dove.*trovo.*referto
+    - quando.*posso.*ritirare
+    - risultati.*esami
+    - esito.*radiografia
+    - referto.*piattaforma
+    servizi_supporto:
+    - assistenza.*parcheggio
+    - contatto.*guardiania
+    - parcheggio.*pagamento
+    - ticket.*parcheggio
+    - dove.*parcheggiare
+    verifica_appuntamenti:
+    - verifica.*appuntamento
+    - stato.*prenotazione
+    - conferma.*appuntamento
+    - è\s+stato\s+spostato
+    - quando.*ho.*visita
+    - controllare.*appuntamento
+    - informazioni.*mio.*appuntamento
+  min_conversations_per_intent: 2
+  semantic_refinement:
     enabled: true
-    # Richiedi validazione umana per cluster con confidenza bassa
-    low_confidence_threshold: 0.6
-    # Richiedi validazione per intent ambigui
-    ambiguous_intents: ["altro", "info_generali"]
-
-# =====================================
-# CONFIGURAZIONE MODELLI LLM
-# =====================================
+    min_size_for_refinement: 10
+    similarity_threshold: 0.85
 llm:
-  # Configurazione server Ollama
-  ollama:
-    url: "http://localhost:11434"
-    timeout: 300  # timeout in secondi per richieste LLM
-    
-  # Modelli disponibili
-  models:
-    # Modello di default per tutti i clienti
-    default: "mistral:7b"
-    
-    # Modelli alternativi disponibili
-    available:
-      - "mistral:7b"
-      - "llama3.3:70b-instruct-q2_K"
-      - "llama3.1:8b"
-      - "llama3.1:70b"
-    
-    # Configurazione per cliente specifico (sovrascrive default)
-    clients:
-      humanitas: "mistral:7b"  # Modello specifico per Humanitas (cambiato da Llama a Mistral)
-      # altri_clienti: "mistral:7b"
-  
-  # Parametri di generazione LLM
-  generation:
-    temperature: 0.1          # Creatività del modello (0.0-1.0)
-    max_tokens: 150          # Massimo numero di token nella risposta
-    top_p: 0.9               # Nucleus sampling
-    top_k: 40                # Top-k sampling
-    repeat_penalty: 1.1      # Penalità per ripetizioni
-    
-  # Fine-tuning configuration
   finetuning:
-    enabled: true            # Abilita fine-tuning automatico
-    base_model: "mistral:7b" # Modello base per fine-tuning
-    auto_switch: true        # Switch automatico a modello fine-tuned quando disponibile
-    min_training_samples: 50 # Minimo campioni per iniziare fine-tuning
-    max_training_samples: 1000 # Massimo campioni per fine-tuning
+    auto_switch: true
+    base_model: mistral:7b
+    enabled: true
+    max_training_samples: 1000
+    min_training_samples: 50
+  generation:
+    max_tokens: 150
+    repeat_penalty: 1.1
+    temperature: 0.1
+    top_k: 40
+    top_p: 0.9
+  models:
+    available:
+    - mistral:7b
+    - llama3.3:70b-instruct-q2_K
+    - llama3.1:8b
+    - llama3.1:70b
+    clients:
+      humanitas: mistral:7b
+    default: mistral:7b
+  ollama:
+    timeout: 300
+    url: http://localhost:11434
+mongodb:
+  database: classificazioni
+  url: mongodb://localhost:27017
+pipeline:
+  auto_retrain_on_init: false
+  auto_tag_creation: true
+  bertopic_fallback_threshold: 0.0
+  classification_batch_size: 32
+  confidence_threshold: 0.7
+  default_auto_mode: false
+  default_confidence_threshold: 0.7
+  default_days_back: 7
+  default_extraction_limit: 200
+  default_min_cluster_size: 5
+  default_min_samples: 3
+  embedding_similarity_threshold: 0.85
+  embedding_validation: false
+  ensemble_mode_default: true
+  intelligent_classifier_embedding: true
+  interactive_mode_default: true
+  llm_confidence_threshold: 0.85
+  new_category_detection: true
+  new_tag_similarity_threshold: 0.75
+  semantic_fallback: true
+  use_shared_embedder: true
+quality_gate:
+  auto_retrain_enabled: true
+  confidence_threshold: 0.9
+  max_model_backups: 5
+  max_training_examples: 1000
+  min_decisions_for_retrain: 5
+  model_backup_enabled: true
+  novelty_threshold: 0.6
+  retraining_threshold: 5
+  uncertainty_threshold: 0.2
+semantic_memory:
+  cache_path: semantic_cache/
+  enable_detailed_logging: true
+  max_samples_per_label: 50
+  refresh_threshold: 100
+similarity_thresholds:
+  classification_confidence: 0.8
+  clustering_similarity: 0.8
+  reuse_existing_label: 0.8
+  semantic_similarity: 0.8
+supervised_training:
+  extraction:
+    full_clustering_required: true
+    ignore_session_limits: true
+    use_full_dataset: true
+  human_review:
+    confidence_threshold_priority: 0.7
+    max_representatives_per_cluster: 5
+    max_total_sessions: 500
+    min_cluster_size_for_review: 2
+    min_representatives_per_cluster: 1
+    overflow_handling: proportional
+    priority_large_clusters: true
+    priority_low_confidence: true
+    representatives_per_cluster: 3
+    selection_strategy: prioritize_by_size
+  reporting:
+    log_excluded_clusters: true
+    show_clustering_stats: true
+    show_extraction_stats: true
+    show_selection_stats: true
+tag_database:
+  database: TAG
+  host: localhost
+  password: Valerio220693!
+  port: 3306
+  user: root
+tenant_configs:
+  humanitas:
+    embedding_engine: bge_m3
+ui_config:
+  classification:
+    confidence_threshold: 0.7
+    debug_mode: false
+    force_retrain: true
+    max_sessions: null
+  mock_cases:
+    default_count: 3
+  review:
+    auto_refresh: false
+    default_limit: null
+    refresh_interval: 30

@@ -163,13 +163,14 @@ class EndToEndPipeline:
         self.lettore = LettoreConversazioni()
         self.aggregator = SessionAggregator(schema=tenant_slug)
         
-        # Usa embedder condiviso se fornito, altrimenti crea nuovo
+        # Usa embedder condiviso se fornito, altrimenti usa sistema dinamico
         if shared_embedder is not None:
             print("🔄 Utilizzo embedder condiviso per evitare CUDA out of memory")
             self.embedder = shared_embedder
         else:
-            print("⚠️ Creazione nuovo embedder (potrebbe causare CUDA out of memory)")
-            self.embedder = LaBSEEmbedder()
+            print("🎯 Utilizzo sistema dinamico per embedder - LAZY LOADING per tenant")
+            self.embedder = None  # Sarà caricato quando serve tramite _get_embedder()
+            self.tenant_slug = tenant_slug  # Salvato per lazy loading
             
         # Usa parametri di clustering da config o da parametri passati
         cluster_min_size = (min_cluster_size if min_cluster_size is not None 
@@ -345,6 +346,39 @@ class EndToEndPipeline:
             
         return sessioni_filtrate
     
+    def _get_embedder(self):
+        """
+        Ottiene embedder per pipeline tramite sistema dinamico (lazy loading)
+        
+        Scopo: Carica embedder solo quando necessario, basato sulla configurazione
+        tenant specifica, evitando caricamento all'avvio del server
+        
+        Returns:
+            Embedder configurato per il tenant della pipeline
+            
+        Data ultima modifica: 2025-08-25
+        """
+        if self.embedder is None:
+            print(f"🔄 LAZY LOADING: Caricamento embedder dinamico per tenant '{self.tenant_slug}'")
+            
+            # Import dinamico per evitare circular dependencies
+            try:
+                sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'EmbeddingEngine'))
+                from embedding_manager import embedding_manager
+                
+                # CORREZIONE: Usa sempre tenant_slug come tenant_id (UUID) per embedding manager
+                # Il tenant_slug in EndToEndPipeline ora contiene l'UUID, non lo slug human-readable
+                self.embedder = embedding_manager.get_shared_embedder(self.tenant_slug)
+                print(f"✅ Embedder caricato per tenant UUID '{self.tenant_slug}': {type(self.embedder).__name__}")
+                
+            except ImportError as e:
+                print(f"⚠️ Fallback: Impossibile importare embedding_manager: {e}")
+                print(f"🔄 Uso fallback LaBSE hardcodato")
+                from labse_embedder import LaBSEEmbedder
+                self.embedder = LaBSEEmbedder()
+                
+        return self.embedder
+    
     def _resolve_tenant_id_from_slug(self, tenant_slug: str) -> str:
         """
         Risolve il tenant_slug (es: 'alleanza') nel corretto tenant_id UUID.
@@ -386,6 +420,91 @@ class EndToEndPipeline:
             print(f"❌ Errore risoluzione tenant '{tenant_slug}': {e}")
             print(f"   Uso fallback 'humanitas'")
             return "humanitas"
+    
+    def _analyze_and_show_problematic_conversations(self, sessioni: Dict[str, Dict], 
+                                                   testi: List[str], 
+                                                   session_ids: List[str], 
+                                                   error_msg: str) -> None:
+        """
+        Analizza e mostra per intero le conversazioni troppo lunghe che causano errori di embedding.
+        
+        Scopo: Quando il modello di embedding fallisce per testo troppo lungo, mostra la conversazione
+               completa in console per debugging e analisi.
+        
+        Args:
+            sessioni: Dizionario con i dati delle sessioni
+            testi: Lista dei testi completi delle conversazioni  
+            session_ids: Lista degli ID delle sessioni corrispondenti ai testi
+            error_msg: Messaggio di errore originale
+        
+        Data ultima modifica: 25/08/2025 - Implementazione iniziale
+        """
+        print(f"🔍 ANALISI CONVERSAZIONI PROBLEMATICHE PER LUNGHEZZA TESTO")
+        print(f"=" * 80)
+        print(f"📋 Errore originale: {error_msg}")
+        print(f"📊 Numero totale conversazioni: {len(testi)}")
+        print(f"=" * 80)
+        
+        # Calcola statistiche di lunghezza per identificare le conversazioni problematiche
+        lunghezze = [(i, len(testo)) for i, testo in enumerate(testi)]
+        lunghezze_ordinate = sorted(lunghezze, key=lambda x: x[1], reverse=True)
+        
+        print(f"📈 STATISTICHE LUNGHEZZA TESTI:")
+        print(f"   Testo più lungo: {lunghezze_ordinate[0][1]} caratteri")
+        print(f"   Testo più corto: {lunghezze_ordinate[-1][1]} caratteri")
+        
+        media_lunghezza = sum(len(testo) for testo in testi) / len(testi)
+        print(f"   Lunghezza media: {media_lunghezza:.0f} caratteri")
+        print(f"=" * 80)
+        
+        # Mostra le conversazioni più lunghe (potenziali problematiche)
+        print(f"📋 CONVERSAZIONI PIÙ LUNGHE (POTENZIALI CAUSE DELL'ERRORE):")
+        print(f"=" * 80)
+        
+        # Mostra le prime 3 conversazioni più lunghe per intero
+        for rank, (indice, lunghezza) in enumerate(lunghezze_ordinate[:3], 1):
+            session_id = session_ids[indice]
+            testo_completo = testi[indice]
+            dati_sessione = sessioni[session_id]
+            
+            print(f"\n🚨 CONVERSAZIONE #{rank} - LUNGHEZZA: {lunghezza} CARATTERI")
+            print(f"🆔 Session ID: {session_id}")
+            print(f"🤖 Agent: {dati_sessione.get('agent_name', 'N/A')}")
+            print(f"💬 Numero messaggi: {dati_sessione.get('num_messaggi_totali', 0)}")
+            print(f"👤 Messaggi USER: {dati_sessione.get('num_messaggi_user', 0)}")
+            print(f"🤖 Messaggi AGENT: {dati_sessione.get('num_messaggi_agent', 0)}")
+            print(f"⏰ Primo messaggio: {dati_sessione.get('primo_messaggio', 'N/A')}")
+            print(f"⏰ Ultimo messaggio: {dati_sessione.get('ultimo_messaggio', 'N/A')}")
+            print(f"📝 TESTO COMPLETO:")
+            print(f"-" * 60)
+            
+            # MOSTRA IL TESTO COMPLETO SENZA OMETTERE NULLA
+            print(testo_completo)
+            
+            print(f"-" * 60)
+            print(f"📊 FINE CONVERSAZIONE #{rank}")
+            print(f"=" * 80)
+        
+        # Suggerimenti per la risoluzione
+        print(f"\n💡 SUGGERIMENTI PER RISOLVERE IL PROBLEMA:")
+        print(f"   1. Configurare troncamento automatico del testo nel modello di embedding")
+        print(f"   2. Implementare pre-processing per dividere conversazioni molto lunghe")  
+        print(f"   3. Considerare modelli di embedding con context length maggiore")
+        print(f"   4. Filtrare conversazioni anomalmente lunghe prima del clustering")
+        print(f"   5. Verificare la configurazione 'only_user' per ridurre la lunghezza")
+        print(f"=" * 80)
+        
+        # Log aggiuntivo per debug tecnico
+        print(f"\n🔧 DEBUG TECNICO:")
+        print(f"   Embedder attuale: {type(self._get_embedder()).__name__}")
+        print(f"   Device embedder: {getattr(self._get_embedder(), 'device', 'N/A')}")
+        
+        if hasattr(self._get_embedder(), 'model'):
+            model = self._get_embedder().model
+            max_seq_length = getattr(model, 'max_seq_length', 'N/A')
+            print(f"   Max sequence length: {max_seq_length}")
+        
+        print(f"=" * 80)
     
     def _addestra_bertopic_anticipato(self, sessioni: Dict[str, Dict], embeddings: np.ndarray) -> Optional[Any]:
         """
@@ -492,11 +611,33 @@ class EndToEndPipeline:
         """
         print(f"🧩 Clustering intelligente di {len(sessioni)} sessioni...")
         
-        # Genera embedding
+        # Genera embedding con gestione errori di lunghezza testo
         print(f"🔍 Encoding {len(sessioni)} testi...")
         testi = [dati['testo_completo'] for dati in sessioni.values()]
-        embeddings = self.embedder.encode(testi, show_progress_bar=True)
-        print(f"✅ Embedding generati: shape {embeddings.shape}")
+        session_ids = list(sessioni.keys())
+        
+        try:
+            embeddings = self._get_embedder().encode(testi, show_progress_bar=True)
+            print(f"✅ Embedding generati: shape {embeddings.shape}")
+            
+        except Exception as e:
+            error_msg = str(e)
+            print(f"❌ ERRORE durante generazione embeddings: {error_msg}")
+            
+            # Controlla se è un errore di lunghezza del testo/token limit
+            if any(keyword in error_msg.lower() for keyword in [
+                'context length', 'token limit', 'too long', 'maximum context', 
+                'sequence length', 'input too long', 'context size'
+            ]):
+                print(f"\n🚨 ERRORE DI LUNGHEZZA TESTO RILEVATO!")
+                print(f"🔍 Il sistema ha trovato testo troppo lungo per il modello di embedding.")
+                print(f"📋 Analizzando le conversazioni per identificare quella problematica...\n")
+                
+                # Trova e mostra la conversazione più lunga che ha causato l'errore
+                self._analyze_and_show_problematic_conversations(sessioni, testi, session_ids, error_msg)
+            
+            # Re-raise l'errore dopo aver mostrato le informazioni
+            raise e
         
         # 🆕 NUOVO: Training BERTopic anticipato su dataset completo
         print(f"\n📊 FASE 2A: TRAINING BERTOPIC ANTICIPATO")
@@ -767,7 +908,7 @@ class EndToEndPipeline:
         # Ora usiamo direttamente embeddings e labels per l'ensemble
         session_ids = list(sessioni.keys())
         session_texts = [sessioni[sid]['testo_completo'] for sid in session_ids]
-        train_embeddings = self.embedder.encode(session_texts)
+        train_embeddings = self._get_embedder().encode(session_texts)
         
         # Crea labels array dai reviewed_labels
         train_labels = []
@@ -1057,7 +1198,7 @@ class EndToEndPipeline:
             session_ids.append(session_id)
         
         # Genera embedding
-        embeddings = self.embedder.encode(session_texts)
+        embeddings = self._get_embedder().encode(session_texts)
         
         # Converte etichette in array
         labels_array = np.array(session_labels)
@@ -2619,7 +2760,7 @@ class EndToEndPipeline:
         print(f"  🧩 Re-clustering di {len(tutte_sessioni_outlier)} outlier...")
         
         outlier_texts = [dati['testo_completo'] for dati in tutte_sessioni_outlier.values()]
-        outlier_embeddings = self.embedder.encode(outlier_texts)
+        outlier_embeddings = self._get_embedder().encode(outlier_texts)
         
         # Usa parametri più permissivi per outlier
         from Clustering.hdbscan_clusterer import HDBSCANClusterer
@@ -2712,7 +2853,7 @@ class EndToEndPipeline:
                 print(f"   ✅ Riutilizzo BERTopic provider esistente dall'ensemble")
                 # Genera solo embedding e clustering semplice senza riaddestramento BERTopic
                 testi = [sessioni[sid]['testo_completo'] for sid in session_ids]
-                embeddings = self.embedder.encode(testi)
+                embeddings = self._get_embedder().encode(testi)
                 
                 # Clustering semplice con HDBSCAN sui puri embeddings
                 cluster_labels = self.clusterer.fit_predict(embeddings)

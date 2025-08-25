@@ -37,6 +37,10 @@ from APIServer.prompt_validation_api import prompt_validation_bp
 # Import del blueprint per gestione esempi
 from esempi_api_server import esempi_bp
 
+# Import per configurazione AI
+sys.path.append(os.path.join(os.path.dirname(__file__), 'AIConfiguration'))
+from AIConfiguration.ai_configuration_service import AIConfigurationService
+
 app = Flask(__name__)
 # Configurazione CORS generica per sviluppo
 CORS(app, 
@@ -161,18 +165,22 @@ class ClassificationService:
             return {'error': str(e)}
         return {'gpu_not_available': True}
 
-    def get_shared_embedder(self):
+    def get_shared_embedder(self, tenant_id: str = "default"):
         """
-        Ottieni un embedder condiviso per evitare CUDA out of memory
-        SOLUZIONE ALLA RADICE: Usa lock per evitare inizializzazioni simultanee
+        Ottieni embedder condiviso dinamico basato su configurazione tenant
+        
+        AGGIORNAMENTO 2025-08-25: Sostituito hardcode LaBSE con sistema dinamico
+        che usa EmbeddingManager per gestione memory-efficient degli embedder
+        basati su configurazione AI per tenant
+        
+        Args:
+            tenant_id: ID tenant per configurazione embedding engine
+            
+        Returns:
+            Embedder configurato per tenant specifico
         """
-        with self._embedder_lock:
-            if self.shared_embedder is None:
-                print(f"🔧 Inizializzazione embedder condiviso (con lock)...")
-                from EmbeddingEngine.labse_embedder import LaBSEEmbedder
-                self.shared_embedder = LaBSEEmbedder()
-                print(f"✅ Embedder condiviso inizializzato")
-            return self.shared_embedder
+        from EmbeddingEngine.embedding_manager import embedding_manager
+        return embedding_manager.get_shared_embedder(tenant_id)
     
     def get_mongo_reader(self, client_name: str) -> MongoClassificationReader:
         """
@@ -217,16 +225,17 @@ class ClassificationService:
             if client_name not in self.pipelines:
                 print(f"🔧 Inizializzazione pipeline per cliente: {client_name} (con lock)")
                 
-                # Ottieni embedder condiviso per evitare CUDA out of memory
-                shared_embedder = self.get_shared_embedder()
+                # MODIFICA 2025-08-25: Pipeline inizializzata SENZA embedder
+                # L'embedder viene caricato lazy quando serve per il tenant
+                # NON carichiamo embedder all'avvio del server!
                 
-                # Crea pipeline con modalità automatica e embedder condiviso
+                # Crea pipeline con modalità automatica SENZA embedder condiviso
                 # NOTA: auto_retrain ora viene gestito da config.yaml
                 pipeline = EndToEndPipeline(
                     tenant_slug=client_name,
                     confidence_threshold=0.7,
                     auto_mode=True,  # Modalità completamente automatica
-                    shared_embedder=shared_embedder
+                    shared_embedder=None  # LAZY LOADING: embedder caricato quando serve!
                     # auto_retrain rimosso: ora gestito da config.yaml
                 )
                 
@@ -2375,6 +2384,285 @@ def get_ui_config():
         return jsonify({
             'success': False,
             'error': f'Errore nel caricamento configurazione UI: {str(e)}'
+        }), 500
+
+# =====================================
+# CONFIGURAZIONE AI ENDPOINTS
+# =====================================
+
+# Inizializza servizio configurazione AI
+ai_config_service = None
+
+def get_ai_config_service():
+    """Inizializza e restituisce il servizio di configurazione AI"""
+    global ai_config_service
+    if ai_config_service is None:
+        ai_config_service = AIConfigurationService()
+    return ai_config_service
+
+@app.route('/api/ai-config/<tenant_id>/embedding-engines', methods=['GET'])
+def api_get_available_embedding_engines(tenant_id: str):
+    """
+    API per ottenere embedding engines disponibili
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        Lista embedding engines con dettagli disponibilità
+    """
+    try:
+        service = get_ai_config_service()
+        engines = service.get_available_embedding_engines()
+        
+        return jsonify({
+            'success': True,
+            'tenant_id': tenant_id,
+            'engines': engines
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Errore recupero embedding engines: {str(e)}'
+        }), 500
+
+@app.route('/api/ai-config/<tenant_id>/embedding-engines', methods=['POST'])
+def api_set_embedding_engine(tenant_id: str):
+    """
+    API per impostare embedding engine per tenant
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Body:
+        {
+            "engine_type": "labse|bge_m3|openai_large|openai_small",
+            "config": {...}  // Parametri aggiuntivi opzionali
+        }
+        
+    Returns:
+        Risultato dell'operazione
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Body JSON richiesto'
+            }), 400
+        
+        engine_type = data.get('engine_type')
+        if not engine_type:
+            return jsonify({
+                'success': False,
+                'error': 'Campo engine_type richiesto'
+            }), 400
+        
+        config = data.get('config', {})
+        
+        service = get_ai_config_service()
+        result = service.set_embedding_engine(tenant_id, engine_type, **config)
+        
+        # INVALIDAZIONE CACHE: Quando configurazione cambia, invalida cache embedder
+        if result['success']:
+            try:
+                from EmbeddingEngine.embedding_engine_factory import embedding_factory
+                from EmbeddingEngine.embedding_manager import embedding_manager
+                
+                print(f"🔄 Configurazione embedding cambiata - invalidazione cache per tenant {tenant_id}")
+                
+                # PRIMA: Pulisci cache AIConfigurationService per leggere configurazione fresca
+                print(f"🧹 Pulizia cache AIConfigurationService per tenant {tenant_id}")
+                service.clear_tenant_cache(tenant_id)
+                
+                # SECONDA: Invalida cache factory
+                embedding_factory.invalidate_tenant_cache(tenant_id)
+                
+                # Risolvi tenant UUID -> tenant slug per confronto con manager
+                def _resolve_tenant_slug_from_id_local(tenant_uuid: str) -> str:
+                    """Risolve tenant UUID in slug"""
+                    try:
+                        from TagDatabase.tag_database_connector import TagDatabaseConnector
+                        
+                        tag_connector = TagDatabaseConnector()
+                        tag_connector.connetti()
+                        
+                        query = "SELECT tenant_slug FROM tenants WHERE tenant_id = %s"
+                        result = tag_connector.esegui_query(query, (tenant_uuid,))
+                        
+                        if result and len(result) > 0:
+                            tenant_slug = result[0][0]  # tenant_slug è il campo corretto
+                            tag_connector.disconnetti()
+                            return tenant_slug
+                        
+                        tag_connector.disconnetti()
+                        return tenant_uuid  # fallback
+                    except Exception as e:
+                        print(f"⚠️ Errore risoluzione tenant slug: {e}")
+                        return tenant_uuid
+                
+                tenant_slug = _resolve_tenant_slug_from_id_local(tenant_id)
+                
+                # FORCE RELOAD SEMPRE quando c'è cambio configurazione - come all'avvio server
+                # NON FARE CONFRONTI, NON FARE LOGICHE COMPLICATE
+                # CONFIGURAZIONE CAMBIATA = FORCE RELOAD, PUNTO!
+                
+                print(f"� CONFIGURAZIONE EMBEDDING CAMBIATA - FORCE RELOAD TASSATIVO per tenant {tenant_slug} (UUID: {tenant_id})")
+                print(f"🔥 Ricarico embedder come all'avvio del server - NESSUNA ECCEZIONE!")
+                
+                # SEMPRE force_reload=True quando cambio configurazione
+                embedding_manager.switch_tenant_embedder(tenant_id, force_reload=True)
+                
+                # FIXBUG: Invalida anche la cache delle pipeline per evitare embedder morti
+                print(f"🧹 Pulizia cache pipeline per evitare embedder obsoleti...")
+                try:
+                    from Clustering.clustering_test_service import ClusteringTestService
+                    clustering_service = ClusteringTestService()
+                    clustering_service.clear_pipeline_for_tenant(tenant_id)
+                    print(f"✅ Cache pipeline invalidata per tenant {tenant_id}")
+                except Exception as cache_error:
+                    print(f"⚠️ Errore pulizia cache pipeline: {cache_error}")
+                    # Non bloccare l'operazione principale
+                
+                print(f"✅ Cache invalidata con successo per tenant {tenant_id}")
+                
+            except Exception as e:
+                print(f"⚠️ Errore invalidazione cache embedder: {e}")
+                # Non bloccare l'operazione principale per errori cache
+                
+            return jsonify(result)
+        else:
+            return jsonify(result), 400
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Errore impostazione embedding engine: {str(e)}'
+        }), 500
+
+@app.route('/api/ai-config/<tenant_id>/llm-models', methods=['GET'])
+def api_get_available_llm_models(tenant_id: str):
+    """
+    API per ottenere modelli LLM disponibili
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        Lista modelli LLM disponibili da Ollama
+    """
+    try:
+        service = get_ai_config_service()
+        models = service.get_available_llm_models()
+        
+        return jsonify({
+            'success': True,
+            'tenant_id': tenant_id,
+            'models': models
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Errore recupero modelli LLM: {str(e)}'
+        }), 500
+
+@app.route('/api/ai-config/<tenant_id>/llm-models', methods=['POST'])
+def api_set_llm_model(tenant_id: str):
+    """
+    API per impostare modello LLM per tenant
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Body:
+        {
+            "model_name": "mistral:7b"
+        }
+        
+    Returns:
+        Risultato dell'operazione
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Body JSON richiesto'
+            }), 400
+        
+        model_name = data.get('model_name')
+        if not model_name:
+            return jsonify({
+                'success': False,
+                'error': 'Campo model_name richiesto'
+            }), 400
+        
+        service = get_ai_config_service()
+        result = service.set_llm_model(tenant_id, model_name)
+        
+        if result['success']:
+            return jsonify(result)
+        else:
+            return jsonify(result), 400
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Errore impostazione modello LLM: {str(e)}'
+        }), 500
+
+@app.route('/api/ai-config/<tenant_id>/configuration', methods=['GET'])
+def api_get_tenant_ai_configuration(tenant_id: str):
+    """
+    API per ottenere configurazione AI completa del tenant
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        Configurazione completa embedding + LLM
+    """
+    try:
+        service = get_ai_config_service()
+        config = service.get_tenant_configuration(tenant_id)
+        
+        return jsonify({
+            'success': True,
+            'configuration': config
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Errore recupero configurazione: {str(e)}'
+        }), 500
+
+@app.route('/api/ai-config/<tenant_id>/debug', methods=['GET'])
+def api_get_ai_debug_info(tenant_id: str):
+    """
+    API per ottenere informazioni debug sui modelli in uso
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        Informazioni debug complete sui modelli attivi
+    """
+    try:
+        service = get_ai_config_service()
+        debug_info = service.get_current_models_debug_info(tenant_id)
+        
+        return jsonify({
+            'success': True,
+            'debug_info': debug_info
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Errore recupero debug info: {str(e)}'
         }), 500
 
 @app.route('/api/review/<tenant_id>/available-tags', methods=['GET'])
@@ -4806,6 +5094,142 @@ def reset_clustering_parameters(tenant_id):
         return jsonify({
             'success': False,
             'error': f'Errore reset parametri: {str(e)}',
+            'tenant_id': tenant_id
+        }), 500
+
+
+@app.route('/api/clustering/<tenant_id>/test', methods=['POST'])
+def test_clustering_preview(tenant_id):
+    """
+    Esegue un test di clustering HDBSCAN usando i parametri attuali del tenant
+    senza coinvolgere LLM - solo per preview e ottimizzazione parametri
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Body (JSON opzionale):
+        - parameters: parametri clustering personalizzati per il test
+        - sample_size: numero conversazioni da testare (default: 1000)
+        
+    Returns:
+        JSON con risultati clustering test:
+        - cluster_statistics: numero cluster, outliers, dimensioni
+        - detailed_clusters: cluster con conversazioni associate  
+        - quality_metrics: metriche qualità clustering
+        - outlier_analysis: analisi outliers con raccomandazioni
+        
+    Autore: Sistema di Classificazione
+    Data: 2025-08-25
+    """
+    try:
+        def _resolve_tenant_slug_from_id(tenant_uuid: str) -> str:
+            """
+            Converte tenant_id UUID nel tenant_slug per la pipeline
+            
+            Args:
+                tenant_uuid: UUID del tenant (es: '015007d9-d413-11ef-86a5-96000228e7fe')
+                
+            Returns:
+                tenant_slug per la pipeline (es: 'humanitas')
+            """
+            try:
+                import sys
+                import os
+                sys.path.append(os.path.join(os.path.dirname(__file__), 'MySql'))
+                from connettore import MySqlConnettore
+                
+                # Connessione al database per recuperare tenant_database (slug)
+                remote = MySqlConnettore()
+                
+                query = """
+                SELECT tenant_database, tenant_name 
+                FROM common.tenants 
+                WHERE tenant_id = %s AND tenant_status = 1
+                """
+                
+                result = remote.esegui_query(query, (tenant_uuid,))
+                remote.disconnetti()
+                
+                if result and len(result) > 0:
+                    tenant_database, tenant_name = result[0]
+                    print(f"🔍 Risoluzione tenant: '{tenant_uuid}' -> '{tenant_database}' ({tenant_name})")
+                    return tenant_database
+                else:
+                    print(f"⚠️ Tenant UUID '{tenant_uuid}' non trovato, uso fallback 'humanitas'")
+                    return "humanitas"
+                    
+            except Exception as e:
+                print(f"❌ Errore risoluzione tenant UUID '{tenant_uuid}': {e}")
+                return "humanitas"
+        
+        # Importa il servizio di test clustering
+        import sys
+        import os
+        sys.path.append(os.path.join(os.path.dirname(__file__), 'Clustering'))
+        from clustering_test_service import ClusteringTestService
+        
+        print(f"🧪 [API] Test clustering richiesto per tenant: {tenant_id}")
+        
+        # CONVERTE tenant_id UUID in tenant_slug per la pipeline
+        tenant_slug = _resolve_tenant_slug_from_id(tenant_id)
+        print(f"🔄 [API] Tenant UUID {tenant_id} -> slug '{tenant_slug}'")
+        
+        # Parse parametri dalla richiesta
+        request_data = request.get_json() or {}
+        custom_parameters = request_data.get('parameters', None)
+        sample_size = request_data.get('sample_size', None)
+        
+        if custom_parameters:
+            print(f"🎛️ [API] Parametri personalizzati ricevuti: {custom_parameters}")
+        if sample_size:
+            print(f"📊 [API] Sample size richiesto: {sample_size}")
+        
+        # Inizializza servizio test
+        test_service = ClusteringTestService()
+        
+        # Esegue test clustering usando il tenant_slug
+        print(f"⚡ [API] Avvio test clustering...")
+        result = test_service.run_clustering_test(
+            tenant_id=tenant_slug,  # USA TENANT_SLUG INVECE DI TENANT_ID
+            custom_parameters=custom_parameters,
+            sample_size=sample_size
+        )
+        
+        # Aggiunge tenant_id UUID originale al risultato per il frontend
+        if 'tenant_id' in result:
+            result['tenant_id'] = tenant_id  # UUID originale
+            result['tenant_slug'] = tenant_slug  # Slug risolto
+        
+        if result['success']:
+            print(f"✅ [API] Test clustering completato con successo")
+            print(f"   📊 Cluster: {result['statistics']['n_clusters']}")
+            print(f"   🔍 Outliers: {result['statistics']['n_outliers']}")
+            print(f"   ⏱️ Tempo: {result['execution_time']}s")
+            
+            # Sanifica per JSON serialization (risolve numpy.int64 errors)
+            sanitized_result = sanitize_for_json(result)
+            return jsonify(sanitized_result), 200
+        else:
+            print(f"❌ [API] Test clustering fallito: {result.get('error', 'Unknown error')}")
+            # Sanifica anche gli errori
+            sanitized_result = sanitize_for_json(result)
+            return jsonify(sanitized_result), 400
+            
+    except ImportError as ie:
+        error_msg = f'Errore importazione ClusteringTestService: {str(ie)}'
+        print(f"❌ [API] {error_msg}")
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': tenant_id
+        }), 500
+        
+    except Exception as e:
+        error_msg = f'Errore test clustering: {str(e)}'
+        print(f"❌ [API] {error_msg}")
+        return jsonify({
+            'success': False,
+            'error': error_msg,
             'tenant_id': tenant_id
         }), 500
 

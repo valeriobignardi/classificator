@@ -7,6 +7,7 @@ import os
 from typing import List, Dict, Tuple, Optional
 from datetime import datetime
 import re
+import yaml
 
 # Aggiunge il percorso per importare il lettore conversazioni
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'LettoreConversazioni'))
@@ -26,6 +27,19 @@ class SessionAggregator:
         """
         self.schema = schema
         self.lettore = LettoreConversazioni(schema=schema)
+        
+        # Carica la configurazione per il parametro only_user
+        try:
+            config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
+            with open(config_path, 'r', encoding='utf-8') as f:
+                self.config = yaml.safe_load(f)
+                
+            # Estrai il parametro only_user dalla configurazione
+            self.only_user = self.config.get('conversation_reading', {}).get('only_user', False)
+            print(f"🔧 Configurazione caricata: only_user = {self.only_user}")
+        except Exception as e:
+            print(f"⚠️ Errore caricamento configurazione: {e}")
+            self.only_user = False  # Default a False per retrocompatibilità
         
     def estrai_sessioni_aggregate(self, limit: Optional[int] = None) -> Dict[str, Dict]:
         """
@@ -65,6 +79,14 @@ class SessionAggregator:
             # Crea la lista di ID per la query IN
             session_ids_str = ','.join([f"'{sid}'" for sid in session_ids])
             
+            # MODIFICA: Determina il filtro said_by in base alla configurazione
+            if self.only_user:
+                said_by_filter = "AND csm.said_by = 'USER'"
+                print("🔧 Modalità only_user attiva: includerò solo messaggi USER")
+            else:
+                said_by_filter = "AND csm.said_by IN ('USER', 'AGENT')"
+                print("🔧 Modalità standard: includerò messaggi USER e AGENT")
+            
             query = f"""
             SELECT cs.session_id
                  , (SELECT a.agent_name
@@ -77,8 +99,8 @@ class SessionAggregator:
               FROM {self.schema}.conversation_status cs
              INNER JOIN {self.schema}.conversation_status_messages csm
                 ON cs.conversation_status_id = csm.conversation_status_id
-             WHERE csm.said_by IN ('USER', 'AGENT')
-               AND cs.session_id IN ({session_ids_str})
+             WHERE cs.session_id IN ({session_ids_str})
+               {said_by_filter}
              ORDER BY cs.session_id, csm.created_at ASC
             """
             risultati = self.lettore.connettore.esegui_query(query)
@@ -131,6 +153,7 @@ class SessionAggregator:
         # Genera il testo completo per ogni sessione
         messaggi_saltati = 0
         sessioni_vuote = 0
+        sessioni_corrotte = 0
         
         for session_id, dati in sessioni_aggregate.items():
             testo_parti = []
@@ -138,18 +161,46 @@ class SessionAggregator:
             # Ordina i messaggi per timestamp
             messaggi_ordinati = sorted(dati['messaggi'], key=lambda x: x['created_at'])
             
-            # Conta i messaggi che salterei (per statistiche)
-            messaggi_che_salto = min(2, len(messaggi_ordinati))
-            messaggi_saltati += messaggi_che_salto
+            # CONTROLLO ANTI-CORRUZIONE: Rileva dati binari corrotti
+            is_corrupted = False
+            for msg in messaggi_ordinati:
+                message_text = msg['message'] or ""
+                # Rileva caratteri corrotti tipici (base64, sequenze A ripetute, simboli binari)
+                if (len(message_text) > 10000 and 
+                    ('AAAAAAEA' in message_text[:100] or 
+                     message_text.count('//') > 20 or 
+                     message_text.count('=') > 50 or
+                     message_text.count('A') > len(message_text) * 0.3)):
+                    print(f"🚨 SESSIONE CORROTTA RILEVATA: {session_id}")
+                    print(f"   Lunghezza messaggio: {len(message_text):,} caratteri")
+                    print(f"   Sample: {message_text[:100]}")
+                    is_corrupted = True
+                    break
             
-            if len(messaggi_ordinati) <= 2:
-                # Se ci sono solo i messaggi di benvenuto, segna come sessione vuota
+            if is_corrupted:
+                # Scarta completamente la sessione corrotta
+                sessioni_corrotte += 1
                 dati['testo_completo'] = ""
-                sessioni_vuote += 1
                 continue
             
-            # MODIFICA: Salta i primi 2 messaggi (benvenuto utente + assistente)
-            messaggi_da_processare = messaggi_ordinati[2:]
+            # MODIFICA: Gestisci diversamente il filtraggio in base a only_user
+            if self.only_user:
+                # Se only_user è True, non saltare nessun messaggio perché abbiamo già filtrato a livello DB
+                messaggi_da_processare = messaggi_ordinati
+                print(f"🔧 Sessione {session_id}: processando tutti i {len(messaggi_ordinati)} messaggi USER")
+            else:
+                # Logica originale: salta i primi 2 messaggi (benvenuto)
+                messaggi_che_salto = min(2, len(messaggi_ordinati))
+                messaggi_saltati += messaggi_che_salto
+                
+                if len(messaggi_ordinati) <= 2:
+                    # Se ci sono solo i messaggi di benvenuto, segna come sessione vuota
+                    dati['testo_completo'] = ""
+                    sessioni_vuote += 1
+                    continue
+                
+                # Salta i primi 2 messaggi (benvenuto utente + assistente)
+                messaggi_da_processare = messaggi_ordinati[2:]
             
             for msg in messaggi_da_processare:
                 prefisso = "[UTENTE]" if msg['said_by'] == 'USER' else "[ASSISTENTE]"
@@ -157,9 +208,19 @@ class SessionAggregator:
             
             dati['testo_completo'] = " ".join(testo_parti)
         
-        print(f"✅ Aggregate {len(sessioni_aggregate)} sessioni uniche")
-        print(f"🔄 Saltati {messaggi_saltati} messaggi di benvenuto (primi 2 per sessione)")
-        print(f"🔄 Sessioni vuote (solo benvenuto): {sessioni_vuote}")
+        # Aggiorna i log in base alla modalità
+        if self.only_user:
+            print(f"✅ Aggregate {len(sessioni_aggregate)} sessioni uniche (modalità only_user)")
+            print(f"🔄 Processati solo messaggi USER (assistant messages filtrati)")
+        else:
+            print(f"✅ Aggregate {len(sessioni_aggregate)} sessioni uniche")
+            print(f"🔄 Saltati {messaggi_saltati} messaggi di benvenuto (primi 2 per sessione)")
+            print(f"🔄 Sessioni vuote (solo benvenuto): {sessioni_vuote}")
+        
+        # Log per le sessioni corrotte
+        if sessioni_corrotte > 0:
+            print(f"🚨 Sessioni corrotte scartate: {sessioni_corrotte}")
+        
         return sessioni_aggregate
     
     def filtra_sessioni_vuote(self, sessioni: Dict[str, Dict]) -> Dict[str, Dict]:
@@ -192,8 +253,12 @@ class SessionAggregator:
             # Criteri per scartare la sessione
             scarta = False
             
+            # SCARTA SESSIONI CORROTTE (testo vuoto da filtraggio anti-corruzione)
+            if not dati['testo_completo'].strip():
+                scarta = True
+            
             # Sessioni con troppo pochi messaggi
-            if dati['num_messaggi_totali'] < 3:
+            elif dati['num_messaggi_totali'] < 3:
                 # Verifica se è solo saluto + welcome
                 messaggi_user = [msg['message'] for msg in dati['messaggi'] if msg['said_by'] == 'USER']
                 messaggi_agent = [msg['message'] for msg in dati['messaggi'] if msg['said_by'] == 'AGENT']

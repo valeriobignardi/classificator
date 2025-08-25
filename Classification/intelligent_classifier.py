@@ -388,22 +388,22 @@ class IntelligentClassifier:
 
 
 
-        # Esempi curati per few-shot learning (senza duplicati/inconsistenze)
+        # Esempi curati per few-shot learning Wopta - Assicurazione Vita (senza duplicati/inconsistenze)
         self.curated_examples = [
             {
-                "text": "Buongiorno voglio ritirare la mia cartella clinica",
-                "label": "ritiro_cartella_clinica_referti",
-                "motivation": "L'utente richiede il ritiro della cartella clinica"
+                "text": "Come faccio a disdire la polizza vita?",
+                "label": "disdetta_polizza",
+                "motivation": "L'utente vuole disdire la sua polizza vita"
             },
             {
-                "text": "Vorrei prenotare una visita cardiologica per la prossima settimana",
-                "label": "prenotazione_esami", 
-                "motivation": "Richiesta di prenotazione per visita medica"
+                "text": "Quanti anni può durare al massimo la polizza vita?",
+                "label": "info_durata_polizza",
+                "motivation": "Richiesta di informazioni sulla durata della polizza vita"
             },
             {
-                "text": "Come posso contattare il reparto di cardiologia?",
-                "label": "info_contatti",
-                "motivation": "Domanda sul contatto del reparto"
+                "text": "Il beneficiario della polizza deve essere mio figlio che deve ancora nascere, come posso fare?",
+                "label": "info_beneficiario",
+                "motivation": "Domanda su come impostare un beneficiario non ancora nato"
             },
             {
                 "text": "Devo cambiare la mail con cui mi sono registrato al portale",
@@ -416,69 +416,69 @@ class IntelligentClassifier:
                 "motivation": "Problema tecnico di accesso al portale online"
             },
             {
-                "text": "Non riesco ad entrare nel mio account del portale",
+                "text": "Non riesco ad entrare nel mio account del portale Wopta",
                 "label": "problema_accesso_portale",
-                "motivation": "Difficoltà di login al portale paziente"
+                "motivation": "Difficoltà di login al portale assicurazione"
             },
             {
-                "text": "Ho un problema con la prenotazione, non riesco ad accedere al sito",
-                "label": "problema_accesso_portale",
-                "motivation": "Problema di accesso prevale sull'intento di prenotazione"
+                "text": "Cosa copre esattamente la polizza vita Wopta?",
+                "label": "info_condizioni_polizza",
+                "motivation": "Richiesta di informazioni sulle condizioni di polizza"
             },
             {
-                "text": "Fate gli esami del sangue?",
-                "label": "info_esami",
-                "motivation": "Richiesta informazioni generiche sugli esami"
+                "text": "In caso di morte, come funziona l'indennizzo?",
+                "label": "info_caso_morte",
+                "motivation": "Richiesta informazioni su come funziona la copertura in caso di morte"
             },
             {
-                "text": "Quanto tempo ci vuole per essere chiamati per l'intervento al ginocchio?",
-                "label": "info_interventi",
-                "motivation": "Richiesta informazioni sui tempi di attesa intervento"
+                "text": "La polizza copre anche viaggi all'estero?",
+                "label": "info_copertura_geografica_assicurazione",
+                "motivation": "Richiesta informazioni sulla copertura geografica"
             },
             {
-                "text": "Mi serve il certificato per il lavoro con orario di ingresso e uscita",
-                "label": "info_certificati",
-                "motivation": "Domande su certificati"
-            },
-             {
-                "text": "Quando mi chiamate per il mio ricovero?",
-                "label": "info_ricovero",
-                "motivation": "Domande su ricovero"
-            },
-             {
-                "text": "Quanto costa il parcheggio?",
-                "label": "info_parcheggio",
-                "motivation": "Domande su parcheggio"
+                "text": "Devo fare visite mediche per attivare la polizza?",
+                "label": "info_questionario_medico",
+                "motivation": "Domande su questionari o visite mediche richieste"
             },
             {
-                "text": "Come faccio a prepararmi per la colonscopia?",
-                "label": "norme_di_preparazione",
-                "motivation": "Domande su preparazione esami"
+                "text": "Come posso contattare l'assistenza Wopta?",
+                "label": "info_contatti",
+                "motivation": "Domanda sui contatti dell'assicurazione"
             },
             {
-                "text": "Non ho ricevuto la fattura",
+                "text": "Mi dai l'indirizzo della sede di Wopta?",
+                "label": "info_sede_aziendale",
+                "motivation": "Richiesta informazioni sulla sede aziendale"
+            },
+            {
+                "text": "Su che sito posso aprire la polizza?",
+                "label": "info_sottoscrizione_online",
+                "motivation": "Informazioni su come sottoscrivere la polizza online"
+            },
+            {
+                "text": "Non ho ricevuto la documentazione della polizza",
                 "label": "problema_amministrativo",
-                "motivation": "Domande su fatturazione o questioni fiscali"
+                "motivation": "Problemi con documenti o questioni amministrative"
             },
             {
-                "text": "Quali sono gli alberghi convenzionati per il soggiorno?",
-                "label": "strutture_convenzionate_alberghiere",
-                "motivation": "Domande su strutture alberghiere convenzionate"
+                "text": "Posso modificare l'importo assicurato dopo la sottoscrizione?",
+                "label": "modifica_condizioni_polizza",
+                "motivation": "Richiesta di modifica delle condizioni contrattuali"
             },
             {
-                "text": "Ci sono sconti per l'aereo se vengo da voi?",
-                "label": "convenzioni_viaggio",
-                "motivation": "Domande su convenzioni di viaggio"
+                "text": "Quanto costa la polizza vita per una persona di 35 anni?",
+                "label": "info_costi_premio",
+                "motivation": "Richiesta informazioni sui costi e premi assicurativi"
             },
             {
-                "text": "soffro di crisi d'ansia cosa posso fare?",
-                "label": "parere_medico",
-                "motivation": "Richiesta di pareri medici"
+                "text": "Come funziona il riscatto della polizza?",
+                "label": "info_riscatto_polizza",
+                "motivation": "Richiesta informazioni sul riscatto della polizza"
             },
             {
-                "text": "Come faccio a raggiungervi? Parto da Milano via corso buenos aires 2",
+                "text": "Come faccio a raggiungervi? Parto da Milano",
                 "label": "indicazioni_stradali",
-                "motivation": "Informazioni su come raggiungere la struttura"
+                "motivation": "Informazioni su come raggiungere la sede Wopta"
             }
         ]
         
@@ -976,7 +976,12 @@ Ragionamento: {ex["motivation"]}"""
     def _get_dynamic_examples(self, conversation_text: str, max_examples: int = 4) -> List[Dict]:
         """
         Seleziona esempi dinamici più rilevanti per il testo di input
-        Combina esempi curati con esempi reali dal database per massima efficacia
+        Prima prova a caricare esempi dal database TAG, poi usa esempi curati come fallback
+        
+        EVOLUZIONE ARCHITETTURALE:
+        - v1.0: Solo esempi hardcoded
+        - v2.0: Esempi hardcoded + esempi reali da session_classifications (DEPRECATO)
+        - v3.0 (CORRENTE): Esempi curati da TAG.esempi + esempi hardcoded fallback
         
         Args:
             conversation_text: Testo da classificare
@@ -988,133 +993,265 @@ Ragionamento: {ex["motivation"]}"""
         if not conversation_text:
             return self.curated_examples[:max_examples]
         
-        # STRATEGIA IBRIDA: Combina esempi curati + esempi reali dal database
+        # STRATEGIA DINAMICA: Prima prova esempi database, poi fallback curati
         
-        # FASE 1: Esempi curati (sempre affidabili)
+        # FASE 1: Prova esempi dal database TAG per il tenant corrente
+        database_examples = self._get_examples_from_database_tag(max_examples=max_examples)
+        
+        if database_examples:
+            self.logger.debug(f"✅ Caricati {len(database_examples)} esempi dal database TAG per tenant {self.tenant_id}")
+            return database_examples
+        
+        # FASE 2: Fallback - Esempi curati hardcoded con selezione intelligente
         if self.enable_embeddings and self.embedder is not None:
-            curated_examples = self._get_semantic_dynamic_examples(conversation_text, max_examples=3)
+            selected_examples = self._get_semantic_dynamic_examples(conversation_text, max_examples=max_examples)
         else:
-            curated_examples = self._get_word_overlap_examples(conversation_text, max_examples=3)
+            selected_examples = self._get_word_overlap_examples(conversation_text, max_examples=max_examples)
         
-        # FASE 2: Esempi reali dal database (se disponibili)
-        real_examples = self._get_real_examples_from_database(conversation_text, max_examples=2)
-        
-        # FASE 3: Combina intelligentemente
-        combined_examples = self._merge_examples_intelligently(curated_examples, real_examples, max_examples)
-        
-        return combined_examples
-    
-    def _get_real_examples_from_database(self, conversation_text: str, max_examples: int = 2) -> List[Dict]:
+        self.logger.debug(f"⚠️ Usando esempi curati hardcoded - {len(selected_examples)} esempi per tenant {self.tenant_id}")
+        return selected_examples
+
+    def _get_examples_from_database_tag(self, max_examples: int = 4) -> List[Dict]:
         """
-        Recupera esempi reali di classificazioni dal database per enrichment
+        Carica esempi per il tenant corrente dal database TAG.esempi
         
         Args:
-            conversation_text: Testo di riferimento
-            max_examples: Numero massimo di esempi reali
+            max_examples: Numero massimo di esempi da caricare
             
         Returns:
-            Lista di esempi reali formattati
+            Lista di esempi dal database o lista vuota se non trovati
         """
         try:
-            if not self.enable_embeddings or self.embedder is None:
+            # Usa il prompt_manager per caricare esempi dal database
+            if not hasattr(self, 'prompt_manager') or self.prompt_manager is None:
+                self.logger.debug("⚠️ PromptManager non disponibile per caricamento esempi")
                 return []
             
-            from MySql.connettore import ConnettoreDB
+            # Risolve il tenant_id (da nome slug a UUID se necessario)
+            resolved_tenant_id = self.prompt_manager._resolve_tenant_id(self.tenant_id)
             
-            connector = ConnettoreDB()
-            if not connector.connetti():
+            # Carica esempi dal database TAG usando il prompt_manager
+            esempi_list = self.prompt_manager.get_examples_list(
+                tenant_id=resolved_tenant_id,
+                engine='LLM',
+                esempio_type='CONVERSATION'
+            )
+            
+            if not esempi_list:
+                self.logger.debug(f"⚠️ Nessun esempio trovato nel database TAG per tenant {resolved_tenant_id}")
                 return []
             
-            # Query per esempi recenti con buona confidence
-            query = """
-            SELECT 
-                s.conversation_text,
-                s.predicted_label,
-                s.confidence,
-                s.human_feedback
-            FROM session_classifications s
-            WHERE s.confidence >= 0.7
-                AND s.predicted_label != 'altro'
-                AND s.conversation_text IS NOT NULL
-                AND LENGTH(s.conversation_text) BETWEEN 10 AND 200
-                AND s.prediction_timestamp >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-            ORDER BY s.confidence DESC, s.prediction_timestamp DESC
-            LIMIT 20
-            """
-            
-            result = connector.esegui_query(query)
-            connector.disconnetti()
-            
-            if not result:
-                return []
-            
-            # Converte in formato compatibile e filtra per diversità
-            real_examples = []
-            used_labels = set()
-            
-            for row in result:
-                text, label, confidence, feedback = row
-                
-                # Solo esempi con feedback positivo o neutrale
-                if feedback and feedback.lower() in ['negative', 'wrong']:
+            # Converte gli esempi dal formato database al formato richiesto
+            converted_examples = []
+            for esempio in esempi_list[:max_examples]:
+                try:
+                    # Carica il contenuto completo dell'esempio
+                    full_content = self._get_example_full_content(resolved_tenant_id, esempio['esempio_name'])
+                    if full_content:
+                        # Estrae testo conversazione dal formato UTENTE:/ASSISTENTE:
+                        conversation_text = self._extract_conversation_from_example(full_content)
+                        
+                        converted_examples.append({
+                            "text": conversation_text,
+                            "label": self._infer_label_from_example_name(esempio['esempio_name']),
+                            "motivation": f"Esempio dal database: {esempio.get('description', esempio['esempio_name'])}"
+                        })
+                except Exception as e:
+                    self.logger.debug(f"⚠️ Errore conversione esempio {esempio['esempio_name']}: {e}")
                     continue
-                
-                # Diversifica le etichette
-                if label not in used_labels:
-                    real_examples.append({
-                        'text': text[:150],  # Tronca per leggibilità
-                        'label': label,
-                        'motivation': f"Esempio reale (conf: {confidence:.2f})",
-                        'source': 'database',
-                        'confidence': confidence
-                    })
-                    used_labels.add(label)
-                
-                if len(real_examples) >= max_examples:
-                    break
             
-            self.logger.debug(f"Recuperati {len(real_examples)} esempi reali dal database")
-            return real_examples
+            if converted_examples:
+                self.logger.info(f"✅ Caricati {len(converted_examples)} esempi dal database TAG per tenant {resolved_tenant_id}")
+            
+            return converted_examples
             
         except Exception as e:
-            self.logger.warning(f"Errore recupero esempi reali: {e}")
+            self.logger.debug(f"⚠️ Errore caricamento esempi dal database TAG: {e}")
             return []
     
-    def _merge_examples_intelligently(self, curated: List[Dict], real: List[Dict], max_total: int) -> List[Dict]:
-        """
-        Combina esempi curati e reali in modo intelligente
-        
-        Args:
-            curated: Esempi curati (sempre affidabili)
-            real: Esempi reali dal database
-            max_total: Numero massimo totale
+    def _get_example_full_content(self, tenant_id: str, esempio_name: str) -> str:
+        """Recupera il contenuto completo di un esempio dal database"""
+        try:
+            if not self.prompt_manager.connect():
+                return ""
             
-        Returns:
-            Lista combinata ottimizzata
-        """
-        # Priorità agli esempi curati (più affidabili)
-        combined = []
-        used_labels = set()
-        
-        # FASE 1: Prendi i migliori esempi curati
-        for example in curated:
-            if len(combined) >= max_total:
-                break
-            combined.append(example)
-            used_labels.add(example['label'])
-        
-        # FASE 2: Aggiungi esempi reali per diversità (se c'è spazio)
-        for example in real:
-            if len(combined) >= max_total:
-                break
+            cursor = self.prompt_manager.connection.cursor()
+            cursor.execute("""
+                SELECT esempio_content 
+                FROM esempi 
+                WHERE tenant_id = %s AND esempio_name = %s AND is_active = TRUE
+                LIMIT 1
+            """, (tenant_id, esempio_name))
             
-            # Solo se etichetta diversa o se abbiamo pochi esempi
-            if example['label'] not in used_labels or len(combined) < 2:
-                combined.append(example)
-                used_labels.add(example['label'])
+            result = cursor.fetchone()
+            cursor.close()
+            
+            return result[0] if result else ""
+        except Exception:
+            return ""
+    
+    def _extract_conversation_from_example(self, example_content: str) -> str:
+        """Estrae il testo della conversazione dall'esempio formattato UTENTE:/ASSISTENTE:"""
+        try:
+            # Cerca pattern UTENTE: ... ASSISTENTE: ...
+            import re
+            utente_match = re.search(r'UTENTE:\s*(.+?)(?:\s+ASSISTENTE:|$)', example_content, re.DOTALL)
+            if utente_match:
+                return utente_match.group(1).strip()
+            
+            # Fallback: restituisce l'esempio così com'è
+            return example_content[:200]  # Limita lunghezza
+        except Exception:
+            return example_content[:100]
+    
+    def _infer_label_from_example_name(self, esempio_name: str) -> str:
+        """Deduce una label dall'nome dell'esempio"""
+        # Mapping nomi esempio -> etichette standard Wopta
+        label_mapping = {
+            'durata_polizza': 'info_durata_polizza',
+            'beneficiario': 'info_beneficiario',
+            'disdetta': 'disdetta_polizza',
+            'condizioni': 'info_condizioni_polizza',
+            'costi': 'info_costi_premio',
+            'sede': 'info_sede_aziendale',
+            'contatti': 'info_contatti'
+        }
         
-        self.logger.debug(f"Esempi combinati: {len(combined)} totali ({len(curated)} curati + {len([e for e in combined if e.get('source') == 'database'])} reali)")
-        return combined
+        esempio_lower = esempio_name.lower()
+        for key, label in label_mapping.items():
+            if key in esempio_lower:
+                return label
+        
+        # Fallback: genera etichetta dal nome
+        return f"info_{esempio_name.lower().replace(' ', '_')}"
+    
+    # CODICE COMMENTATO - FUNZIONE NON PIU' UTILIZZATA
+    # Sostituita da _get_examples_from_database_tag per sistema TAG-based
+    # Mantenuta per riferimento storico - Era usata nelle versioni precedenti
+    # per implementare apprendimento dinamico con esempi reali da session_classifications
+    
+    # def _get_real_examples_from_database(self, conversation_text: str, max_examples: int = 2) -> List[Dict]:
+    #     """
+    #     FUNZIONE DEPRECATA - NON PIU' UTILIZZATA
+    #     
+    #     Recuperava esempi reali di classificazioni dal database per enrichment
+    #     Sostituita dal sistema TAG.esempi per esempi curati
+    #     
+    #     Args:
+    #         conversation_text: Testo di riferimento
+    #         max_examples: Numero massimo di esempi reali
+    #         
+    #     Returns:
+    #         Lista di esempi reali formattati
+    #     """
+    #     try:
+    #         if not self.enable_embeddings or self.embedder is None:
+    #             return []
+    #         
+    #         from MySql.connettore import ConnettoreDB
+    #         
+    #         connector = ConnettoreDB()
+    #         if not connector.connetti():
+    #             return []
+    #         
+    #         # Query per esempi recenti con buona confidence
+    #         query = """
+    #         SELECT 
+    #             s.conversation_text,
+    #             s.predicted_label,
+    #             s.confidence,
+    #             s.human_feedback
+    #         FROM session_classifications s
+    #         WHERE s.confidence >= 0.7
+    #             AND s.predicted_label != 'altro'
+    #             AND s.conversation_text IS NOT NULL
+    #             AND LENGTH(s.conversation_text) BETWEEN 10 AND 200
+    #             AND s.prediction_timestamp >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+    #         ORDER BY s.confidence DESC, s.prediction_timestamp DESC
+    #         LIMIT 20
+    #         """
+    #         
+    #         result = connector.esegui_query(query)
+    #         connector.disconnetti()
+    #         
+    #         if not result:
+    #             return []
+    #         
+    #         # Converte in formato compatibile e filtra per diversità
+    #         real_examples = []
+    #         used_labels = set()
+    #         
+    #         for row in result:
+    #             text, label, confidence, feedback = row
+    #             
+    #             # Solo esempi con feedback positivo o neutrale
+    #             if feedback and feedback.lower() in ['negative', 'wrong']:
+    #                 continue
+    #             
+    #             # Diversifica le etichette
+    #             if label not in used_labels:
+    #                 real_examples.append({
+    #                     'text': text[:150],  # Tronca per leggibilità
+    #                     'label': label,
+    #                     'motivation': f"Esempio reale (conf: {confidence:.2f})",
+    #                     'source': 'database',
+    #                     'confidence': confidence
+    #                 })
+    #                 used_labels.add(label)
+    #             
+    #             if len(real_examples) >= max_examples:
+    #                 break
+    #         
+    #         self.logger.debug(f"Recuperati {len(real_examples)} esempi reali dal database")
+    #         return real_examples
+    #         
+    #     except Exception as e:
+    #         self.logger.warning(f"Errore recupero esempi reali: {e}")
+    #         return []
+    
+    # CODICE COMMENTATO - FUNZIONE NON PIU' UTILIZZATA  
+    # Era usata per combinare esempi curati + esempi reali da session_classifications
+    # Sistema sostituito da _get_examples_from_database_tag (solo esempi curati TAG)
+    # Mantenuta per riferimento storico
+    
+    # def _merge_examples_intelligently(self, curated: List[Dict], real: List[Dict], max_total: int) -> List[Dict]:
+    #     """
+    #     FUNZIONE DEPRECATA - NON PIU' UTILIZZATA
+    #     
+    #     Combinava esempi curati e reali in modo intelligente
+    #     Era parte del sistema di apprendimento dinamico legacy
+    #     
+    #     Args:
+    #         curated: Esempi curati (sempre affidabili)
+    #         real: Esempi reali dal database
+    #         max_total: Numero massimo totale
+    #         
+    #     Returns:
+    #         Lista combinata ottimizzata
+    #     """
+    #     # Priorità agli esempi curati (più affidabili)
+    #     combined = []
+    #     used_labels = set()
+    #     
+    #     # FASE 1: Prendi i migliori esempi curati
+    #     for example in curated:
+    #         if len(combined) >= max_total:
+    #             break
+    #         combined.append(example)
+    #         used_labels.add(example['label'])
+    #     
+    #     # FASE 2: Aggiungi esempi reali per diversità (se c'è spazio)
+    #     for example in real:
+    #         if len(combined) >= max_total:
+    #             break
+    #         
+    #         # Solo se etichetta diversa o se abbiamo pochi esempi
+    #         if example['label'] not in used_labels or len(combined) < 2:
+    #             combined.append(example)
+    #             used_labels.add(example['label'])
+    #     
+    #     self.logger.debug(f"Esempi combinati: {len(combined)} totali ({len(curated)} curati + {len([e for e in combined if e.get('source') == 'database'])} reali)")
+    #     return combined
     
     def _get_semantic_dynamic_examples(self, conversation_text: str, max_examples: int = 4) -> List[Dict]:
         """

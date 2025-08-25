@@ -6,9 +6,10 @@
  * 
  * Storia aggiornamenti:
  * - 24/08/2025: Creazione componente iniziale con interfaccia user-friendly
+ * - 25/08/2025: Aggiunta funzionalità test clustering con preview risultati
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Box,
   Typography,
@@ -22,13 +23,9 @@ import {
   MenuItem,
   Card,
   CardContent,
-  CardActions,
-  CardHeader,
   CircularProgress,
-  Snackbar,
   Tooltip,
   IconButton,
-  Grid,
   Paper,
   LinearProgress,
   Accordion,
@@ -44,10 +41,12 @@ import {
   Info as InfoIcon,
   Warning as WarningIcon,
   CheckCircle as CheckCircleIcon,
-  Error as ErrorIcon
+  Error as ErrorIcon,
+  Assessment as AssessmentIcon
 } from '@mui/icons-material';
 import { useTenant } from '../contexts/TenantContext';
 import { apiService } from '../services/apiService';
+import ClusteringTestResults from './ClusteringTestResults';
 
 interface ClusteringParameter {
   value: number | string;
@@ -97,10 +96,11 @@ interface ParametersResponse {
  * - Modifica parametri con validazione in tempo reale
  * - Anteprima impatto delle modifiche
  * - Salvataggio e reset parametri
+ * - Test clustering rapido per validazione parametri
  * 
  * Props: Nessuna
  * 
- * Ultima modifica: 24/08/2025
+ * Ultima modifica: 25/08/2025
  */
 const ClusteringParametersManager: React.FC = () => {
   const { selectedTenant } = useTenant();
@@ -114,6 +114,11 @@ const ClusteringParametersManager: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+  
+  // Stati per test clustering
+  const [testLoading, setTestLoading] = useState(false);
+  const [testResult, setTestResult] = useState<any>(null);
+  const [testDialogOpen, setTestDialogOpen] = useState(false);
 
   /**
    * Carica i parametri di clustering attuali
@@ -121,7 +126,7 @@ const ClusteringParametersManager: React.FC = () => {
    * Input: selectedTenant dal contesto
    * Output: Aggiorna state parameters
    */
-  const loadParameters = async () => {
+  const loadParameters = useCallback(async () => {
     if (!selectedTenant?.tenant_id) return;
 
     setLoading(true);
@@ -150,7 +155,7 @@ const ClusteringParametersManager: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedTenant?.tenant_id]);
 
   /**
    * Salva i parametri modificati
@@ -252,6 +257,128 @@ const ClusteringParametersManager: React.FC = () => {
 
     // Validazione
     validateParameter(paramName, newValue, parameters[paramName as keyof ClusteringParameters]);
+  };
+
+  /**
+   * Esegue test clustering con i parametri attuali
+   * 
+   * Input: Nessuno (usa parametri correnti)
+   * Output: Apre dialog con risultati test
+   */
+  const runClusteringTest = async () => {
+    if (!selectedTenant?.tenant_id || !parameters) return;
+
+    setTestLoading(true);
+    setError(null);
+
+    try {
+      // Prepara parametri per il test (usa valori correnti e converte in number)
+      const testParameters = {
+        min_cluster_size: typeof parameters.min_cluster_size.value === 'string' ? 
+          parseFloat(parameters.min_cluster_size.value) : parameters.min_cluster_size.value,
+        min_samples: typeof parameters.min_samples.value === 'string' ? 
+          parseFloat(parameters.min_samples.value) : parameters.min_samples.value,
+        cluster_selection_epsilon: typeof parameters.cluster_selection_epsilon.value === 'string' ? 
+          parseFloat(parameters.cluster_selection_epsilon.value) : parameters.cluster_selection_epsilon.value,
+        metric: parameters.metric.value as string
+      };
+
+      console.log('🧪 [CLUSTERING TEST] Avvio test con parametri:', testParameters);
+
+      // Chiamata API per test clustering
+      const result = await apiService.testClustering(
+        selectedTenant.tenant_id,
+        testParameters,
+        1000  // Campione di 1000 conversazioni per test rapido
+      );
+
+      console.log('✅ [CLUSTERING TEST] Risultati ricevuti:', result);
+      console.log('🔍 [CLUSTERING TEST] Tipo detailed_clusters:', typeof result.detailed_clusters, result.detailed_clusters);
+      console.log('🔍 [CLUSTERING TEST] Array.isArray(detailed_clusters):', Array.isArray(result.detailed_clusters));
+      console.log('🔍 [CLUSTERING TEST] Lunghezza array detailed_clusters:', Array.isArray(result.detailed_clusters) ? result.detailed_clusters.length : 'N/A');
+      console.log('🔍 [CLUSTERING TEST] Primo cluster:', Array.isArray(result.detailed_clusters) && result.detailed_clusters.length > 0 ? result.detailed_clusters[0] : 'Nessun cluster');
+      console.log('🔍 [CLUSTERING TEST] result.statistics:', result.statistics);
+      console.log('🔍 [CLUSTERING TEST] result.quality_metrics:', result.quality_metrics);
+      console.log('🔍 [CLUSTERING TEST] result.outlier_analysis:', result.outlier_analysis);
+      
+      // Mappa la risposta del backend alla struttura che si aspetta il componente ClusteringTestResults
+      const mappedResult = {
+        success: result.success,
+        error: result.error,
+        execution_time: result.execution_time,
+        statistics: result.statistics ? {
+          total_conversations: result.statistics.total_conversations,
+          n_clusters: result.statistics.n_clusters,
+          n_outliers: result.statistics.n_outliers,
+          clustering_ratio: result.statistics.clustering_ratio || 0
+        } : undefined,
+        quality_metrics: result.quality_metrics ? {
+          silhouette_score: result.quality_metrics.silhouette_score,
+          calinski_harabasz_score: 0, // Non disponibile nel backend attuale
+          davies_bouldin_score: 0 // Non disponibile nel backend attuale
+        } : undefined,
+        recommendations: result.quality_metrics?.quality_assessment ? [
+          `📊 Valutazione: ${result.quality_metrics.quality_assessment}`,
+          `📈 Bilanciamento cluster: ${result.quality_metrics.cluster_balance}`,
+          ...(result.outlier_analysis?.recommendation ? [`💡 ${result.outlier_analysis.recommendation}`] : [])
+        ] : undefined,
+        detailed_clusters: result.detailed_clusters && Array.isArray(result.detailed_clusters) ? {
+          clusters: result.detailed_clusters.map((cluster: any) => ({
+            cluster_id: cluster.cluster_id || cluster.id || 0,
+            size: cluster.size || cluster.count || 0,
+            conversations: (cluster.conversations && Array.isArray(cluster.conversations)) ? 
+              cluster.conversations.map((conv: any) => ({
+                session_id: conv.session_id || conv.id || '',
+                text: conv.testo_completo || conv.text || '',
+                text_length: (conv.testo_completo || conv.text || '').length
+              })) : []
+          }))
+        } : { clusters: [] },
+        outlier_analysis: result.outlier_analysis ? {
+          count: result.outlier_analysis.count,
+          percentage: result.outlier_analysis.ratio * 100,
+          samples: result.outlier_analysis.sample_outliers?.map((outlier: any) => ({
+            session_id: outlier.session_id || 'unknown',
+            text: outlier.testo_completo || outlier.text || 'N/A',
+            text_length: (outlier.testo_completo || outlier.text || '').length
+          })) || []
+        } : undefined
+      };
+
+      console.log('🔍 [CLUSTERING TEST] Mapped result:', mappedResult);
+      console.log('🔍 [CLUSTERING TEST] mappedResult.statistics:', mappedResult.statistics);
+      console.log('🔍 [CLUSTERING TEST] mappedResult.success:', mappedResult.success);
+
+      setTestResult(mappedResult);
+      setTestLoading(false);  // 🔧 Imposto loading a false PRIMA di aprire il dialog
+      setTestDialogOpen(true);
+
+      if (result.success && result.statistics) {
+        setSuccess(`Test completato! ${result.statistics.n_clusters} cluster trovati in ${result.execution_time?.toFixed(2)}s`);
+      }
+
+    } catch (err: any) {
+      console.error('❌ [CLUSTERING TEST] Errore:', err);
+      setError(`Errore test clustering: ${err.message}`);
+      
+      // In caso di errore, mostra comunque il dialog con l'errore
+      setTestResult({
+        success: false,
+        error: err.message,
+        tenant_id: selectedTenant.tenant_id,
+        execution_time: 0,
+        sample_info: { total_conversations: 0, embedding_dimension: 0, parameters_used: {} },
+        statistics: { total_conversations: 0, n_clusters: 0, n_outliers: 0, clustering_ratio: 0, parameters_used: {} },
+        detailed_clusters: [],
+        quality_metrics: { silhouette_score: 0, outlier_ratio: 0, cluster_balance: 'error', quality_assessment: 'error' },
+        outlier_analysis: { count: 0, ratio: 0, analysis: 'error', recommendation: '', sample_outliers: [] }
+      });
+      setTestLoading(false);  // 🔧 Imposto loading a false PRIMA di aprire il dialog
+      setTestDialogOpen(true);
+      
+    } finally {
+      // Loading già impostato a false sopra
+    }
   };
 
   /**
@@ -411,7 +538,7 @@ const ClusteringParametersManager: React.FC = () => {
   // Carica parametri al mount e quando cambia tenant
   useEffect(() => {
     loadParameters();
-  }, [selectedTenant]);
+  }, [selectedTenant, loadParameters]);
 
   // Auto-clear success/error messages
   useEffect(() => {
@@ -572,14 +699,35 @@ const ClusteringParametersManager: React.FC = () => {
 
               {/* Azioni */}
               <Box display="flex" justifyContent="space-between" alignItems="center" mt={3}>
-                <Button
-                  variant="outlined"
-                  startIcon={<ResetIcon />}
-                  onClick={resetParameters}
-                  disabled={saving || loading}
-                >
-                  Reset Default
-                </Button>
+                <Box display="flex" gap={2}>
+                  <Button
+                    variant="outlined"
+                    startIcon={<ResetIcon />}
+                    onClick={resetParameters}
+                    disabled={saving || loading}
+                  >
+                    Reset Default
+                  </Button>
+                  
+                  {/* 🆕 TASTO PROVA CLUSTERING */}
+                  <Button
+                    variant="outlined"
+                    color="primary"
+                    startIcon={testLoading ? <CircularProgress size={16} /> : <AssessmentIcon />}
+                    onClick={runClusteringTest}
+                    disabled={saving || loading || testLoading || Object.keys(validationErrors).length > 0}
+                    sx={{
+                      fontWeight: 'bold',
+                      borderWidth: 2,
+                      '&:hover': {
+                        borderWidth: 2,
+                        backgroundColor: 'primary.50'
+                      }
+                    }}
+                  >
+                    {testLoading ? 'Testing...' : 'PROVA CLUSTERING'}
+                  </Button>
+                </Box>
 
                 <Box display="flex" gap={2}>
                   {hasChanges && (
@@ -603,6 +751,14 @@ const ClusteringParametersManager: React.FC = () => {
           )}
         </CardContent>
       </Card>
+      
+      {/* 🆕 DIALOG RISULTATI TEST CLUSTERING */}
+      <ClusteringTestResults
+        open={testDialogOpen}
+        onClose={() => setTestDialogOpen(false)}
+        result={testResult}
+        isLoading={testLoading}
+      />
     </Box>
   );
 };

@@ -1,9 +1,13 @@
 clustering_parameters:
-  cluster_selection_epsilon: 0.15
+  cluster_selection_epsilon: 0.18
   metric: cosine
   min_cluster_size: 3
   min_samples: 3
-last_updated: '2025-08-24T21:58:41.639894'
-previous_config_backup: {}
+last_updated: '2025-08-25T14:54:14.612833'
+previous_config_backup:
+  cluster_selection_epsilon: 0.44
+  metric: cosine
+  min_cluster_size: 3
+  min_samples: 3
 tenant_id: 015007d9-d413-11ef-86a5-96000228e7fe
 updated_by: web_interface

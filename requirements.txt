@@ -13,6 +13,12 @@ mysql-connector-python>=8.0.28
 PyYAML>=5.4.1
 requests>=2.25.1
 
+# Environment and configuration
+python-dotenv>=1.0.0
+
+# AI/ML APIs
+openai>=1.0.0
+
 # Database
 pymongo>=4.5.0
 

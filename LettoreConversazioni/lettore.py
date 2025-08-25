@@ -1,5 +1,6 @@
 import sys
 import os
+import yaml
 
 # Aggiunge il percorso della directory MySql al path per importare il connettore
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'MySql'))
@@ -11,15 +12,31 @@ class LettoreConversazioni:
     Classe per leggere le conversazioni dal database MySQL
     """
     
-    def __init__(self, schema='common'):
+    def __init__(self, schema='common', config_path=None):
         """
         Inizializza il lettore delle conversazioni
         
         Args:
             schema (str): Nome dello schema del database (default: 'common')
+            config_path (str): Percorso file configurazione (default: '../config.yaml')
         """
         self.connettore = MySqlConnettore()
         self.schema = schema
+        
+        # Carica configurazione
+        if not config_path:
+            config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
+        
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                self.config = yaml.safe_load(f)
+        except Exception as e:
+            print(f"⚠️ Errore caricamento config.yaml: {e}")
+            self.config = {}
+        
+        # Leggi parametro only_user (default: False per retrocompatibilità)
+        self.only_user = self.config.get('conversation_reading', {}).get('only_user', False)
+        print(f"📖 LettoreConversazioni inizializzato - only_user: {self.only_user}")
     
     def leggi_conversazioni(self):
         """
@@ -30,6 +47,14 @@ class LettoreConversazioni:
                   Format: (session_id, conversation_agent_name, conversation_status_message_id, 
                           conversation_message, said_by, message_created_at)
         """
+        # Determina il filtro said_by in base alla configurazione
+        if self.only_user:
+            said_by_filter = "WHERE csm.said_by = 'USER'"
+            print("🎯 Filtraggio attivo: solo messaggi USER")
+        else:
+            said_by_filter = "WHERE csm.said_by IN ('USER', 'AGENT')"
+            print("📄 Filtraggio standard: messaggi USER e AGENT")
+            
         query = f"""
         SELECT cs.session_id
              , (SELECT a.agent_name
@@ -42,7 +67,7 @@ class LettoreConversazioni:
           FROM {self.schema}.conversation_status cs
          INNER JOIN {self.schema}.conversation_status_messages csm
             ON cs.conversation_status_id = csm.conversation_status_id
-         WHERE csm.said_by IN ('USER', 'AGENT')
+         {said_by_filter}
          ORDER BY cs.session_id
              , cs.created_at ASC
              , csm.created_at ASC

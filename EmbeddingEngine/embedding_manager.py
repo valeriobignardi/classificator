@@ -64,12 +64,38 @@ class EmbeddingManager:
         
         print(f"🎯 EmbeddingManager inizializzato")
     
+    def _normalize_tenant_id(self, tenant_identifier: str) -> str:
+        """
+        Normalizza tenant identifier (slug o UUID) in UUID
+        
+        Args:
+            tenant_identifier: slug (es. 'wopta') o UUID
+            
+        Returns:
+            UUID del tenant o identifier originale se non trovato
+            
+        Ultima modifica: 2025-08-25
+        """
+        try:
+            from Database.database_ai_config_service import DatabaseAIConfigService
+            db_service = DatabaseAIConfigService()
+            normalized_id = db_service._resolve_tenant_id(tenant_identifier)
+            
+            if normalized_id != tenant_identifier:
+                print(f"🔄 EMBEDDING MANAGER: Normalizzato '{tenant_identifier}' -> '{normalized_id}'")
+            
+            return normalized_id
+            
+        except Exception as e:
+            print(f"⚠️ EMBEDDING MANAGER: Errore normalizzazione '{tenant_identifier}': {e}")
+            return tenant_identifier
+    
     def get_shared_embedder(self, tenant_id: str = "default") -> BaseEmbedder:
         """
         Ottiene embedder condiviso per applicazione
         
         Args:
-            tenant_id: ID tenant per configurazione embedding engine
+            tenant_id: ID tenant per configurazione embedding engine (slug o UUID)
             
         Returns:
             Embedder condiviso configurato per tenant
@@ -79,30 +105,33 @@ class EmbeddingManager:
         print(f"🔍 CHIAMATA get_shared_embedder(tenant_id='{tenant_id}') da:")
         print(f"   {stack_trace.strip()}")
         
+        # NORMALIZZA SEMPRE A UUID
+        normalized_tenant_id = self._normalize_tenant_id(tenant_id)
+        
         with self._manager_lock:
             # Se stesso tenant, restituisce embedder esistente
             if (self._current_embedder is not None and 
-                self._current_tenant_id == tenant_id):
-                print(f"♻️  Riuso embedder esistente per tenant {tenant_id}: {type(self._current_embedder).__name__}")
+                self._current_tenant_id == normalized_tenant_id):
+                print(f"♻️  Riuso embedder esistente per tenant {normalized_tenant_id}: {type(self._current_embedder).__name__}")
                 return self._current_embedder
             
-            print(f"🔄 Switch embedder condiviso da {self._current_tenant_id} a {tenant_id}")
+            print(f"🔄 Switch embedder condiviso da {self._current_tenant_id} a {normalized_tenant_id}")
             
             # Cleanup embedder precedente se diverso tenant
             if (self._current_embedder is not None and 
-                self._current_tenant_id != tenant_id):
+                self._current_tenant_id != normalized_tenant_id):
                 self._cleanup_current_embedder()
             
             # Ottieni nuovo embedder
             try:
-                self._current_embedder = embedding_factory.get_embedder_for_tenant(tenant_id)
-                self._current_tenant_id = tenant_id
+                self._current_embedder = embedding_factory.get_embedder_for_tenant(normalized_tenant_id)
+                self._current_tenant_id = normalized_tenant_id
                 
-                print(f"✅ Embedder condiviso aggiornato per tenant {tenant_id}: {type(self._current_embedder).__name__}")
+                print(f"✅ Embedder condiviso aggiornato per tenant {normalized_tenant_id}: {type(self._current_embedder).__name__}")
                 return self._current_embedder
                 
             except Exception as e:
-                self.logger.error(f"Errore ottenimento embedder per tenant {tenant_id}: {e}")
+                self.logger.error(f"Errore ottenimento embedder per tenant {normalized_tenant_id}: {e}")
                 # Fallback a default LaBSE
                 print(f"🔄 Fallback a embedder default LaBSE")
                 self._current_embedder = embedding_factory.get_default_embedder()
@@ -149,14 +178,17 @@ class EmbeddingManager:
         Forza switch a embedder specifico per tenant
         
         Args:
-            tenant_id: Nuovo tenant ID
+            tenant_id: Nuovo tenant ID (slug o UUID)
             force_reload: Se True, forza reload anche per stesso tenant
             
         Returns:
             Nuovo embedder configurato
         """
+        # NORMALIZZA SEMPRE A UUID
+        normalized_tenant_id = self._normalize_tenant_id(tenant_id)
+        
         with self._manager_lock:
-            print(f"🔄 Switch forzato embedder a tenant {tenant_id} (force_reload={force_reload})")
+            print(f"🔄 Switch forzato embedder a tenant {tenant_id} -> {normalized_tenant_id} (force_reload={force_reload})")
             
             # Se force_reload=True, SEMPRE cleanup e ricarica
             if force_reload:
@@ -166,14 +198,14 @@ class EmbeddingManager:
                 # FORZA ANCHE LA FACTORY A RICARICARE BYPASSANDO LA SUA CACHE
                 try:
                     print(f"🔧 FORCE RELOAD: ordino alla factory di bypassare completamente la cache")
-                    self._current_embedder = embedding_factory.get_embedder_for_tenant(tenant_id, force_reload=True)
-                    self._current_tenant_id = tenant_id
+                    self._current_embedder = embedding_factory.get_embedder_for_tenant(normalized_tenant_id, force_reload=True)
+                    self._current_tenant_id = normalized_tenant_id
                     
-                    print(f"✅ Embedder FORZATAMENTE ricaricato per tenant {tenant_id}: {type(self._current_embedder).__name__}")
+                    print(f"✅ Embedder FORZATAMENTE ricaricato per tenant {normalized_tenant_id}: {type(self._current_embedder).__name__}")
                     return self._current_embedder
                     
                 except Exception as e:
-                    self.logger.error(f"Errore force reload embedder per tenant {tenant_id}: {e}")
+                    self.logger.error(f"Errore force reload embedder per tenant {normalized_tenant_id}: {e}")
                     # Fallback a default
                     print(f"🔄 Fallback a embedder default LaBSE dopo errore force reload")
                     self._current_embedder = embedding_factory.get_default_embedder()
@@ -181,14 +213,14 @@ class EmbeddingManager:
                     return self._current_embedder
             
             # Cleanup current solo se tenant diverso
-            elif self._current_tenant_id != tenant_id:
+            elif self._current_tenant_id != normalized_tenant_id:
                 self._cleanup_current_embedder()
                 
             # Per stesso tenant senza force_reload, usa logica normale
             # Il factory gestirà il reload usando la logica di cache invalidation
             
             # Ottieni nuovo embedder (il factory userà configurazione aggiornata)
-            return self.get_shared_embedder(tenant_id)
+            return self.get_shared_embedder(normalized_tenant_id)
     
     def reload_embedder(self) -> BaseEmbedder:
         """

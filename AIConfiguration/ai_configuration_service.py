@@ -749,20 +749,23 @@ class AIConfigurationService:
     # GESTIONE CONFIGURAZIONI TENANT
     # =====================================
     
-    def get_tenant_configuration(self, tenant_id: str) -> Dict[str, Any]:
+    def get_tenant_configuration(self, tenant_id: str, force_no_cache: bool = False) -> Dict[str, Any]:
         """
         Ottiene configurazione AI completa per tenant dal database
         
         Args:
             tenant_id: ID del tenant
+            force_no_cache: Se True, bypassa la cache e legge dal database
             
         Returns:
             Configurazione completa del tenant con status
+            
+        Ultima modifica: 2025-08-25 - Aggiunto parametro force_no_cache
         """
         if self.use_database:
             try:
-                # Ottiene configurazione dal database
-                db_config = self.db_service.get_tenant_configuration(tenant_id)
+                # Ottiene configurazione dal database (con bypass cache se richiesto)
+                db_config = self.db_service.get_tenant_configuration(tenant_id, force_no_cache=force_no_cache)
                 
                 # Genera status simulato per compatibilità
                 embedding_engine_ok = True  # Assumiamo OK per ora

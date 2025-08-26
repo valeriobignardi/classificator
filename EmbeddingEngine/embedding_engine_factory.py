@@ -85,9 +85,26 @@ class EmbeddingEngineFactory:
             # CONFIGURAZIONE FORCE RELOAD: Bypassa cache se richiesto
             if force_reload:
                 print(f"🔧 FACTORY: Force reload richiesto per tenant {tenant_id} - bypasso COMPLETAMENTE la cache")
-                config = self.ai_config_service.get_tenant_configuration(tenant_id, force_no_cache=True)
+                print(f"🔍 FACTORY DEBUG: Chiamata ai_config_service.get_tenant_configuration({tenant_id}, force_no_cache=True)...")
+                try:
+                    config = self.ai_config_service.get_tenant_configuration(tenant_id, force_no_cache=True)
+                    print(f"✅ FACTORY DEBUG: Config ottenuta con force_no_cache=True")
+                    if config and config.get('embedding_engine'):
+                        engine_current = config['embedding_engine'].get('current', 'NONE')
+                        print(f"🎯 FACTORY DEBUG: Engine dal DB con force_no_cache = '{engine_current}'")
+                    else:
+                        print(f"❌ FACTORY DEBUG: Config o embedding_engine mancanti!")
+                except Exception as e:
+                    print(f"❌ FACTORY DEBUG: ERRORE get_tenant_configuration con force_no_cache: {e}")
+                    raise
             else:
+                print(f"🔍 FACTORY DEBUG: Chiamata ai_config_service.get_tenant_configuration({tenant_id}) normale...")
                 config = self.ai_config_service.get_tenant_configuration(tenant_id)
+                if config and config.get('embedding_engine'):
+                    engine_current = config['embedding_engine'].get('current', 'NONE')
+                    print(f"🎯 FACTORY DEBUG: Engine normale = '{engine_current}'")
+                else:
+                    print(f"❌ FACTORY DEBUG: Config normale o embedding_engine mancanti!")
                 
             if not config or not config.get('embedding_engine'):
                 raise RuntimeError(f"Configurazione embedding engine per tenant {tenant_id} non disponibile")
@@ -137,11 +154,16 @@ class EmbeddingEngineFactory:
             if cache_key in self._embedder_cache:
                 print(f"🗑️ Rimozione embedder precedente per {tenant_id}")
                 old_embedder = self._embedder_cache[cache_key]
+                old_embedder_type = type(old_embedder).__name__
+                print(f"🗑️ FACTORY DEBUG: Rimuovo embedder precedente tipo '{old_embedder_type}'")
                 self._cleanup_embedder(old_embedder)
                 del self._embedder_cache[cache_key]
             
             # Crea nuovo embedder
+            print(f"🚀 FACTORY DEBUG: Avvio creazione nuovo embedder tipo '{engine_type}'")
             embedder = self._create_embedder(engine_type, embedding_config.get('config', {}))
+            new_embedder_type = type(embedder).__name__
+            print(f"✅ FACTORY DEBUG: Nuovo embedder creato: {new_embedder_type}")
             
             # Assicurati che il nuovo embedder non sia marcato come invalidato
             if hasattr(embedder, '_cache_invalidated'):
@@ -151,7 +173,7 @@ class EmbeddingEngineFactory:
             self._embedder_cache[cache_key] = embedder
             self._config_cache[cache_key] = embedding_config.copy()
             
-            print(f"✅ Embedder {engine_type} creato e cached per tenant {tenant_id}")
+            print(f"✅ Embedder {engine_type} ({new_embedder_type}) creato e cached per tenant {tenant_id}")
             return embedder
     
     def _create_embedder(self, engine_type: str, config: Dict[str, Any]) -> BaseEmbedder:
@@ -165,29 +187,42 @@ class EmbeddingEngineFactory:
         Returns:
             Istanza BaseEmbedder
         """
+        print(f"🚀 FACTORY DEBUG: Creazione embedder tipo '{engine_type}' con config: {config}")
         try:
             if engine_type == 'labse':
                 from labse_embedder import LaBSEEmbedder
-                return LaBSEEmbedder(**config)
+                print(f"✅ FACTORY DEBUG: Importo LaBSEEmbedder...")
+                embedder = LaBSEEmbedder(**config)
+                print(f"✅ FACTORY DEBUG: LaBSEEmbedder creato con successo")
+                return embedder
                 
             elif engine_type == 'bge_m3':
                 from bge_m3_embedder import BGE_M3_Embedder
-                return BGE_M3_Embedder(**config)
+                print(f"✅ FACTORY DEBUG: Importo BGE_M3_Embedder...")
+                embedder = BGE_M3_Embedder(**config)
+                print(f"✅ FACTORY DEBUG: BGE_M3_Embedder creato con successo")
+                return embedder
                 
             elif engine_type in ['openai_large', 'openai_small']:
                 from openai_embedder import OpenAIEmbedder
+                print(f"✅ FACTORY DEBUG: Importo OpenAIEmbedder...")
                 # Ottieni chiave API
                 api_key = self.ai_config_service.openai_api_key
                 if not api_key:
                     raise RuntimeError("API key OpenAI non configurata")
                 
                 model_name = 'text-embedding-3-large' if engine_type == 'openai_large' else 'text-embedding-3-small'
-                return OpenAIEmbedder(api_key=api_key, model_name=model_name, **config)
+                print(f"🎯 FACTORY DEBUG: Creazione OpenAI embedder con model='{model_name}'")
+                embedder = OpenAIEmbedder(api_key=api_key, model_name=model_name, **config)
+                print(f"✅ FACTORY DEBUG: OpenAIEmbedder creato con successo")
+                return embedder
                 
             else:
+                print(f"❌ FACTORY DEBUG: Engine type '{engine_type}' non supportato")
                 raise ValueError(f"Engine type {engine_type} non supportato")
                 
         except Exception as e:
+            print(f"❌ FACTORY DEBUG: ERRORE creazione embedder {engine_type}: {e}")
             raise RuntimeError(f"Errore creazione embedder {engine_type}: {e}")
     
     def _cleanup_embedder(self, embedder: BaseEmbedder):

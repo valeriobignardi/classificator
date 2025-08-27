@@ -225,13 +225,19 @@ const ClusteringVersionManager: React.FC = () => {
     setError(null);
 
     try {
-      const response = await apiService.compareClusteringVersions(compareVersion1, compareVersion2);
+      console.log('🔍 [DEBUG] Avvio confronto versioni:', compareVersion1, 'vs', compareVersion2, 'per tenant:', selectedTenant?.tenant_id);
+      const response = await apiService.compareClusteringVersions(
+        selectedTenant?.tenant_id || '', 
+        compareVersion1, 
+        compareVersion2
+      );
       if (response.success && response.data) {
         setComparison(response.data);
       } else {
         setError(response.error || 'Errore confronto versioni');
       }
     } catch (err: any) {
+      console.error('❌ [ERROR] Errore confronto versioni:', err);
       setError(`Errore: ${err.message}`);
     } finally {
       setCompareLoading(false);

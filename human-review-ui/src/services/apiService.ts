@@ -1019,11 +1019,12 @@ class ApiService {
   /**
    * Confronta due versioni di risultati clustering
    * 
-   * @param resultId1 - ID del primo risultato
-   * @param resultId2 - ID del secondo risultato  
+   * @param tenantId - ID del tenant
+   * @param version1 - Prima versione da confrontare
+   * @param version2 - Seconda versione da confrontare  
    * @returns Promise con confronto dettagliato
    */
-  async compareClusteringVersions(resultId1: number, resultId2: number): Promise<{
+  async compareClusteringVersions(tenantId: string, version1: number, version2: number): Promise<{
     success: boolean;
     data: {
       version1: any;
@@ -1046,11 +1047,12 @@ class ApiService {
     };
     error?: string;
   }> {
+    console.log('🔍 [DEBUG] ApiService.compareClusteringVersions() - tenantId:', tenantId, 'version1:', version1, 'version2:', version2);
+    const url = `/clustering/${tenantId}/compare/${version1}/${version2}`;
+    console.log('🔍 [DEBUG] URL chiamata:', url);
+    
     return this.handleRequest(
-      axios.post(`${API_BASE_URL}/clustering/compare`, {
-        result_id_1: resultId1,
-        result_id_2: resultId2
-      })
+      axios.get(`${API_BASE_URL}${url}`)
     );
   }
 

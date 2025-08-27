@@ -1,17 +1,54 @@
 """
-Clustering HDBSCAN per scoperta automatica di categorie
+Clustering HDBSCAN per scoperta automatica di categorie con supporto GPU
+
+Autore: GitHub Copilot
+Data creazione: 26 Agosto 2025
+Aggiornamenti:
+- 26/08/2025: Aggiunto supporto GPU clustering con cuML HDBSCAN
+- 26/08/2025: Fallback automatico su CPU se GPU non disponibile
+- 26/08/2025: Configurazione GPU tramite config.yaml
 """
 
 import sys
 import os
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Union
 import numpy as np
+import time
+import yaml
+
+# Import standard CPU clustering
 import hdbscan
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 from collections import Counter
-import yaml
+
+# 🆕 UMAP import
+try:
+    import umap.umap_ as umap
+    UMAP_AVAILABLE = True
+    print("🚀 UMAP disponibile per riduzione dimensionale!")
+except ImportError:
+    UMAP_AVAILABLE = False
+    print("⚠️  UMAP non disponibile - installare con: pip install umap-learn")
+
+# GPU clustering imports con fallback
+try:
+    import os
+    # Setup CUDA environment
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    
+    import cuml
+    import cupy as cp
+    from cuml.cluster import HDBSCAN as cumlHDBSCAN
+    
+    # Test GPU funzionante
+    _ = cp.cuda.Device(0).compute_capability
+    GPU_AVAILABLE = True
+    print("🚀 cuML GPU clustering disponibile!")
+except Exception as e:
+    GPU_AVAILABLE = False
+    print(f"⚠️  cuML non disponibile ({str(e)[:50]}...) - solo clustering CPU")
 
 # Aggiunge i percorsi per importare gli altri moduli
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'EmbeddingEngine'))
@@ -23,6 +60,14 @@ from session_aggregator import SessionAggregator
 class HDBSCANClusterer:
     """
     Clustering delle sessioni usando HDBSCAN per scoperta automatica di categorie
+    
+    Supporta clustering sia su CPU che su GPU (cuML) con fallback automatico.
+    Configurazione tramite config.yaml: gpu_enabled, gpu_fallback_cpu, gpu_memory_limit
+    
+    Input: Array di embeddings (n_samples, embedding_dim)
+    Output: Array di etichette cluster (-1 per outlier)
+    
+    Ultima modifica: 26 Agosto 2025 - Aggiunto supporto GPU
     """
     
     def __init__(self, 
@@ -30,6 +75,17 @@ class HDBSCANClusterer:
                  min_samples: Optional[int] = None,
                  cluster_selection_epsilon: Optional[float] = None,
                  metric: Optional[str] = None,
+                 cluster_selection_method: Optional[str] = None,
+                 alpha: Optional[float] = None,
+                 max_cluster_size: Optional[int] = None,
+                 allow_single_cluster: Optional[bool] = None,
+                 # 🆕 PARAMETRI UMAP
+                 use_umap: Optional[bool] = None,
+                 umap_n_neighbors: Optional[int] = None,
+                 umap_min_dist: Optional[float] = None,
+                 umap_metric: Optional[str] = None,
+                 umap_n_components: Optional[int] = None,
+                 umap_random_state: Optional[int] = None,
                  config_path: Optional[str] = None):
         """
         Inizializza il clusterer HDBSCAN con parametri da configurazione
@@ -40,15 +96,17 @@ class HDBSCANClusterer:
             cluster_selection_epsilon: Distanza massima per cluster (sovrascrive config)
             metric: Metrica di distanza (sovrascrive config)
             config_path: Percorso del file di configurazione
+            
+        Ultima modifica: 26 Agosto 2025
         """
         # Carica configurazione
         if config_path is None:
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
         
-        self.config_path = config_path  # Salva il percorso per uso futuro
+        self.config_path = config_path
         self.config = self._load_config(config_path)
         
-        # Usa parametri da config se non specificati esplicitamente
+        # Parametri clustering da config o input
         clustering_config = self.config.get('clustering', {})
         
         self.min_cluster_size = min_cluster_size or clustering_config.get('min_cluster_size', 5)
@@ -56,26 +114,89 @@ class HDBSCANClusterer:
         self.cluster_selection_epsilon = cluster_selection_epsilon or clustering_config.get('cluster_selection_epsilon', 0.05)
         self.metric = metric or clustering_config.get('metric', 'cosine')
         
-        # Parametri avanzati da config
-        self.cluster_selection_method = clustering_config.get('cluster_selection_method', 'leaf')
-        self.allow_single_cluster = clustering_config.get('allow_single_cluster', False)
+        # Parametri avanzati da config o input - ESPANSI PER FRONTEND
+        self.cluster_selection_method = cluster_selection_method or clustering_config.get('cluster_selection_method', 'eom')
+        self.alpha = alpha if alpha is not None else clustering_config.get('alpha', 1.0)  # Controllo noise/outlier - BUGFIX
+        self.max_cluster_size = max_cluster_size or clustering_config.get('max_cluster_size', 0)  # 0 = unlimited 
+        self.allow_single_cluster = allow_single_cluster if allow_single_cluster is not None else clustering_config.get('allow_single_cluster', False)
+        
+        # Parametri performance
+        self.leaf_size = clustering_config.get('leaf_size', 40)
         self.n_representatives = clustering_config.get('n_representatives', 3)
         self.min_silhouette_score = clustering_config.get('min_silhouette_score', 0.2)
         self.max_outlier_ratio = clustering_config.get('max_outlier_ratio', 0.7)
         
+        # Configurazione GPU - NOVITÀ
+        self.gpu_enabled = clustering_config.get('gpu_enabled', False) and GPU_AVAILABLE
+        self.gpu_fallback_cpu = clustering_config.get('gpu_fallback_cpu', True)
+        self.gpu_memory_limit = clustering_config.get('gpu_memory_limit', 0.8)
+        
+        # 🆕 CONFIGURAZIONE UMAP
+        umap_config = clustering_config.get('umap', {})
+        self.use_umap = use_umap if use_umap is not None else umap_config.get('use_umap', False)
+        self.umap_n_neighbors = umap_n_neighbors or umap_config.get('n_neighbors', 30)
+        self.umap_min_dist = umap_min_dist if umap_min_dist is not None else umap_config.get('min_dist', 0.1)
+        self.umap_metric = umap_metric or umap_config.get('metric', 'cosine')
+        self.umap_n_components = umap_n_components or umap_config.get('n_components', 50)  # Riduzione dimensionale prima di HDBSCAN
+        self.umap_random_state = umap_random_state or umap_config.get('random_state', 42)
+        
+        # Valida disponibilità UMAP
+        if self.use_umap and not UMAP_AVAILABLE:
+            print("⚠️  UMAP richiesto ma non disponibile - disabilitato")
+            self.use_umap = False
+        
+        # Stato clustering
         self.clusterer = None
         self.cluster_labels = None
         self.cluster_probabilities = None
         self.outlier_scores = None
+        self.gpu_used = False  # Track se GPU è stato effettivamente usato
         
-        print(f"🔧 HDBSCANClusterer inizializzato con parametri:")
+        # Log configurazione
+        print(f"🔧 HDBSCANClusterer inizializzato:")
         print(f"   min_cluster_size: {self.min_cluster_size}")
         print(f"   min_samples: {self.min_samples}")
         print(f"   metric: {self.metric}")
         print(f"   cluster_selection_epsilon: {self.cluster_selection_epsilon}")
+        
+        # 🆕 LOG CONFIGURAZIONE UMAP
+        if self.use_umap:
+            print(f"   🗂️  UMAP enabled: True")
+            print(f"     📏 n_neighbors: {self.umap_n_neighbors}")
+            print(f"     📐 min_dist: {self.umap_min_dist}")
+            print(f"     📊 n_components: {self.umap_n_components}")
+            print(f"     🎯 metric: {self.umap_metric}")
+        else:
+            print(f"   🗂️  UMAP enabled: False")
+        
+        print(f"   🚀 GPU enabled: {self.gpu_enabled}")
+        if self.gpu_enabled:
+            print(f"   💾 GPU memory limit: {self.gpu_memory_limit*100:.0f}%")
+            print(f"   🔄 CPU fallback: {self.gpu_fallback_cpu}")
+            
+            # ⚠️  AVVISO LIMITAZIONI GPU
+            print(f"   ⚠️  [GPU MODE] Limitazioni cuML HDBSCAN:")
+            if self.max_cluster_size and self.max_cluster_size > 0:
+                print(f"     🚫 max_cluster_size={self.max_cluster_size} sarà IGNORATO su GPU")
+            if hasattr(self, 'leaf_size'):
+                print(f"     🚫 leaf_size={self.leaf_size} sarà IGNORATO su GPU")
+            print(f"     ✅ Parametri supportati: cluster_selection_method, alpha, allow_single_cluster")
+        
+        # 🆕 DEBUG PARAMETRI AVANZATI PER REACT
+        print(f"🎯 [DEBUG REACT] Parametri configurati:")
+        print(f"   cluster_selection_method: {self.cluster_selection_method}")
+        print(f"   alpha: {self.alpha}")
+        print(f"   allow_single_cluster: {self.allow_single_cluster}")
     
     def _load_config(self, config_path: str) -> Dict:
-        """Carica la configurazione dal file YAML"""
+        """
+        Carica la configurazione dal file YAML
+        
+        Returns:
+            Dizionario di configurazione
+            
+        Ultima modifica: 26 Agosto 2025
+        """
         try:
             with open(config_path, 'r', encoding='utf-8') as file:
                 return yaml.safe_load(file)
@@ -84,53 +205,419 @@ class HDBSCANClusterer:
             print("📝 Uso parametri predefiniti")
             return {}
     
+    def _apply_umap_reduction(self, embeddings: np.ndarray) -> Tuple[np.ndarray, Dict]:
+        """
+        Applica riduzione dimensionale con UMAP prima del clustering HDBSCAN
+        
+        Args:
+            embeddings: Array di embeddings originali (n_samples, orig_dim)
+            
+        Returns:
+            Tuple[embeddings ridotti (n_samples, umap_n_components), info UMAP]
+            
+        Data creazione: 27 Agosto 2025
+        """
+        print(f"🔍 [DEBUG UMAP] Controllo condizioni applicazione UMAP...")
+        print(f"   ✅ self.use_umap = {self.use_umap}")
+        print(f"   ✅ UMAP_AVAILABLE = {UMAP_AVAILABLE}")
+        
+        if not self.use_umap:
+            print(f"❌ [DEBUG UMAP] UMAP disabilitato da configurazione (use_umap=False)")
+            return embeddings, {'applied': False, 'reason': 'UMAP disabled by configuration'}
+        
+        if not UMAP_AVAILABLE:
+            print(f"❌ [DEBUG UMAP] UMAP non disponibile (libreria non installata)")
+            return embeddings, {'applied': False, 'reason': 'UMAP library not available'}
+        
+        print(f"� [DEBUG UMAP] UMAP ABILITATO - Iniziando riduzione dimensionale...")
+        print(f"   📏 Dimensioni input: {embeddings.shape}")
+        print(f"   🔢 Tipo dati input: {embeddings.dtype}")
+        print(f"   📊 Range valori input: [{embeddings.min():.4f}, {embeddings.max():.4f}]")
+        print(f"   🎯 Parametri UMAP configurati:")
+        print(f"     📐 n_neighbors: {self.umap_n_neighbors}")
+        print(f"     📏 min_dist: {self.umap_min_dist}")
+        print(f"     🔢 n_components: {self.umap_n_components}")
+        print(f"     📈 metric: {self.umap_metric}")
+        print(f"     🎲 random_state: {self.umap_random_state}")
+        
+        # 🆕 DEBUG: Verifica che gli embedding siano validi
+        if np.any(np.isnan(embeddings)):
+            print(f"⚠️  [DEBUG UMAP] ATTENZIONE: Trovati NaN negli embeddings!")
+            nan_count = np.sum(np.isnan(embeddings))
+            print(f"   🔢 NaN trovati: {nan_count}")
+        
+        if np.any(np.isinf(embeddings)):
+            print(f"⚠️  [DEBUG UMAP] ATTENZIONE: Trovati valori infiniti negli embeddings!")
+            inf_count = np.sum(np.isinf(embeddings))
+            print(f"   🔢 Infiniti trovati: {inf_count}")
+        
+        start_time = time.time()
+        
+        try:
+            print(f"🔧 [DEBUG UMAP] Inizializzazione riduttore UMAP...")
+            
+            # Inizializza UMAP
+            reducer = umap.UMAP(
+                n_neighbors=self.umap_n_neighbors,
+                min_dist=self.umap_min_dist,
+                n_components=self.umap_n_components,
+                metric=self.umap_metric,
+                random_state=self.umap_random_state,
+                verbose=True
+            )
+            
+            print(f"✅ [DEBUG UMAP] Riduttore UMAP inizializzato con successo")
+            print(f"⏳ [DEBUG UMAP] Applicazione fit_transform agli embeddings...")
+            
+            # Applica riduzione dimensionale
+            embeddings_reduced = reducer.fit_transform(embeddings)
+            
+            reduction_time = time.time() - start_time
+            
+            # 🆕 DEBUG: Verifica risultato riduzione
+            print(f"✅ [DEBUG UMAP] UMAP COMPLETATO con SUCCESSO in {reduction_time:.2f}s")
+            print(f"   📐 Dimensioni output: {embeddings_reduced.shape}")
+            print(f"   � Tipo dati output: {embeddings_reduced.dtype}")
+            print(f"   �📊 Range valori output: [{embeddings_reduced.min():.4f}, {embeddings_reduced.max():.4f}]")
+            print(f"   📈 Riduzione dimensionale: {embeddings.shape[1]} → {embeddings_reduced.shape[1]} dimensioni")
+            print(f"   📉 Fattore riduzione: {embeddings.shape[1] / embeddings_reduced.shape[1]:.1f}x")
+            
+            # 🆕 DEBUG: Verifica che la riduzione sia realmente avvenuta
+            if embeddings.shape[1] == embeddings_reduced.shape[1]:
+                print(f"⚠️  [DEBUG UMAP] ATTENZIONE: Le dimensioni non sono cambiate!")
+            else:
+                print(f"✅ [DEBUG UMAP] RIDUZIONE DIMENSIONALE CONFERMATA")
+            
+            # 🆕 DEBUG: Controllo qualità riduzione
+            if np.any(np.isnan(embeddings_reduced)):
+                print(f"❌ [DEBUG UMAP] ERRORE: NaN nel risultato UMAP!")
+            else:
+                print(f"✅ [DEBUG UMAP] Nessun NaN nel risultato UMAP")
+                
+            if np.any(np.isinf(embeddings_reduced)):
+                print(f"❌ [DEBUG UMAP] ERRORE: Valori infiniti nel risultato UMAP!")
+            else:
+                print(f"✅ [DEBUG UMAP] Nessun valore infinito nel risultato UMAP")
+            
+            # 🆕 DEBUG: Verifica embedding ridotti non siano tutti uguali
+            unique_rows = len(np.unique(embeddings_reduced, axis=0))
+            print(f"📊 [DEBUG UMAP] Diversità embeddings ridotti: {unique_rows}/{embeddings_reduced.shape[0]} righe uniche")
+            if unique_rows == 1:
+                print(f"❌ [DEBUG UMAP] ERRORE: Tutti gli embeddings ridotti sono identici!")
+            elif unique_rows < embeddings_reduced.shape[0] * 0.5:
+                print(f"⚠️  [DEBUG UMAP] ATTENZIONE: Bassa diversità negli embeddings ridotti")
+            else:
+                print(f"✅ [DEBUG UMAP] Buona diversità negli embeddings ridotti")
+            
+            umap_info = {
+                'applied': True,
+                'input_shape': embeddings.shape,
+                'output_shape': embeddings_reduced.shape,
+                'reduction_time': reduction_time,
+                'reduction_factor': embeddings.shape[1] / embeddings_reduced.shape[1],
+                'unique_embeddings': unique_rows,
+                'parameters': {
+                    'n_neighbors': self.umap_n_neighbors,
+                    'min_dist': self.umap_min_dist,
+                    'n_components': self.umap_n_components,
+                    'metric': self.umap_metric,
+                    'random_state': self.umap_random_state
+                }
+            }
+            
+            print(f"📋 [DEBUG UMAP] Info riduzione salvate nel clusterer")
+            return embeddings_reduced, umap_info
+            
+        except Exception as e:
+            print(f"❌ [DEBUG UMAP] ERRORE durante riduzione UMAP: {e}")
+            print(f"🔄 [DEBUG UMAP] Fallback: uso embeddings originali")
+            return embeddings, {
+                'applied': False, 
+                'reason': f'UMAP failed: {str(e)}',
+                'fallback': True
+            }
+    
+    def _check_gpu_memory(self, embeddings_size_mb: float) -> bool:
+        """
+        Verifica se c'è abbastanza memoria GPU per il clustering
+        
+        Args:
+            embeddings_size_mb: Dimensione stimata degli embeddings in MB
+            
+        Returns:
+            True se c'è abbastanza memoria GPU
+            
+        Ultima modifica: 26 Agosto 2025
+        """
+        if not self.gpu_enabled or not GPU_AVAILABLE:
+            return False
+            
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                return False
+                
+            # Memoria GPU disponibile
+            gpu_mem_total = torch.cuda.get_device_properties(0).total_memory / (1024**3)  # GB
+            gpu_mem_available = gpu_mem_total * self.gpu_memory_limit
+            
+            # Stima memoria necessaria (embeddings + overhead clustering)
+            estimated_memory_gb = (embeddings_size_mb * 3) / 1024  # 3x overhead per clustering
+            
+            print(f"💾 Memoria GPU: {gpu_mem_available:.1f}GB disponibili, {estimated_memory_gb:.1f}GB necessari")
+            
+            return estimated_memory_gb < gpu_mem_available
+            
+        except Exception as e:
+            print(f"⚠️ Errore controllo memoria GPU: {e}")
+            return False
+    
     def fit_predict(self, embeddings: np.ndarray) -> np.ndarray:
         """
-        Esegue il clustering sugli embedding
+        Esegue il clustering sugli embedding con supporto GPU
         
         Args:
             embeddings: Array di embedding (n_samples, embedding_dim)
             
         Returns:
             Array delle etichette dei cluster (-1 per outlier)
+            
+        Ultima modifica: 26 Agosto 2025 - Aggiunto supporto GPU
         """
-        print(f"🔍 Clustering con HDBSCAN su {embeddings.shape[0]} embedding...")
+        n_samples, embedding_dim = embeddings.shape
+        embeddings_size_mb = (embeddings.nbytes / (1024**2))
+        
+        print(f"🔍 Clustering HDBSCAN su {n_samples} embedding ({embeddings_size_mb:.1f}MB)...")
         print(f"⚙️  Parametri: min_cluster_size={self.min_cluster_size}, "
               f"min_samples={self.min_samples}, metric={self.metric}")
         
-        # Normalizza gli embedding se necessario
+        # 🆕 DEBUG: Stato iniziale embeddings
+        print(f"📊 [DEBUG FIT_PREDICT] Embedding input:")
+        print(f"   📏 Shape: {embeddings.shape}")
+        print(f"   🔢 Dtype: {embeddings.dtype}")
+        print(f"   📈 Range: [{embeddings.min():.4f}, {embeddings.max():.4f}]")
+        print(f"   💾 Memory: {embeddings_size_mb:.1f}MB")
+        
+        # 🆕 STEP 1: Applica UMAP se abilitato
+        print(f"\n🗂️  [DEBUG FIT_PREDICT] STEP 1: Controllo applicazione UMAP...")
+        embeddings_for_clustering, umap_info = self._apply_umap_reduction(embeddings)
+        self.umap_info = umap_info  # Salva info per debugging
+        
+        print(f"📋 [DEBUG FIT_PREDICT] Risultato UMAP:")
+        print(f"   ✅ UMAP applicato: {umap_info.get('applied', False)}")
+        if umap_info.get('applied'):
+            print(f"   📏 Shape post-UMAP: {embeddings_for_clustering.shape}")
+            print(f"   📈 Range post-UMAP: [{embeddings_for_clustering.min():.4f}, {embeddings_for_clustering.max():.4f}]")
+            print(f"   ⏱️  Tempo riduzione: {umap_info.get('reduction_time', 0):.2f}s")
+        else:
+            print(f"   ❌ Motivo non applicazione: {umap_info.get('reason', 'Unknown')}")
+        
+        # STEP 2: Normalizza gli embedding se necessario
+        print(f"\n🔧 [DEBUG FIT_PREDICT] STEP 2: Normalizzazione per metrica {self.metric}...")
         if self.metric == 'cosine':
             # Per coseno, usa euclidean su embedding normalizzati
-            embeddings_norm = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
-            metric_for_hdbscan = 'euclidean'
+            print(f"   🎯 Normalizzazione per metrica cosine -> euclidean")
+            embeddings_norm = embeddings_for_clustering / np.linalg.norm(embeddings_for_clustering, axis=1, keepdims=True)
+            metric_for_clustering = 'euclidean'
+            print(f"   📊 Range embeddings normalizzati: [{embeddings_norm.min():.4f}, {embeddings_norm.max():.4f}]")
         else:
-            embeddings_norm = embeddings
-            metric_for_hdbscan = self.metric
+            print(f"   🎯 Nessuna normalizzazione necessaria per metrica {self.metric}")
+            embeddings_norm = embeddings_for_clustering
+            metric_for_clustering = self.metric
         
-        # Inizializza e esegue clustering con parametri da configurazione
+        print(f"   📏 Shape finale per clustering: {embeddings_norm.shape}")
+        print(f"   📈 Range finale: [{embeddings_norm.min():.4f}, {embeddings_norm.max():.4f}]")
+        print(f"   🎯 Metrica effettiva clustering: {metric_for_clustering}")
+        
+        # Determina se usare GPU
+        use_gpu = self._should_use_gpu(embeddings_size_mb)
+        
+        start_time = time.time()
+        print(f"\n🚀 [DEBUG FIT_PREDICT] STEP 3: Avvio clustering...")
+        print(f"   🖥️  Modalità: {'GPU' if use_gpu else 'CPU'}")
+        
+        if use_gpu:
+            cluster_labels = self._fit_predict_gpu(embeddings_norm, metric_for_clustering)
+        else:
+            cluster_labels = self._fit_predict_cpu(embeddings_norm, metric_for_clustering)
+        
+        clustering_time = time.time() - start_time
+        
+        # Salva risultati
+        self.cluster_labels = cluster_labels
+        
+        # Statistiche clustering
+        n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
+        n_outliers = list(cluster_labels).count(-1)
+        
+        device_used = "🚀 GPU" if self.gpu_used else "🖥️  CPU"
+        print(f"\n✅ [DEBUG FIT_PREDICT] CLUSTERING COMPLETATO in {clustering_time:.2f}s con {device_used}!")
+        print(f"📊 Risultati finali:")
+        print(f"   🎯 Cluster trovati: {n_clusters}")
+        print(f"   🔍 Outlier: {n_outliers} ({n_outliers/len(cluster_labels)*100:.1f}%)")
+        print(f"   📈 Silhouette score: {self._calculate_silhouette_score(embeddings_norm):.3f}")
+        
+        # 🆕 DEBUG: Riepilogo trasformazioni applicate
+        print(f"\n📋 [DEBUG FIT_PREDICT] RIEPILOGO TRASFORMAZIONI:")
+        print(f"   🔤 Input originale: {embeddings.shape}")
+        if umap_info.get('applied'):
+            print(f"   🗂️  Dopo UMAP: {embeddings_for_clustering.shape}")
+        print(f"   🔧 Dopo normalizzazione: {embeddings_norm.shape}")
+        print(f"   🎯 Utilizzato per clustering: {embeddings_norm.shape} con metrica {metric_for_clustering}")
+        
+        return cluster_labels
+    
+    def _should_use_gpu(self, embeddings_size_mb: float) -> bool:
+        """
+        Determina se utilizzare GPU per il clustering
+        
+        Args:
+            embeddings_size_mb: Dimensione embeddings in MB
+            
+        Returns:
+            True se GPU dovrebbe essere usato
+            
+        Ultima modifica: 26 Agosto 2025
+        """
+        if not self.gpu_enabled:
+            print("🖥️  GPU disabilitato da configurazione - uso CPU")
+            return False
+            
+        if not GPU_AVAILABLE:
+            print("❌ cuML non disponibile - uso CPU")
+            return False
+        
+        if not self._check_gpu_memory(embeddings_size_mb):
+            if self.gpu_fallback_cpu:
+                print("💾 Memoria GPU insufficiente - fallback su CPU")
+                return False
+            else:
+                raise RuntimeError("Memoria GPU insufficiente e fallback CPU disabilitato")
+        
+        print("🚀 Utilizzo GPU per clustering accelerato")
+        return True
+    
+    def _fit_predict_gpu(self, embeddings_norm: np.ndarray, metric: str) -> np.ndarray:
+        """
+        Clustering GPU con cuML HDBSCAN
+        
+        Args:
+            embeddings_norm: Embeddings normalizzati
+            metric: Metrica di distanza
+            
+        Returns:
+            Array di etichette cluster
+            
+        Ultima modifica: 26 Agosto 2025
+        """
+        try:
+            # ⚠️  AVVISO PARAMETRI NON SUPPORTATI DA cuML GPU
+            unsupported_params = []
+            if self.max_cluster_size and self.max_cluster_size > 0:
+                unsupported_params.append(f"max_cluster_size={self.max_cluster_size}")
+            if hasattr(self, 'leaf_size') and self.leaf_size != 40:  # 40 è il default
+                unsupported_params.append(f"leaf_size={self.leaf_size}")
+            
+            if unsupported_params:
+                print(f"⚠️  [GPU CLUSTERING] Parametri NON supportati da cuML (saranno ignorati):")
+                for param in unsupported_params:
+                    print(f"   🚫 {param} - solo disponibile su CPU")
+                print(f"✅ [GPU CLUSTERING] Parametri supportati attivi:")
+                print(f"   🎯 cluster_selection_method={self.cluster_selection_method}")
+                print(f"   🎛️  alpha={self.alpha}")
+                print(f"   🔘 allow_single_cluster={self.allow_single_cluster}")
+            
+            # Converti a CuPy array per GPU
+            gpu_embeddings = cp.asarray(embeddings_norm, dtype=cp.float32)
+            
+            # Inizializza clusterer GPU - SOLO PARAMETRI SUPPORTATI
+            gpu_params = {
+                'min_cluster_size': self.min_cluster_size,
+                'min_samples': self.min_samples,
+                'cluster_selection_epsilon': self.cluster_selection_epsilon,
+                'metric': metric,
+                'cluster_selection_method': self.cluster_selection_method,
+                'allow_single_cluster': self.allow_single_cluster,
+                'alpha': self.alpha  # Controllo noise - SUPPORTATO
+            }
+            
+            print(f"� [GPU CLUSTERING] Inizializzazione cuML HDBSCAN con parametri supportati...")
+            self.clusterer = cumlHDBSCAN(**gpu_params)
+            
+            # Clustering su GPU
+            cluster_labels = self.clusterer.fit_predict(gpu_embeddings)
+            
+            # Converti risultati back to CPU
+            if hasattr(cluster_labels, 'get'):
+                cluster_labels = cluster_labels.get()  # CuPy to NumPy
+            
+            # Ottieni probabilità se disponibili
+            if hasattr(self.clusterer, 'probabilities_'):
+                self.cluster_probabilities = self.clusterer.probabilities_
+                if hasattr(self.cluster_probabilities, 'get'):
+                    self.cluster_probabilities = self.cluster_probabilities.get()
+            else:
+                self.cluster_probabilities = np.ones(len(cluster_labels))
+            
+            # Outlier scores (se disponibili)
+            if hasattr(self.clusterer, 'outlier_scores_'):
+                self.outlier_scores = self.clusterer.outlier_scores_
+                if hasattr(self.outlier_scores, 'get'):
+                    self.outlier_scores = self.outlier_scores.get()
+            else:
+                self.outlier_scores = np.zeros(len(cluster_labels))
+            
+            self.gpu_used = True
+            
+            # Pulizia memoria GPU
+            del gpu_embeddings
+            if GPU_AVAILABLE:
+                cp.get_default_memory_pool().free_all_blocks()
+            
+            return cluster_labels
+            
+        except Exception as e:
+            print(f"❌ Errore clustering GPU: {e}")
+            if self.gpu_fallback_cpu:
+                print("🔄 Fallback automatico su CPU...")
+                return self._fit_predict_cpu(embeddings_norm, metric)
+            else:
+                raise
+    
+    def _fit_predict_cpu(self, embeddings_norm: np.ndarray, metric: str) -> np.ndarray:
+        """
+        Clustering CPU standard con hdbscan
+        
+        Args:
+            embeddings_norm: Embeddings normalizzati
+            metric: Metrica di distanza
+            
+        Returns:
+            Array di etichette cluster
+            
+        Ultima modifica: 26 Agosto 2025
+        """
+        # Inizializza clusterer CPU standard
         self.clusterer = hdbscan.HDBSCAN(
             min_cluster_size=self.min_cluster_size,
             min_samples=self.min_samples,
             cluster_selection_epsilon=self.cluster_selection_epsilon,
-            metric=metric_for_hdbscan,
+            metric=metric,
             cluster_selection_method=self.cluster_selection_method,
-            allow_single_cluster=self.allow_single_cluster
+            allow_single_cluster=self.allow_single_cluster,
+            alpha=self.alpha,  # Controllo noise - NUOVO
+            max_cluster_size=self.max_cluster_size if (self.max_cluster_size and self.max_cluster_size > 0) else None,  # CORRETTO
+            leaf_size=self.leaf_size  # NUOVO
         )
         
-        self.cluster_labels = self.clusterer.fit_predict(embeddings_norm)
+        cluster_labels = self.clusterer.fit_predict(embeddings_norm)
+        
+        # Salva risultati clustering
         self.cluster_probabilities = self.clusterer.probabilities_
         self.outlier_scores = self.clusterer.outlier_scores_
+        self.gpu_used = False
         
-        # Statistiche clustering
-        n_clusters = len(set(self.cluster_labels)) - (1 if -1 in self.cluster_labels else 0)
-        n_outliers = list(self.cluster_labels).count(-1)
-        
-        print(f"✅ Clustering completato!")
-        print(f"📊 Cluster trovati: {n_clusters}")
-        print(f"🔍 Outlier: {n_outliers}")
-        print(f"📈 Silhouette score: {self._calculate_silhouette_score(embeddings_norm):.3f}")
-        
-        return self.cluster_labels
+        return cluster_labels
     
     def _calculate_silhouette_score(self, embeddings: np.ndarray) -> float:
         """Calcola il silhouette score per valutare la qualità del clustering"""
@@ -144,6 +631,102 @@ class HDBSCANClusterer:
             return 0.0
         except:
             return 0.0
+    
+    def get_umap_debug_info(self) -> Dict:
+        """
+        Restituisce informazioni di debug dettagliate su UMAP
+        
+        Returns:
+            Dizionario con informazioni di debug UMAP
+            
+        Data creazione: 27 Agosto 2025
+        """
+        if not hasattr(self, 'umap_info'):
+            return {
+                'error': 'Clustering non ancora eseguito - nessuna info UMAP disponibile',
+                'available': False
+            }
+        
+        debug_info = {
+            'available': True,
+            'configuration': {
+                'use_umap': self.use_umap,
+                'umap_available': UMAP_AVAILABLE,
+                'parameters': {
+                    'n_neighbors': self.umap_n_neighbors,
+                    'min_dist': self.umap_min_dist,
+                    'n_components': self.umap_n_components,
+                    'metric': self.umap_metric,
+                    'random_state': self.umap_random_state
+                }
+            },
+            'execution': self.umap_info.copy()
+        }
+        
+        # Calcola statistiche aggiuntive se UMAP è stato applicato
+        if self.umap_info.get('applied'):
+            input_shape = self.umap_info.get('input_shape')
+            output_shape = self.umap_info.get('output_shape')
+            if input_shape and output_shape:
+                debug_info['statistics'] = {
+                    'input_dimensions': input_shape[1],
+                    'output_dimensions': output_shape[1],
+                    'reduction_factor': input_shape[1] / output_shape[1],
+                    'samples_processed': input_shape[0],
+                    'dimensionality_reduction_percentage': (1 - output_shape[1] / input_shape[1]) * 100
+                }
+        
+        return debug_info
+    
+    def print_umap_debug_summary(self) -> None:
+        """
+        Stampa un riepilogo completo delle informazioni di debug UMAP
+        
+        Data creazione: 27 Agosto 2025
+        """
+        print(f"\n" + "="*80)
+        print(f"📋 RIEPILOGO DEBUG UMAP")
+        print(f"="*80)
+        
+        debug_info = self.get_umap_debug_info()
+        
+        if not debug_info.get('available'):
+            print(f"❌ {debug_info.get('error')}")
+            return
+        
+        config = debug_info['configuration']
+        execution = debug_info['execution']
+        
+        # Configurazione
+        print(f"🔧 CONFIGURAZIONE:")
+        print(f"   🔘 UMAP abilitato: {config['use_umap']}")
+        print(f"   📚 Libreria disponibile: {config['umap_available']}")
+        print(f"   ⚙️  Parametri:")
+        for param, value in config['parameters'].items():
+            print(f"     • {param}: {value}")
+        
+        # Esecuzione
+        print(f"\n🚀 ESECUZIONE:")
+        print(f"   ✅ UMAP applicato: {execution.get('applied', False)}")
+        
+        if execution.get('applied'):
+            print(f"   ⏱️  Tempo esecuzione: {execution.get('reduction_time', 0):.2f}s")
+            print(f"   📏 Shape input: {execution.get('input_shape')}")
+            print(f"   📐 Shape output: {execution.get('output_shape')}")
+            
+            if 'statistics' in debug_info:
+                stats = debug_info['statistics']
+                print(f"   📊 Riduzione dimensionale: {stats['input_dimensions']} → {stats['output_dimensions']} "
+                      f"({stats['dimensionality_reduction_percentage']:.1f}% riduzione)")
+                print(f"   📈 Fattore riduzione: {stats['reduction_factor']:.1f}x")
+                print(f"   🔢 Campioni processati: {stats['samples_processed']}")
+        else:
+            reason = execution.get('reason', 'Motivo non specificato')
+            print(f"   ❌ Motivo non applicazione: {reason}")
+            if execution.get('fallback'):
+                print(f"   🔄 Utilizzati embeddings originali come fallback")
+        
+        print(f"="*80)
     
     def get_cluster_statistics(self) -> Dict:
         """
@@ -175,6 +758,65 @@ class HDBSCANClusterer:
                 stats['cluster_probabilities_avg'][int(label)] = float(avg_prob)
         
         return stats
+    
+    def get_gpu_parameter_support(self) -> Dict[str, bool]:
+        """
+        Restituisce informazioni sui parametri supportati in modalità GPU
+        
+        Returns:
+            Dizionario con nome_parametro -> is_supported_on_gpu
+            
+        Ultima modifica: 26 Agosto 2025
+        """
+        gpu_support = {
+            'min_cluster_size': True,
+            'min_samples': True,
+            'cluster_selection_epsilon': True,
+            'metric': True,
+            'cluster_selection_method': True,
+            'alpha': True,
+            'allow_single_cluster': True,
+            # Parametri NON supportati da cuML
+            'max_cluster_size': False,
+            'leaf_size': False
+        }
+        
+        return gpu_support
+    
+    def get_effective_parameters(self) -> Dict[str, any]:
+        """
+        Restituisce i parametri che saranno effettivamente utilizzati
+        considerando le limitazioni GPU
+        
+        Returns:
+            Dizionario con parametri effettivi
+            
+        Ultima modifica: 26 Agosto 2025
+        """
+        effective_params = {
+            'min_cluster_size': self.min_cluster_size,
+            'min_samples': self.min_samples,
+            'cluster_selection_epsilon': self.cluster_selection_epsilon,
+            'metric': self.metric,
+            'cluster_selection_method': self.cluster_selection_method,
+            'alpha': self.alpha,
+            'allow_single_cluster': self.allow_single_cluster,
+            'gpu_enabled': self.gpu_enabled
+        }
+        
+        # Parametri che dipendono da GPU/CPU
+        if self.gpu_enabled and GPU_AVAILABLE:
+            # Su GPU questi parametri sono ignorati
+            effective_params['max_cluster_size'] = None  # Ignorato su GPU
+            effective_params['leaf_size'] = None  # Ignorato su GPU
+            effective_params['note'] = 'GPU mode: max_cluster_size e leaf_size ignorati'
+        else:
+            # Su CPU tutti i parametri sono supportati
+            effective_params['max_cluster_size'] = self.max_cluster_size if (self.max_cluster_size and self.max_cluster_size > 0) else None
+            effective_params['leaf_size'] = self.leaf_size
+            effective_params['note'] = 'CPU mode: tutti i parametri supportati'
+        
+        return effective_params
     
     def get_cluster_representatives(self, 
                                  embeddings: np.ndarray, 

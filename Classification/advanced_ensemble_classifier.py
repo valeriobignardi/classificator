@@ -74,10 +74,11 @@ class AdvancedEnsembleClassifier:
                 print(f"⚠️ ML Ensemble Debugger non disponibile: {e}")
                 self.ml_debugger = None
         
-        # Se non viene passato un LLM classifier, creane uno automaticamente
+        # MODIFICA CRITICA: Usa LLMFactory per gestione dinamica modelli LLM
+        # Se non viene passato un LLM classifier, creane uno tramite factory
         if self.llm_classifier is None:
             try:
-                print("🔧 Tentativo di inizializzazione IntelligentClassifier...")
+                print("🔧 Tentativo di inizializzazione IntelligentClassifier tramite LLMFactory...")
                 
                 # Verifica memoria GPU prima di procedere
                 try:
@@ -93,25 +94,48 @@ class AdvancedEnsembleClassifier:
                             print(f"⚠️ GPU memory insufficiente ({free:.1f}GB < 1.5GB), skip LLM")
                             self.llm_classifier = None
                         else:
-                            # Procedi con inizializzazione LLM
-                            print("✅ Memoria GPU sufficiente, inizializzazione LLM...")
-                            # SOLUZIONE: Usa import assoluto invece di relativo per evitare problemi di path
-                            from Classification.intelligent_classifier import IntelligentClassifier
-                            # Passa client_name per abilitare fine-tuning automatico
-                            self.llm_classifier = IntelligentClassifier(
-                                client_name=client_name,
-                                enable_finetuning=True
-                            )
-                            if self.llm_classifier.is_available():
-                                print("🤖 LLM classifier creato automaticamente nell'ensemble")
-                                if client_name and hasattr(self.llm_classifier, 'has_finetuned_model'):
-                                    if self.llm_classifier.has_finetuned_model():
-                                        print(f"🎯 Modello fine-tuned attivo per {client_name}")
-                                    else:
-                                        print(f"💡 Possibile fine-tuning per {client_name}")
-                            else:
-                                print("⚠️ LLM non disponibile, ensemble userà solo ML")
-                                self.llm_classifier = None
+                            # CORREZIONE CRITICA: Usa LLMFactory per gestione tenant-aware
+                            print("✅ Memoria GPU sufficiente, inizializzazione LLM tramite Factory...")
+                            
+                            try:
+                                # Import LLMFactory per gestione dinamica
+                                from llm_factory import llm_factory
+                                
+                                # Ottieni classifier tramite factory (tenant-aware)
+                                if client_name:
+                                    self.llm_classifier = llm_factory.get_llm_for_tenant(client_name)
+                                    print(f"🏭 LLM classifier ottenuto tramite Factory per tenant {client_name}")
+                                else:
+                                    # Fallback per client generico
+                                    self.llm_classifier = llm_factory.get_llm_for_tenant("default")
+                                    print(f"🏭 LLM classifier ottenuto tramite Factory per tenant default")
+                                
+                                if self.llm_classifier and self.llm_classifier.is_available():
+                                    current_model = getattr(self.llm_classifier, 'model_name', 'unknown')
+                                    print(f"🤖 LLM classifier creato automaticamente nell'ensemble: {current_model}")
+                                    if client_name and hasattr(self.llm_classifier, 'has_finetuned_model'):
+                                        if self.llm_classifier.has_finetuned_model():
+                                            print(f"🎯 Modello fine-tuned attivo per {client_name}")
+                                        else:
+                                            print(f"💡 Possibile fine-tuning per {client_name}")
+                                else:
+                                    print("⚠️ LLM da Factory non disponibile, ensemble userà solo ML")
+                                    self.llm_classifier = None
+                                    
+                            except ImportError as factory_e:
+                                print(f"⚠️ LLMFactory non disponibile ({factory_e}), fallback alla creazione diretta")
+                                
+                                # Fallback: creazione diretta (compatibilità)
+                                from Classification.intelligent_classifier import IntelligentClassifier
+                                self.llm_classifier = IntelligentClassifier(
+                                    client_name=client_name,
+                                    enable_finetuning=True
+                                )
+                                if self.llm_classifier.is_available():
+                                    print("🤖 LLM classifier creato direttamente (fallback)")
+                                else:
+                                    print("⚠️ LLM fallback non disponibile, ensemble userà solo ML")
+                                    self.llm_classifier = None
                     else:
                         print("⚠️ CUDA non disponibile, ensemble userà solo ML")
                         self.llm_classifier = None
@@ -913,6 +937,111 @@ class AdvancedEnsembleClassifier:
                 'altro': 'Richieste non classificabili nelle categorie principali'
             }
     
+    def reload_llm_configuration(self, tenant_id: str = None) -> Dict[str, Any]:
+        """
+        Ricarica configurazione LLM per il tenant corrente
+        
+        FUNZIONE CRITICA: Implementa reload dinamico del modello LLM
+        usando LLMFactory per sincronizzare con le modifiche da configurazione React.
+        
+        Args:
+            tenant_id: ID del tenant (usa self.client_name se None)
+            
+        Returns:
+            Risultato del reload con dettagli
+            
+        Ultima modifica: 26 Agosto 2025
+        """
+        effective_tenant = tenant_id or self.client_name or "default"
+        
+        try:
+            print(f"🔄 RELOAD LLM CONFIGURATION per tenant {effective_tenant}")
+            
+            # Import LLMFactory per gestione dinamica
+            try:
+                from llm_factory import llm_factory
+            except ImportError:
+                return {
+                    'success': False,
+                    'error': 'LLMFactory non disponibile'
+                }
+            
+            # Forza reload tramite factory
+            old_model = getattr(self.llm_classifier, 'model_name', 'unknown') if self.llm_classifier else 'none'
+            
+            try:
+                # Ottieni nuovo classifier con configurazione aggiornata
+                new_classifier = llm_factory.get_llm_for_tenant(effective_tenant, force_reload=True)
+                
+                if new_classifier and new_classifier.is_available():
+                    new_model = getattr(new_classifier, 'model_name', 'unknown')
+                    
+                    # Sostituisci classifier corrente
+                    self.llm_classifier = new_classifier
+                    
+                    print(f"✅ LLM Classifier ricaricato: {old_model} -> {new_model}")
+                    
+                    return {
+                        'success': True,
+                        'old_model': old_model,
+                        'new_model': new_model,
+                        'tenant_id': effective_tenant,
+                        'classifier_available': True
+                    }
+                else:
+                    return {
+                        'success': False,
+                        'error': 'Nuovo classifier non disponibile',
+                        'tenant_id': effective_tenant
+                    }
+                    
+            except Exception as factory_e:
+                print(f"❌ Errore LLMFactory reload: {factory_e}")
+                return {
+                    'success': False,
+                    'error': f'Errore factory: {str(factory_e)}',
+                    'tenant_id': effective_tenant
+                }
+                
+        except Exception as e:
+            print(f"❌ Errore reload LLM configuration: {e}")
+            return {
+                'success': False,
+                'error': f'Errore reload: {str(e)}',
+                'tenant_id': effective_tenant
+            }
+    
+    def get_current_llm_info(self) -> Dict[str, Any]:
+        """
+        Ottiene informazioni sul classificatore LLM corrente
+        
+        Returns:
+            Informazioni dettagliate su LLM classifier
+        """
+        if not self.llm_classifier:
+            return {
+                'llm_available': False,
+                'error': 'Nessun LLM classifier configurato'
+            }
+        
+        try:
+            return {
+                'llm_available': self.llm_classifier.is_available(),
+                'model_name': getattr(self.llm_classifier, 'model_name', 'unknown'),
+                'base_model': getattr(self.llm_classifier, 'base_model_name', 'unknown'),
+                'client_name': getattr(self.llm_classifier, 'client_name', 'unknown'),
+                'ollama_url': getattr(self.llm_classifier, 'ollama_url', 'unknown'),
+                'temperature': getattr(self.llm_classifier, 'temperature', 'unknown'),
+                'max_tokens': getattr(self.llm_classifier, 'max_tokens', 'unknown'),
+                'cache_enabled': getattr(self.llm_classifier, 'enable_cache', False),
+                'finetuning_enabled': getattr(self.llm_classifier, 'enable_finetuning', False)
+            }
+        except Exception as e:
+            return {
+                'llm_available': False,
+                'error': f'Errore informazioni LLM: {str(e)}'
+            }
+
     def set_bertopic_provider(self, provider, top_k: int = 15, return_one_hot: bool = False) -> None:
         """
         Imposta il provider BERTopic per feature augmentation in predizione.

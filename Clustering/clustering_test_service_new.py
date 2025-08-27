@@ -225,7 +225,8 @@ class ClusteringTestService:
             try:
                 # Ottieni pipeline e usa il suo embedder
                 pipeline = self._get_pipeline(tenant_id)
-                embeddings = pipeline.embedder.encode(texts, show_progress_bar=True)
+                # Passa anche i session_ids per il logging degli errori
+                embeddings = pipeline.embedder.encode(texts, show_progress_bar=True, session_ids=session_ids)
                 print(f"✅ Embeddings generati: {embeddings.shape}")
             except Exception as e:
                 return {

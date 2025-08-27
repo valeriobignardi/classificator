@@ -23,6 +23,7 @@ import PromptManager from './components/PromptManager';
 import ExampleManager from './components/ExampleManager';
 import ToolManager from './components/ToolManager';
 import ClusteringParametersManager from './components/ClusteringParametersManager';
+import ClusteringStatisticsManager from './components/ClusteringStatisticsManager';
 import AIConfigurationManager from './components/AIConfigurationManager';
 import TenantSelector from './components/TenantSelector';
 import { TenantProvider, useTenant } from './contexts/TenantContext';
@@ -91,7 +92,7 @@ function AppContent() {
 
   const handleCaseSelect = (caseItem: ReviewCase) => {
     setSelectedCase(caseItem);
-    setCurrentTab(selectedCase ? 3 : 3); // Switch to case detail tab (index 3 now)
+    setCurrentTab(selectedCase ? 5 : 5); // Switch to case detail tab (index 5 now)
   };
 
   const handleCaseResolved = () => {
@@ -102,7 +103,7 @@ function AppContent() {
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     // Non permettere di cambiare al tab caso se non c'è un caso selezionato
-    const caseTabIndex = selectedCase ? 3 : -1;
+    const caseTabIndex = selectedCase ? 5 : -1; // Cambiato da 3 a 5
     if (newValue === caseTabIndex && !selectedCase) {
       return;
     }
@@ -211,6 +212,7 @@ function AppContent() {
               <Tab label="Statistiche" />
               <Tab label="Configurazione" />
               <Tab label="Parametri Clustering" />
+              <Tab label="📊 Statistiche Clustering" />
               {selectedCase && (
                 <Tab label={`Caso: ${selectedCase.session_id.substring(0, 8)}...`} />
               )}
@@ -283,8 +285,12 @@ function AppContent() {
             <ClusteringParametersManager />
           </TabPanel>
 
+          <TabPanel value={currentTab} index={4}>
+            <ClusteringStatisticsManager />
+          </TabPanel>
+
           {selectedCase && (
-            <TabPanel value={currentTab} index={4}>
+            <TabPanel value={currentTab} index={5}>
               <CaseDetail
                 case={selectedCase}
                 tenant={tenant}

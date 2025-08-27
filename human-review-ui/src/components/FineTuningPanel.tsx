@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Card,
   CardContent,
@@ -77,11 +77,7 @@ const FineTuningPanel: React.FC<FineTuningPanelProps> = ({ clientName }) => {
   const [minConfidence, setMinConfidence] = useState(0.7);
   const [forceRetrain, setForceRetrain] = useState(false);
 
-  useEffect(() => {
-    loadFineTuningStatus();
-  }, [clientName]);
-
-  const loadFineTuningStatus = async () => {
+  const loadFineTuningStatus = useCallback(async () => {
     setLoading(true);
     setError(null);
     
@@ -99,7 +95,11 @@ const FineTuningPanel: React.FC<FineTuningPanelProps> = ({ clientName }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [clientName]);
+
+  useEffect(() => {
+    loadFineTuningStatus();
+  }, [loadFineTuningStatus]);
 
   const handleCreateFineTuning = async () => {
     setCreating(true);

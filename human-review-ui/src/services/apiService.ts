@@ -505,6 +505,12 @@ class ApiService {
       min_samples?: number;
       cluster_selection_epsilon?: number;
       metric?: string;
+      
+      // 🆕 NUOVI PARAMETRI AVANZATI HDBSCAN
+      cluster_selection_method?: string;
+      alpha?: number;
+      max_cluster_size?: number;
+      allow_single_cluster?: boolean;
     },
     sampleSize?: number
   ): Promise<{
@@ -542,6 +548,30 @@ class ApiService {
       analysis: string;
       recommendation: string;
       sample_outliers: any[];
+    };
+    // 🆕 Dati visualizzazione per grafici 2D/3D
+    visualization_data?: {
+      points: Array<{
+        x: number;
+        y: number;
+        z?: number;
+        cluster_id: number;
+        cluster_label: string;
+        session_id: string;
+        text_preview: string;
+      }>;
+      cluster_colors: Record<number, string>;
+      statistics: {
+        total_points: number;
+        n_clusters: number;
+        n_outliers: number;
+        dimensions: number;
+      };
+      coordinates: {
+        tsne_2d: Array<[number, number]>;
+        pca_2d: Array<[number, number]>;
+        pca_3d: Array<[number, number, number]>;
+      };
     };
     error?: string;
   }> {
@@ -725,6 +755,54 @@ class ApiService {
   }
 
   /**
+   * Ricarica configurazione modello LLM per un tenant
+   * @param tenantId ID del tenant
+   * @returns Risultato del reload
+   */
+  async reloadLLMConfiguration(tenantId: string): Promise<any> {
+    console.log('🔄 [DEBUG] ApiService.reloadLLMConfiguration() - Avvio richiesta');
+    console.log('🔄 [DEBUG] Tenant:', tenantId);
+    
+    const url = `${API_BASE_URL}/llm/${tenantId}/reload`;
+    console.log('🔄 [DEBUG] URL chiamata:', url);
+
+    try {
+      const response = await axios.post(url, {});
+      console.log('✅ [DEBUG] LLM configuration reload:', response.status);
+      console.log('✅ [DEBUG] Risultato:', response.data);
+      
+      return response.data;
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore reload LLM configuration:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Ottiene informazioni sul modello LLM corrente per un tenant
+   * @param tenantId ID del tenant
+   * @returns Informazioni LLM corrente
+   */
+  async getCurrentLLMInfo(tenantId: string): Promise<any> {
+    console.log('ℹ️ [DEBUG] ApiService.getCurrentLLMInfo() - Avvio richiesta');
+    console.log('ℹ️ [DEBUG] Tenant:', tenantId);
+    
+    const url = `${API_BASE_URL}/llm/${tenantId}/info`;
+    console.log('ℹ️ [DEBUG] URL chiamata:', url);
+
+    try {
+      const response = await axios.get(url);
+      console.log('✅ [DEBUG] LLM info ricevute:', response.status);
+      console.log('✅ [DEBUG] Info LLM:', response.data);
+      
+      return response.data;
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore get LLM info:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Ottiene informazioni debug per configurazione AI
    * @param tenantId ID del tenant
    * @returns Debug info dettagliate
@@ -746,6 +824,272 @@ class ApiService {
       console.error('❌ [DEBUG] Errore get debug info:', error);
       throw error;
     }
+  }
+  /**
+   * 🆕 Ottiene statistiche avanzate con dati visualizzazione clustering
+   * @param tenantId ID del tenant
+   * @param timeRange Periodo di analisi (opzionale)
+   * @returns Dati clustering + classificazioni per visualizzazioni
+   */
+  async getClusteringStatistics(
+    tenantId: string, 
+    timeRange?: { start_date: string; end_date: string }
+  ): Promise<{
+    success: boolean;
+    visualization_data: {
+      points: Array<{
+        x: number;
+        y: number;
+        z?: number;
+        cluster_id: number;
+        cluster_label: string;
+        session_id: string;
+        text_preview: string;
+        classification: string;
+        confidence: number;
+      }>;
+      cluster_colors: Record<number, string>;
+      statistics: {
+        total_points: number;
+        n_clusters: number;
+        n_outliers: number;
+        dimensions: number;
+      };
+      coordinates: {
+        tsne_2d: Array<[number, number]>;
+        pca_2d: Array<[number, number]>;
+        pca_3d: Array<[number, number, number]>;
+      };
+    };
+    tenant_id: string;
+    execution_time: number;
+    error?: string;
+  }> {
+    console.log('📊 [DEBUG] ApiService.getClusteringStatistics() - Avvio richiesta');
+    console.log('📊 [DEBUG] Tenant:', tenantId);
+    console.log('📊 [DEBUG] Time range:', timeRange);
+    
+    try {
+      // Costruisci URL con query parameters per richiesta GET
+      let url = `${API_BASE_URL}/statistics/${tenantId}/clustering`;
+      const params = new URLSearchParams();
+      
+      // Calcola giorni se timeRange è fornito
+      if (timeRange?.start_date && timeRange?.end_date) {
+        const startDate = new Date(timeRange.start_date);
+        const endDate = new Date(timeRange.end_date);
+        const diffTime = Math.abs(endDate.getTime() - startDate.getTime());
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        params.append('days_back', diffDays.toString());
+      } else {
+        // Default: ultimi 30 giorni
+        params.append('days_back', '30');
+      }
+      
+      // Parametri di default per le statistiche clustering
+      params.append('include_visualizations', 'true');
+      params.append('sample_limit', '5000');
+      
+      url += `?${params.toString()}`;
+      
+      console.log('📊 [DEBUG] URL chiamata:', url);
+      console.log('📊 [DEBUG] Metodo: GET (correzione da POST)');
+      
+      const response = await axios.get(url);
+      console.log('✅ [DEBUG] Statistiche clustering completate:', response.status);
+      console.log('✅ [DEBUG] Dati statistiche:', response.data);
+      
+      return response.data;
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore statistiche clustering:', error);
+      
+      if (axios.isAxiosError(error)) {
+        const errorData = error.response?.data;
+        return {
+          success: false,
+          error: errorData?.error || error.message,
+          tenant_id: tenantId,
+          execution_time: 0,
+          visualization_data: {
+            points: [],
+            cluster_colors: {},
+            statistics: { total_points: 0, n_clusters: 0, n_outliers: 0, dimensions: 0 },
+            coordinates: { tsne_2d: [], pca_2d: [], pca_3d: [] }
+          }
+        };
+      }
+      throw error;
+    }
+  }
+
+  // 🆕 CLUSTERING VERSIONING ENDPOINTS
+
+  /**
+   * Ottiene la cronologia dei risultati di clustering per un tenant
+   * 
+   * @param tenantId - ID del tenant
+   * @param limit - Numero massimo di record da recuperare (default: 50)
+   * @returns Promise con lista di risultati clustering storici
+   */
+  async getClusteringHistory(tenantId: string, limit: number = 50): Promise<{
+    success: boolean;
+    data: Array<{
+      id: number;
+      version_number: number;
+      created_at: string;
+      n_clusters: number;
+      n_outliers: number;
+      silhouette_score: number;
+      execution_time: number;
+      parameters_summary: string;
+    }>;
+    total_versions: number;
+    error?: string;
+  }> {
+    console.log('🔍 [DEBUG] ApiService.getClusteringHistory() - tenantId:', tenantId, 'limit:', limit);
+    const url = `${API_BASE_URL}/clustering/${tenantId}/history`;
+    console.log('🔍 [DEBUG] URL chiamata:', url);
+    
+    return this.handleRequest(
+      axios.get(url, {
+        params: { limit }
+      })
+    );
+  }
+
+  /**
+   * Recupera un risultato specifico di clustering per tenant e versione
+   * 
+   * @param tenantId - ID del tenant
+   * @param versionNumber - Numero della versione
+   * @returns Promise con risultato clustering completo
+   */
+  async getClusteringVersion(tenantId: string, versionNumber: number): Promise<{
+    success: boolean;
+    data: {
+      id: number;
+      version_number: number;
+      tenant_id: string;
+      created_at: string;
+      results_data: any;  // Cambiato da results_json a results_data
+      parameters_data: any; // Cambiato da parameters_json a parameters_data
+      n_clusters: number;
+      n_outliers: number;
+      silhouette_score: number;
+      execution_time: number;
+    };
+    error?: string;
+  }> {
+    console.log('🔍 [DEBUG] ApiService.getClusteringVersion() - tenantId:', tenantId, 'version:', versionNumber);
+    const url = `${API_BASE_URL}/clustering/${tenantId}/version/${versionNumber}`;
+    console.log('🔍 [DEBUG] URL chiamata:', url);
+    
+    return this.handleRequest(
+      axios.get(url)
+    );
+  }
+
+  /**
+   * Ottiene l'ultimo risultato di clustering per un tenant
+   * 
+   * @param tenantId - ID del tenant
+   * @returns Promise con ultimo risultato clustering
+   */
+  async getLatestClusteringResult(tenantId: string): Promise<{
+    success: boolean;
+    data: {
+      id: number;
+      version_number: number;
+      tenant_id: string;
+      created_at: string;
+      results_json: any;
+      parameters_json: any;
+      n_clusters: number;
+      n_outliers: number;
+      silhouette_score: number;
+      execution_time: number;
+    } | null;
+    error?: string;
+  }> {
+    return this.handleRequest(
+      axios.get(`${API_BASE_URL}/clustering/${tenantId}/latest`)
+    );
+  }
+
+  /**
+   * Confronta due versioni di risultati clustering
+   * 
+   * @param resultId1 - ID del primo risultato
+   * @param resultId2 - ID del secondo risultato  
+   * @returns Promise con confronto dettagliato
+   */
+  async compareClusteringVersions(resultId1: number, resultId2: number): Promise<{
+    success: boolean;
+    data: {
+      version1: any;
+      version2: any;
+      comparison: {
+        metrics_delta: {
+          n_clusters: number;
+          n_outliers: number;
+          silhouette_score: number;
+          execution_time: number;
+        };
+        parameters_diff: Array<{
+          parameter: string;
+          value1: any;
+          value2: any;
+          changed: boolean;
+        }>;
+        quality_assessment: string;
+      };
+    };
+    error?: string;
+  }> {
+    return this.handleRequest(
+      axios.post(`${API_BASE_URL}/clustering/compare`, {
+        result_id_1: resultId1,
+        result_id_2: resultId2
+      })
+    );
+  }
+
+  /**
+   * Ottiene trend delle metriche clustering nel tempo
+   * 
+   * @param tenantId - ID del tenant
+   * @param days - Numero di giorni da analizzare (default: 30)
+   * @returns Promise con dati trend
+   */
+  async getClusteringMetricsTrend(tenantId: string, days: number = 30): Promise<{
+    success: boolean;
+    data: {
+      trend_data: Array<{
+        version_number: number;
+        created_at: string;
+        n_clusters: number;
+        n_outliers: number;
+        silhouette_score: number;
+        execution_time: number;
+      }>;
+      statistics: {
+        avg_clusters: number;
+        avg_outliers: number;
+        avg_silhouette_score: number;
+        avg_execution_time: number;
+        trend_analysis: {
+          clusters_trend: 'increasing' | 'decreasing' | 'stable';
+          quality_trend: 'improving' | 'degrading' | 'stable';
+        };
+      };
+    };
+    error?: string;
+  }> {
+    return this.handleRequest(
+      axios.get(`${API_BASE_URL}/clustering/${tenantId}/metrics-trend`, {
+        params: { days }
+      })
+    );
   }
 }
 

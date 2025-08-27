@@ -13,33 +13,53 @@ import yaml
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'LettoreConversazioni'))
 from lettore import LettoreConversazioni
 
+# Aggiunge il percorso per importare l'helper configurazioni tenant
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
+from tenant_config_helper import get_only_user_for_tenant
+
 class SessionAggregator:
     """
     Classe per aggregare i messaggi delle conversazioni per sessione
+    Supporta configurazioni per tenant, incluso il parametro only_user
     """
     
-    def __init__(self, schema: str = 'humanitas'):
+    def __init__(self, schema: str = 'humanitas', tenant_id: Optional[str] = None):
         """
         Inizializza l'aggregatore
         
         Args:
             schema: Schema del database da utilizzare
+            tenant_id: ID del tenant per parametri personalizzati (opzionale)
+            
+        Ultima modifica: 2025-08-26
         """
         self.schema = schema
-        self.lettore = LettoreConversazioni(schema=schema)
+        self.tenant_id = tenant_id
+        self.lettore = LettoreConversazioni(schema=schema, tenant_id=tenant_id)
         
-        # Carica la configurazione per il parametro only_user
-        try:
-            config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
-            with open(config_path, 'r', encoding='utf-8') as f:
-                self.config = yaml.safe_load(f)
-                
-            # Estrai il parametro only_user dalla configurazione
-            self.only_user = self.config.get('conversation_reading', {}).get('only_user', False)
-            print(f"🔧 Configurazione caricata: only_user = {self.only_user}")
-        except Exception as e:
-            print(f"⚠️ Errore caricamento configurazione: {e}")
-            self.only_user = False  # Default a False per retrocompatibilità
+        # 🆕 NUOVA LOGICA: Usa helper tenant se tenant_id è fornito
+        if tenant_id:
+            try:
+                self.only_user = get_only_user_for_tenant(tenant_id)
+                print(f"🎯 [ONLY_USER] Tenant {tenant_id}: {self.only_user} (da config tenant)")
+            except Exception as e:
+                print(f"⚠️ [ONLY_USER] Errore config tenant {tenant_id}: {e}")
+                self.only_user = False
+                print(f"🔄 [ONLY_USER] Fallback: False (default)")
+        else:
+            # 🔄 LOGICA LEGACY: Carica dalla configurazione globale per retrocompatibilità
+            try:
+                config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                    
+                # NOTA: conversation_reading è stato rimosso da config.yaml
+                # Usando False come default
+                self.only_user = False
+                print(f"� [ONLY_USER] Schema {schema}: {self.only_user} (legacy - no tenant_id)")
+            except Exception as e:
+                print(f"⚠️ [ONLY_USER] Errore caricamento configurazione legacy: {e}")
+                self.only_user = False  # Default a False per retrocompatibilità
         
     def estrai_sessioni_aggregate(self, limit: Optional[int] = None) -> Dict[str, Dict]:
         """
@@ -51,7 +71,8 @@ class SessionAggregator:
         Returns:
             Dizionario con session_id come chiave e dati aggregati come valore
         """
-        print(f"📊 Estrazione sessioni aggregate dal schema '{self.schema}'...")
+        print(f"📊 [DEBUG ONLY_USER] Estrazione sessioni aggregate dal schema '{self.schema}'...")
+        print(f"🎯 [DEBUG ONLY_USER] Parametro only_user = {self.only_user} (tenant_id: {self.tenant_id})")
         
         # Legge tutti i messaggi dal database
         if limit:
@@ -61,7 +82,7 @@ class SessionAggregator:
             # Passaggio 1: Ottieni i primi N session_id
             query_session_ids = f"""
             SELECT DISTINCT session_id 
-            FROM {self.schema}.conversation_status 
+            FROM `{self.schema}`.conversation_status 
             ORDER BY session_id 
             LIMIT {limit}
             """
@@ -82,29 +103,44 @@ class SessionAggregator:
             # MODIFICA: Determina il filtro said_by in base alla configurazione
             if self.only_user:
                 said_by_filter = "AND csm.said_by = 'USER'"
-                print("🔧 Modalità only_user attiva: includerò solo messaggi USER")
+                print("🎯 [DEBUG ONLY_USER] Modalità only_user attiva: includerò solo messaggi USER")
             else:
                 said_by_filter = "AND csm.said_by IN ('USER', 'AGENT')"
-                print("🔧 Modalità standard: includerò messaggi USER e AGENT")
+                print("� [DEBUG ONLY_USER] Modalità standard: includerò messaggi USER e AGENT")
             
             query = f"""
             SELECT cs.session_id
                  , (SELECT a.agent_name
-                      FROM {self.schema}.agents a
+                      FROM `{self.schema}`.agents a
                      WHERE a.agent_id = cs.conversation_agent_id) AS conversation_agent_name
                  , csm.conversation_status_message_id
                  , csm.conversation_message
                  , csm.said_by
                  , csm.created_at AS message_created_at
-              FROM {self.schema}.conversation_status cs
-             INNER JOIN {self.schema}.conversation_status_messages csm
+              FROM `{self.schema}`.conversation_status cs
+             INNER JOIN `{self.schema}`.conversation_status_messages csm
                 ON cs.conversation_status_id = csm.conversation_status_id
              WHERE cs.session_id IN ({session_ids_str})
                {said_by_filter}
              ORDER BY cs.session_id, csm.created_at ASC
             """
             risultati = self.lettore.connettore.esegui_query(query)
+            
+            # DEBUG: Verifica i risultati della query limitata
+            if risultati:
+                total_rows = len(risultati)
+                user_messages = sum(1 for row in risultati if row[4] == 'USER')
+                agent_messages = sum(1 for row in risultati if row[4] == 'AGENT')
+                
+                print(f"📊 [DEBUG ONLY_USER] Query limitata completata:")
+                print(f"   Totale messaggi estratti: {total_rows}")
+                print(f"   Messaggi USER: {user_messages}")
+                print(f"   Messaggi AGENT: {agent_messages}")
+                
+                if self.only_user and agent_messages > 0:
+                    print(f"⚠️ [DEBUG ONLY_USER] ERRORE: only_user=True ma trovati {agent_messages} messaggi AGENT!")
         else:
+            print(f"📄 [DEBUG ONLY_USER] Estrazione completa (senza limite)")
             risultati = self.lettore.leggi_conversazioni()
         
         if not risultati:
@@ -155,11 +191,23 @@ class SessionAggregator:
         sessioni_vuote = 0
         sessioni_corrotte = 0
         
+        print(f"🔄 [DEBUG ONLY_USER] Inizio generazione testo completo per {len(sessioni_aggregate)} sessioni")
+        
         for session_id, dati in sessioni_aggregate.items():
             testo_parti = []
             
             # Ordina i messaggi per timestamp
             messaggi_ordinati = sorted(dati['messaggi'], key=lambda x: x['created_at'])
+            
+            # DEBUG: Analizza la composizione dei messaggi per questa sessione
+            session_user_msgs = sum(1 for m in messaggi_ordinati if m['said_by'] == 'USER')
+            session_agent_msgs = sum(1 for m in messaggi_ordinati if m['said_by'] == 'AGENT')
+            
+            if session_id in list(sessioni_aggregate.keys())[:3]:  # Debug solo per prime 3 sessioni
+                print(f"🔍 [DEBUG ONLY_USER] Sessione {session_id}: {session_user_msgs} USER, {session_agent_msgs} AGENT")
+                
+                if self.only_user and session_agent_msgs > 0:
+                    print(f"⚠️ [DEBUG ONLY_USER] PROBLEMA: only_user=True ma sessione {session_id} ha {session_agent_msgs} messaggi AGENT")
             
             # CONTROLLO ANTI-CORRUZIONE: Rileva dati binari corrotti
             is_corrupted = False
@@ -207,6 +255,19 @@ class SessionAggregator:
                 testo_parti.append(f"{prefisso} {msg['message']}")
             
             dati['testo_completo'] = " ".join(testo_parti)
+            
+            # DEBUG: Verifica composizione testo finale per prime sessioni
+            if session_id in list(sessioni_aggregate.keys())[:2]:  # Debug solo per prime 2 sessioni
+                utente_count = dati['testo_completo'].count('[UTENTE]')
+                assistente_count = dati['testo_completo'].count('[ASSISTENTE]')
+                print(f"📝 [DEBUG ONLY_USER] Sessione {session_id} testo finale:")
+                print(f"   [UTENTE] tags: {utente_count}")
+                print(f"   [ASSISTENTE] tags: {assistente_count}")
+                print(f"   Lunghezza testo: {len(dati['testo_completo'])} caratteri")
+                
+                if self.only_user and assistente_count > 0:
+                    print(f"⚠️ [DEBUG ONLY_USER] ERRORE FINALE: only_user=True ma testo contiene {assistente_count} messaggi [ASSISTENTE]")
+                    print(f"   Testo estratto (primi 200 char): {dati['testo_completo'][:200]}...")
         
         # Aggiorna i log in base alla modalità
         if self.only_user:

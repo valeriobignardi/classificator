@@ -675,18 +675,34 @@ class AIConfigurationService:
             
             self.config['llm']['models']['clients'][tenant_id] = model_name
             
-            # Salva configurazione
-            if self._save_config():
-                return {
-                    'success': True,
-                    'message': f'Modello LLM {model_name} impostato per {tenant_id}',
-                    'test_result': test_result
-                }
+            # Salva configurazione (database se attivo, altrimenti YAML)
+            if self.use_database:
+                # Salva nel database
+                db_result = self.db_service.set_llm_engine(tenant_id, model_name)
+                if db_result.get('success', False):
+                    return {
+                        'success': True,
+                        'message': f'Modello LLM {model_name} impostato per {tenant_id}',
+                        'test_result': test_result
+                    }
+                else:
+                    return {
+                        'success': False,
+                        'error': f'Errore salvataggio database: {db_result.get("error", "Errore sconosciuto")}'
+                    }
             else:
-                return {
-                    'success': False,
-                    'error': 'Errore salvataggio configurazione'
-                }
+                # Salva su YAML (modalità legacy)
+                if self._save_config():
+                    return {
+                        'success': True,
+                        'message': f'Modello LLM {model_name} impostato per {tenant_id}',
+                        'test_result': test_result
+                    }
+                else:
+                    return {
+                        'success': False,
+                        'error': 'Errore salvataggio configurazione'
+                    }
         
         except Exception as e:
             return {
@@ -766,6 +782,9 @@ class AIConfigurationService:
             try:
                 # Ottiene configurazione dal database (con bypass cache se richiesto)
                 db_config = self.db_service.get_tenant_configuration(tenant_id, force_no_cache=force_no_cache)
+                
+                print(f"🔍 [DEBUG AIConfig] db_config ricevuto: {db_config}")
+                print(f"🔍 [DEBUG AIConfig] llm_engine nel db_config: {db_config.get('llm_engine', 'NON_TROVATO')}")
                 
                 # Genera status simulato per compatibilità
                 embedding_engine_ok = True  # Assumiamo OK per ora

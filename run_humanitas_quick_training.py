@@ -45,8 +45,8 @@ def main():
             limit=100,                  # Limit per test rapido
             batch_size=16,
             interactive_mode=False,
-            use_ensemble=True,
-            skip_clustering=True        # Salta clustering per velocità
+            use_ensemble=True
+            # skip_clustering rimosso - parametro non esistente
         )
         
         print("\n⚡ Training veloce completato!")

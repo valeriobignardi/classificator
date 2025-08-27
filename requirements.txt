@@ -18,6 +18,7 @@ python-dotenv>=1.0.0
 
 # AI/ML APIs
 openai>=1.0.0
+tiktoken>=0.5.0
 
 # Database
 pymongo>=4.5.0

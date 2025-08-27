@@ -1,0 +1,16 @@
+clustering_parameters:
+  allow_single_cluster: false
+  alpha: 0.5
+  cluster_selection_epsilon: 0.15
+  cluster_selection_method: leaf
+  min_cluster_size: 10
+  only_user: true
+last_updated: '2025-08-27T00:04:16.854131'
+previous_config_backup:
+  alpha: 0.8
+  cluster_selection_epsilon: 0.12
+  cluster_selection_method: leaf
+  min_cluster_size: 8
+  only_user: true
+tenant_id: humanitas
+updated_by: web_interface

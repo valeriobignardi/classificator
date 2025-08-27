@@ -250,13 +250,37 @@ const AIConfigurationManager: React.FC<{ open: boolean }> = ({ open }) => {
     setSuccess(null);
 
     try {
+      // STEP 1: Imposta nuovo modello nel database
       const response = await apiService.setLLMModel(tenantId, modelName);
 
       if (response.success) {
-        setSuccess(`Modello LLM ${modelName} impostato con successo`);
-        setSelectedLlmModel(modelName);
-        // Ricarica configurazione
-        await loadConfiguration();
+        console.log('✅ [UI] Modello LLM salvato nel database:', modelName);
+        
+        // STEP 2: CORREZIONE CRITICA - Ricarica configurazione LLM nel server
+        try {
+          console.log('🔄 [UI] Ricaricamento configurazione LLM nel server...');
+          const reloadResponse = await apiService.reloadLLMConfiguration(tenantId);
+          
+          if (reloadResponse.success) {
+            console.log('✅ [UI] Configurazione LLM ricaricata nel server');
+            console.log('🔄 [UI] Cambio modello:', reloadResponse.old_model, '->', reloadResponse.new_model);
+            
+            setSuccess(`Modello LLM ${modelName} impostato e attivato con successo`);
+            setSelectedLlmModel(modelName);
+            
+            // STEP 3: Ricarica configurazione UI per riflettere i cambiamenti
+            await loadConfiguration();
+            
+          } else {
+            console.error('❌ [UI] Errore reload configurazione LLM:', reloadResponse.error);
+            setError(`Modello salvato ma errore attivazione: ${reloadResponse.error}`);
+          }
+          
+        } catch (reloadError) {
+          console.error('❌ [UI] Errore durante reload LLM:', reloadError);
+          setError(`Modello salvato ma errore attivazione: ${reloadError}`);
+        }
+        
       } else {
         setError(response.error || 'Errore impostazione modello LLM');
       }

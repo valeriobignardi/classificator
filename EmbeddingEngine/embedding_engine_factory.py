@@ -343,6 +343,29 @@ class EmbeddingEngineFactory:
                 }
             }
 
+    def _get_current_engine_type(self, tenant_id: str) -> Optional[str]:
+        """
+        Ottiene tipo engine corrente configurato per tenant dal database
+        
+        Args:
+            tenant_id: UUID tenant
+            
+        Returns:
+            Nome engine corrente o None se errore
+            
+        Data ultima modifica: 2025-08-26
+        """
+        try:
+            config = self._ai_config_service.get_tenant_configuration(tenant_id, force_no_cache=True)
+            if config and 'embedding' in config:
+                engine_type = config['embedding'].get('engine', 'labse')
+                print(f"🔍 FACTORY DEBUG: Engine corrente per {tenant_id} = '{engine_type}'")
+                return engine_type
+        except Exception as e:
+            print(f"⚠️ FACTORY ERROR: Errore lettura engine per {tenant_id}: {e}")
+        
+        return None
+
 
 # Istanza globale singleton
 embedding_factory = EmbeddingEngineFactory()

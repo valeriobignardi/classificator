@@ -7,21 +7,30 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'MySql'
 
 from connettore import MySqlConnettore
 
+# Aggiunge il percorso per importare l'helper configurazioni tenant
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
+from tenant_config_helper import get_only_user_for_tenant
+
 class LettoreConversazioni:
     """
     Classe per leggere le conversazioni dal database MySQL
+    Supporta configurazioni per tenant, incluso il parametro only_user
     """
     
-    def __init__(self, schema='common', config_path=None):
+    def __init__(self, schema='common', config_path=None, tenant_id=None):
         """
         Inizializza il lettore delle conversazioni
         
         Args:
             schema (str): Nome dello schema del database (default: 'common')
             config_path (str): Percorso file configurazione (default: '../config.yaml')
+            tenant_id (str): ID del tenant per parametri personalizzati (opzionale)
+            
+        Ultima modifica: 2025-08-26
         """
         self.connettore = MySqlConnettore()
         self.schema = schema
+        self.tenant_id = tenant_id
         
         # Carica configurazione
         if not config_path:
@@ -34,9 +43,19 @@ class LettoreConversazioni:
             print(f"⚠️ Errore caricamento config.yaml: {e}")
             self.config = {}
         
-        # Leggi parametro only_user (default: False per retrocompatibilità)
-        self.only_user = self.config.get('conversation_reading', {}).get('only_user', False)
-        print(f"📖 LettoreConversazioni inizializzato - only_user: {self.only_user}")
+        # 🆕 NUOVA LOGICA: Usa helper tenant se tenant_id è fornito
+        if tenant_id:
+            try:
+                self.only_user = get_only_user_for_tenant(tenant_id)
+                print(f"🎯 [LETTORE] Tenant {tenant_id}: only_user = {self.only_user} (da config tenant)")
+            except Exception as e:
+                print(f"⚠️ [LETTORE] Errore config tenant {tenant_id}: {e}")
+                self.only_user = False
+                print(f"� [LETTORE] Fallback: only_user = False (default)")
+        else:
+            # 🔄 LOGICA LEGACY: Per retrocompatibilità, default a False
+            self.only_user = False
+            print(f"📖 [LETTORE] Schema {schema}: only_user = {self.only_user} (legacy - no tenant_id)")
     
     def leggi_conversazioni(self):
         """
@@ -50,22 +69,22 @@ class LettoreConversazioni:
         # Determina il filtro said_by in base alla configurazione
         if self.only_user:
             said_by_filter = "WHERE csm.said_by = 'USER'"
-            print("🎯 Filtraggio attivo: solo messaggi USER")
+            print("🎯 [DEBUG ONLY_USER] Filtraggio attivo: solo messaggi USER")
         else:
             said_by_filter = "WHERE csm.said_by IN ('USER', 'AGENT')"
-            print("📄 Filtraggio standard: messaggi USER e AGENT")
+            print("📄 [DEBUG ONLY_USER] Filtraggio standard: messaggi USER e AGENT")
             
         query = f"""
         SELECT cs.session_id
              , (SELECT a.agent_name
-                  FROM {self.schema}.agents a
+                  FROM `{self.schema}`.agents a
                  WHERE a.agent_id = cs.conversation_agent_id) AS conversation_agent_name
              , csm.conversation_status_message_id
              , csm.conversation_message
              , csm.said_by
              , csm.created_at AS message_created_at
-          FROM {self.schema}.conversation_status cs
-         INNER JOIN {self.schema}.conversation_status_messages csm
+          FROM `{self.schema}`.conversation_status cs
+         INNER JOIN `{self.schema}`.conversation_status_messages csm
             ON cs.conversation_status_id = csm.conversation_status_id
          {said_by_filter}
          ORDER BY cs.session_id
@@ -75,14 +94,33 @@ class LettoreConversazioni:
         """
         
         try:
-            print(f"🔍 Esecuzione query per leggere conversazioni dal schema '{self.schema}'...")
+            print(f"🔍 [DEBUG ONLY_USER] Esecuzione query per leggere conversazioni dal schema '{self.schema}'...")
+            print(f"🎯 [DEBUG ONLY_USER] Parametro only_user = {self.only_user}")
+            print(f"📋 [DEBUG ONLY_USER] Filtro applicato: {said_by_filter}")
+            
             risultati = self.connettore.esegui_query(query)
             
             if risultati is not None:
-                print(f"✅ Query eseguita con successo! Trovate {len(risultati)} righe")
+                # DEBUG: Analizza i risultati per verificare il filtro
+                total_rows = len(risultati)
+                user_messages = sum(1 for row in risultati if row[4] == 'USER')
+                agent_messages = sum(1 for row in risultati if row[4] == 'AGENT')
+                
+                print(f"✅ [DEBUG ONLY_USER] Query eseguita con successo!")
+                print(f"📊 [DEBUG ONLY_USER] Totale righe: {total_rows}")
+                print(f"👤 [DEBUG ONLY_USER] Messaggi USER: {user_messages}")
+                print(f"🤖 [DEBUG ONLY_USER] Messaggi AGENT: {agent_messages}")
+                
+                if self.only_user and agent_messages > 0:
+                    print(f"⚠️ [DEBUG ONLY_USER] ERRORE: only_user=True ma trovati {agent_messages} messaggi AGENT!")
+                elif not self.only_user and agent_messages == 0:
+                    print(f"ℹ️ [DEBUG ONLY_USER] INFO: only_user=False ma non ci sono messaggi AGENT nel dataset")
+                else:
+                    print(f"✅ [DEBUG ONLY_USER] Filtro funziona correttamente!")
+                
                 return risultati
             else:
-                print("❌ Errore durante l'esecuzione della query")
+                print("❌ [DEBUG ONLY_USER] Errore durante l'esecuzione della query")
                 return []
                 
         except Exception as e:
@@ -102,14 +140,14 @@ class LettoreConversazioni:
         query = f"""
         SELECT cs.session_id
              , (SELECT a.agent_name
-                  FROM {self.schema}.agents a
+                  FROM `{self.schema}`.agents a
                  WHERE a.agent_id = cs.conversation_agent_id) AS conversation_agent_name
              , csm.conversation_status_message_id
              , csm.conversation_message
              , csm.said_by
              , csm.created_at AS message_created_at
-          FROM {self.schema}.conversation_status cs
-         INNER JOIN {self.schema}.conversation_status_messages csm
+          FROM `{self.schema}`.conversation_status cs
+         INNER JOIN `{self.schema}`.conversation_status_messages csm
             ON cs.conversation_status_id = csm.conversation_status_id
          WHERE csm.said_by IN ('USER', 'AGENT')
            AND cs.session_id = %s

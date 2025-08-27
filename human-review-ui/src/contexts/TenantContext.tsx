@@ -108,7 +108,7 @@ export const TenantProvider: React.FC<TenantProviderProps> = ({ children }) => {
   // Caricamento dello stato dei prompt quando cambia il tenant selezionato
   useEffect(() => {
     refreshPromptStatus();
-  }, [refreshPromptStatus]);
+  }, [selectedTenant]); // ✅ Dipende solo da selectedTenant, non da refreshPromptStatus
 
   const contextValue: TenantContextType = {
     selectedTenant,

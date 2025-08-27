@@ -19,8 +19,9 @@ import os
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
-# Aggiungi il percorso del progetto al PYTHONPATH
-sys.path.append('/home/ubuntu/classificazione_discussioni_bck_23_08_2025')
+# Aggiungi il percorso del progetto al PYTHONPATH (percorso relativo)
+project_root = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(project_root)
 
 from Utils.prompt_manager import PromptManager
 
@@ -28,11 +29,14 @@ from Utils.prompt_manager import PromptManager
 esempi_bp = Blueprint('esempi', __name__)
 
 # Configurazione logging
+current_dir = os.path.dirname(os.path.abspath(__file__))
+log_file_path = os.path.join(current_dir, 'esempi_api.log')
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/home/ubuntu/classificazione_discussioni_bck_23_08_2025/esempi_api.log'),
+        logging.FileHandler(log_file_path),
         logging.StreamHandler()
     ]
 )
@@ -121,7 +125,7 @@ def get_examples():
         
         # Recupera esempi
         examples_list = prompt_manager.get_examples_list(
-            tenant_id=tenant_id,
+            tenant_or_id=tenant_id,
             engine=engine,
             esempio_type=esempio_type
         )

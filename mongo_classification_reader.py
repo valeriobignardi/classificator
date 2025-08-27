@@ -911,6 +911,140 @@ class MongoClassificationReader:
             print(f"Errore nella risoluzione caso review: {e}")
             return False
 
+    def resolve_review_session_with_cluster_propagation(self, case_id: str, client_name: str, 
+                                                       human_decision: str, human_confidence: float, 
+                                                       human_notes: str = "") -> Dict[str, Any]:
+        """
+        Scopo: Risolve un caso di review e propaga la decisione agli altri membri del cluster se è rappresentante
+        
+        Parametri input:
+            - case_id: ID del caso (MongoDB _id)
+            - client_name: Nome del cliente
+            - human_decision: Etichetta scelta dall'umano
+            - human_confidence: Confidenza della decisione umana
+            - human_notes: Note aggiuntive
+            
+        Output:
+            - Dizionario con risultati: {
+                "case_resolved": bool,
+                "propagated_cases": int,
+                "cluster_id": str,
+                "is_representative": bool,
+                "error": str (se presente)
+              }
+            
+        Ultimo aggiornamento: 2025-08-27
+        """
+        try:
+            if not self.ensure_connection():
+                return {"case_resolved": False, "propagated_cases": 0, "error": "Connessione database fallita"}
+            
+            # Usa la collection appropriata per il tenant
+            collection = self.db[self.get_collection_name()]
+            
+            from bson import ObjectId
+            
+            # Converte case_id in ObjectId se necessario
+            try:
+                object_id = ObjectId(case_id)
+            except:
+                object_id = case_id
+            
+            # Prepara il filtro per trovare il documento
+            filter_dict = {
+                "_id": object_id,
+                "review_status": "pending"
+            }
+            if not self.tenant_name:
+                filter_dict["client"] = client_name
+            
+            # 1. Recupera il documento completo per ottenere i metadati cluster
+            case_doc = collection.find_one(filter_dict, {
+                "confidence": 1,
+                "metadata": 1,
+                "session_id": 1
+            })
+            
+            if not case_doc:
+                return {"case_resolved": False, "propagated_cases": 0, "error": "Caso non trovato o già risolto"}
+            
+            # Estrai metadati cluster
+            metadata = case_doc.get("metadata", {})
+            cluster_metadata = metadata.get("cluster_metadata", {})
+            is_representative = cluster_metadata.get("is_representative", False)
+            cluster_id = cluster_metadata.get("cluster_id")
+            current_confidence = case_doc.get("confidence", 0)
+            
+            print(f"🔍 Risoluzione caso {case_id}: rappresentante={is_representative}, cluster_id={cluster_id}")
+            
+            # 2. Risolvi il caso specifico
+            case_resolved = self.resolve_review_session(case_id, client_name, human_decision, 
+                                                       human_confidence, human_notes)
+            
+            if not case_resolved:
+                return {"case_resolved": False, "propagated_cases": 0, "error": "Errore nella risoluzione del caso"}
+            
+            propagated_count = 0
+            
+            # 3. Se è rappresentante e ha cluster_id, propaga la decisione
+            if is_representative and cluster_id:
+                print(f"🔄 Propagazione decisione '{human_decision}' a membri cluster {cluster_id}")
+                
+                # Trova tutti i membri del cluster non ancora revisionati (escluso il rappresentante)
+                cluster_filter = {
+                    "metadata.cluster_metadata.cluster_id": cluster_id,
+                    "review_status": {"$ne": "completed"},
+                    "_id": {"$ne": object_id}  # Escludi il rappresentante già aggiornato
+                }
+                
+                if not self.tenant_name:
+                    cluster_filter["client"] = client_name
+                
+                # Applica la propagazione con confidenza leggermente ridotta
+                propagation_confidence = max(human_confidence * 0.9, 0.1)  # Minimo 0.1
+                current_timestamp = datetime.now().isoformat()
+                
+                propagation_result = collection.update_many(
+                    cluster_filter,
+                    {
+                        "$set": {
+                            "classificazione": human_decision,
+                            "confidence": propagation_confidence,
+                            "metadata.cluster_metadata.propagated_from_human_review": True,
+                            "metadata.cluster_metadata.human_review_case_id": str(object_id),
+                            "metadata.cluster_metadata.human_review_propagated_at": current_timestamp,
+                            "metadata.cluster_metadata.human_review_decision": human_decision,
+                            "metadata.cluster_metadata.human_review_confidence": human_confidence,
+                            "human_reviewed_by_propagation": True,
+                            "human_review_propagation_notes": f"Propagato da rappresentante {case_id}: {human_notes}" if human_notes else f"Propagato da rappresentante {case_id}"
+                        }
+                    }
+                )
+                
+                propagated_count = propagation_result.modified_count
+                print(f"✅ Propagata decisione a {propagated_count} membri del cluster {cluster_id}")
+                
+                # Log dettagliato per debugging
+                if propagated_count > 0:
+                    print(f"   📊 Cluster {cluster_id}: rappresentante={case_id}, propagati={propagated_count}")
+                    print(f"   🎯 Decisione: '{human_decision}' (confidenza: {human_confidence} → {propagation_confidence})")
+            
+            return {
+                "case_resolved": True,
+                "propagated_cases": propagated_count,
+                "cluster_id": cluster_id,
+                "is_representative": is_representative,
+                "human_decision": human_decision,
+                "human_confidence": human_confidence
+            }
+            
+        except Exception as e:
+            error_msg = f"Errore nella risoluzione con propagazione: {e}"
+            print(error_msg)
+            import traceback
+            print(f"Stack trace: {traceback.format_exc()}")
+            return {"case_resolved": False, "propagated_cases": 0, "error": error_msg}
+
     def get_review_statistics(self, client_name: str) -> Dict[str, Any]:
         """
         Scopo: Recupera statistiche sui casi di review
@@ -1591,6 +1725,100 @@ class MongoClassificationReader:
             
         except Exception as e:
             print(f"Errore nel recupero Review Queue: {e}")
+            return []
+
+    def get_tenant_classifications_with_clustering(self, 
+                                                 tenant_slug: str,
+                                                 start_date: datetime,
+                                                 end_date: datetime,
+                                                 limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Recupera classificazioni di un tenant con informazioni di clustering
+        per generare statistiche avanzate
+        
+        Args:
+            tenant_slug: Slug del tenant (es: 'humanitas')
+            start_date: Data inizio ricerca
+            end_date: Data fine ricerca  
+            limit: Limite massimo risultati
+            
+        Returns:
+            Lista classificazioni con cluster info
+            
+        Data ultima modifica: 2025-08-26
+        """
+        try:
+            # Trova tenant_id dal tenant_slug
+            tenant_info = self.get_tenant_info_from_name(tenant_slug)
+            if not tenant_info:
+                print(f"❌ Tenant '{tenant_slug}' non trovato")
+                return []
+            
+            tenant_id = tenant_info['tenant_id']
+            collection_name = self.get_collection_name(tenant_slug)
+            
+            print(f"🔍 Ricerca classificazioni in {collection_name}")
+            print(f"   📅 Periodo: {start_date} -> {end_date}")
+            
+            # Query MongoDB
+            query = {
+                'timestamp': {
+                    '$gte': start_date,
+                    '$lte': end_date
+                }
+            }
+            
+            # Projection per includere campi necessari per statistiche
+            projection = {
+                'session_id': 1,
+                'testo_completo': 1,
+                'predicted_label': 1,
+                'confidence': 1,
+                'classification_method': 1,
+                'cluster_label': 1,  # Campo clustering se disponibile
+                'cluster_confidence': 1,
+                'embedding': 1,  # Per eventuali ri-clustering
+                'timestamp': 1,
+                'tenant_slug': 1,
+                'tenant_id': 1
+            }
+            
+            # Esegui query con ordinamento per timestamp (più recenti prima)
+            cursor = self.collection.find(query, projection).sort('timestamp', -1)
+            
+            if limit:
+                cursor = cursor.limit(limit)
+            
+            classifications = list(cursor)
+            
+            # Post-processing per garantire compatibilità
+            processed_classifications = []
+            for cls in classifications:
+                processed_cls = {
+                    'session_id': cls.get('session_id', str(cls.get('_id'))),
+                    'testo_completo': cls.get('testo_completo', ''),
+                    'predicted_label': cls.get('predicted_label', 'unknown'),
+                    'confidence': float(cls.get('confidence', 0.0)),
+                    'classification_method': cls.get('classification_method', 'unknown'),
+                    'cluster_label': cls.get('cluster_label', -1),  # -1 = outlier se non disponibile
+                    'cluster_confidence': cls.get('cluster_confidence', 0.0),
+                    'timestamp': cls.get('timestamp'),
+                    'tenant_slug': tenant_slug,
+                    'tenant_id': tenant_id
+                }
+                
+                # Verifica che abbia contenuto minimo
+                if processed_cls['testo_completo'] and len(processed_cls['testo_completo'].strip()) > 10:
+                    processed_classifications.append(processed_cls)
+            
+            print(f"✅ Trovate {len(processed_classifications)} classificazioni valide")
+            
+            return processed_classifications
+            
+        except Exception as e:
+            print(f"❌ Errore recupero classificazioni con clustering: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
 

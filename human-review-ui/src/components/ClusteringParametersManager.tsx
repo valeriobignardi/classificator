@@ -31,7 +31,11 @@ import {
   Accordion,
   AccordionSummary,
   AccordionDetails,
-  TextField
+  TextField,
+  Switch,
+  FormControlLabel,
+  FormGroup,
+  Collapse
 } from '@mui/material';
 import {
   ExpandMore as ExpandMoreIcon,
@@ -47,14 +51,15 @@ import {
 import { useTenant } from '../contexts/TenantContext';
 import { apiService } from '../services/apiService';
 import ClusteringTestResults from './ClusteringTestResults';
+import ClusteringVersionManager from './ClusteringVersionManager';
 
 interface ClusteringParameter {
-  value: number | string;
-  default: number | string;
+  value: number | string | boolean;
+  default: number | string | boolean;
   min?: number;
   max?: number;
   step?: number;
-  options?: string[];
+  options?: (string | boolean)[];
   description: string;
   explanation: string;
   impact: {
@@ -64,6 +69,8 @@ interface ClusteringParameter {
     [key: string]: string | undefined;
   };
   recommendation?: string;
+  gpu_supported?: boolean;  // 🆕 SUPPORTO GPU
+  gpu_warning?: string;     // 🆕 AVVISO GPU
 }
 
 interface ClusteringParameters {
@@ -71,6 +78,23 @@ interface ClusteringParameters {
   min_samples: ClusteringParameter;
   cluster_selection_epsilon: ClusteringParameter;
   metric: ClusteringParameter;
+  
+  // 🆕 NUOVI PARAMETRI AVANZATI HDBSCAN
+  cluster_selection_method: ClusteringParameter;
+  alpha: ClusteringParameter;
+  max_cluster_size: ClusteringParameter;
+  allow_single_cluster: ClusteringParameter;
+  
+  // 🆕 PARAMETRO PREPROCESSING
+  only_user: ClusteringParameter;  // 🎯 Filtra solo messaggi utente
+  
+  // 🆕 PARAMETRI UMAP
+  use_umap: ClusteringParameter;           // Abilita/disabilita UMAP
+  umap_n_neighbors: ClusteringParameter;   // Numero di vicini UMAP
+  umap_min_dist: ClusteringParameter;      // Distanza minima UMAP
+  umap_metric: ClusteringParameter;        // Metrica distanza UMAP
+  umap_n_components: ClusteringParameter;  // Dimensioni output UMAP
+  umap_random_state: ClusteringParameter;  // Seed random UMAP
 }
 
 interface ParametersResponse {
@@ -236,7 +260,7 @@ const ClusteringParametersManager: React.FC = () => {
    * Input: Nome parametro e nuovo valore
    * Output: Aggiorna state e valida
    */
-  const updateParameter = (paramName: string, newValue: number | string) => {
+  const updateParameter = (paramName: string, newValue: number | string | boolean) => {
     if (!parameters) return;
 
     const updatedParameters = {
@@ -272,16 +296,48 @@ const ClusteringParametersManager: React.FC = () => {
     setError(null);
 
     try {
-      // Prepara parametri per il test (usa valori correnti e converte in number)
-      const testParameters = {
-        min_cluster_size: typeof parameters.min_cluster_size.value === 'string' ? 
-          parseFloat(parameters.min_cluster_size.value) : parameters.min_cluster_size.value,
-        min_samples: typeof parameters.min_samples.value === 'string' ? 
-          parseFloat(parameters.min_samples.value) : parameters.min_samples.value,
-        cluster_selection_epsilon: typeof parameters.cluster_selection_epsilon.value === 'string' ? 
-          parseFloat(parameters.cluster_selection_epsilon.value) : parameters.cluster_selection_epsilon.value,
-        metric: parameters.metric.value as string
-      };
+      // Prepara parametri per il test (usa TUTTI i valori correnti e assicura tipi corretti)
+      // 🔧 [FIX] Inclusione di TUTTI i parametri disponibili, non solo i 4 base
+      const testParameters: Record<string, any> = {};
+      
+      // Itera attraverso TUTTI i parametri disponibili
+      Object.entries(parameters).forEach(([paramName, paramConfig]) => {
+        const value = paramConfig.value;
+        
+        // Gestione tipo-specifica dei valori
+        if (typeof value === 'number') {
+          testParameters[paramName] = value;
+        } else if (typeof value === 'string') {
+          // Prova a convertire stringhe numeriche a number per parametri che dovrebbero essere numerici
+          const numericParams = [
+            'min_cluster_size', 'min_samples', 'cluster_selection_epsilon', 'alpha', 'max_cluster_size',
+            'umap_n_neighbors', 'umap_min_dist', 'umap_n_components', 'umap_random_state'
+          ];
+          
+          if (numericParams.includes(paramName)) {
+            const numValue = parseFloat(value);
+            testParameters[paramName] = isNaN(numValue) ? value : numValue;
+          } else {
+            testParameters[paramName] = value;
+          }
+        } else if (typeof value === 'boolean') {
+          testParameters[paramName] = value;
+        } else {
+          // Fallback per altri tipi
+          testParameters[paramName] = value;
+        }
+      });
+      
+      console.log('🧪 [CLUSTERING TEST] Avvio test con TUTTI i parametri disponibili:', testParameters);
+      console.log('📊 [CLUSTERING TEST] Numero parametri inviati:', Object.keys(testParameters).length);
+      console.log('🗂️  [CLUSTERING TEST] Parametri UMAP inclusi:', {
+        use_umap: testParameters.use_umap,
+        umap_n_neighbors: testParameters.umap_n_neighbors,
+        umap_min_dist: testParameters.umap_min_dist,
+        umap_n_components: testParameters.umap_n_components,
+        umap_metric: testParameters.umap_metric,
+        umap_random_state: testParameters.umap_random_state
+      });
 
       console.log('🧪 [CLUSTERING TEST] Avvio test con parametri:', testParameters);
 
@@ -342,6 +398,23 @@ const ClusteringParametersManager: React.FC = () => {
             text: outlier.testo_completo || outlier.text || 'N/A',
             text_length: (outlier.testo_completo || outlier.text || '').length
           })) || []
+        } : undefined,
+        
+        // 🆕 MAPPING DATI VISUALIZZAZIONE dal backend
+        visualization_data: result.visualization_data ? {
+          points: result.visualization_data.points || [],
+          cluster_colors: result.visualization_data.cluster_colors || {},
+          statistics: result.visualization_data.statistics || {
+            total_points: 0,
+            n_clusters: 0,
+            n_outliers: 0,
+            dimensions: 0
+          },
+          coordinates: result.visualization_data.coordinates || {
+            tsne_2d: [],
+            pca_2d: [],
+            pca_3d: []
+          }
         } : undefined
       };
 
@@ -387,7 +460,7 @@ const ClusteringParametersManager: React.FC = () => {
    * Input: Nome parametro, valore, definizione parametro
    * Output: Aggiorna validationErrors
    */
-  const validateParameter = (paramName: string, value: number | string, paramDef: ClusteringParameter) => {
+  const validateParameter = (paramName: string, value: number | string | boolean, paramDef: ClusteringParameter) => {
     const errors = { ...validationErrors };
     delete errors[paramName];
 
@@ -401,6 +474,10 @@ const ClusteringParametersManager: React.FC = () => {
       errors[paramName] = `Valore non valido. Opzioni: ${paramDef.options.join(', ')}`;
     }
 
+    if (typeof value === 'boolean' && paramDef.options && !paramDef.options.includes(value)) {
+      errors[paramName] = `Valore boolean non valido`;
+    }
+
     setValidationErrors(errors);
   };
 
@@ -410,7 +487,7 @@ const ClusteringParametersManager: React.FC = () => {
    * Input: Nome parametro, valore attuale
    * Output: Elemento JSX con icona appropriata
    */
-  const getParameterStatusIcon = (paramName: string, currentValue: number | string) => {
+  const getParameterStatusIcon = (paramName: string, currentValue: number | string | boolean) => {
     if (!originalParameters) return null;
 
     const originalValue = originalParameters[paramName as keyof ClusteringParameters]?.value;
@@ -465,8 +542,42 @@ const ClusteringParametersManager: React.FC = () => {
    */
   const renderParameterControl = (paramName: string, param: ClusteringParameter) => {
     const isNumeric = typeof param.value === 'number';
-    const isSelect = param.options && param.options.length > 0;
+    const isBoolean = typeof param.value === 'boolean';
+    const isSelect = param.options && param.options.length > 0 && !isBoolean;
     const hasError = validationErrors[paramName];
+
+    // 🆕 GESTIONE PARAMETRI BOOLEAN (Switch)
+    if (isBoolean) {
+      return (
+        <FormGroup>
+          <FormControlLabel
+            control={
+              <Switch
+                checked={param.value as boolean}
+                onChange={(e) => updateParameter(paramName, e.target.checked)}
+                color={hasError ? "error" : "primary"}
+              />
+            }
+            label={
+              <Box>
+                <Typography variant="body2" fontWeight="medium">
+                  {param.description}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {param.value ? 'Attivato' : 'Disattivato'}
+                  {param.value === param.default && ' (Default)'}
+                </Typography>
+              </Box>
+            }
+          />
+          {hasError && (
+            <Typography variant="caption" color="error" sx={{ mt: 0.5 }}>
+              {validationErrors[paramName]}
+            </Typography>
+          )}
+        </FormGroup>
+      );
+    }
 
     if (isSelect) {
       return (
@@ -478,8 +589,8 @@ const ClusteringParametersManager: React.FC = () => {
             onChange={(e: any) => updateParameter(paramName, e.target.value)}
           >
             {param.options!.map((option) => (
-              <MenuItem key={option} value={option}>
-                {option}
+              <MenuItem key={String(option)} value={String(option)}>
+                {String(option)}
                 {option === param.default && <Chip label="Default" size="small" sx={{ ml: 1 }} />}
               </MenuItem>
             ))}
@@ -633,8 +744,10 @@ const ClusteringParametersManager: React.FC = () => {
           {/* Parametri */}
           {parameters && (
             <>
-              <Box display="flex" flexWrap="wrap" gap={2}>
-                {Object.entries(parameters).map(([paramName, param]) => (
+                      <Box display="flex" flexWrap="wrap" gap={2}>
+                {Object.entries(parameters)
+                  .filter(([paramName]) => !paramName.startsWith('umap') && paramName !== 'use_umap') // 🆕 Esclude parametri UMAP dalla sezione principale
+                  .map(([paramName, param]) => (
                   <Box key={paramName} flex="1 1 400px" minWidth="300px">
                     <Paper sx={{ p: 2, height: '100%' }}>
                       <Box display="flex" alignItems="flex-start" mb={2}>
@@ -646,6 +759,31 @@ const ClusteringParametersManager: React.FC = () => {
                             <Box ml={1}>
                               {getParameterStatusIcon(paramName, param.value)}
                             </Box>
+                            
+                            {/* 🆕 BADGE SUPPORTO GPU */}
+                            {param.gpu_supported === false && (
+                              <Tooltip title={param.gpu_warning || 'Parametro non supportato su GPU'}>
+                                <Chip 
+                                  label="CPU Only" 
+                                  size="small" 
+                                  color="warning" 
+                                  variant="outlined"
+                                  sx={{ ml: 1, fontSize: '0.7rem' }}
+                                />
+                              </Tooltip>
+                            )}
+                            {param.gpu_supported === true && (
+                              <Tooltip title="Parametro supportato sia su CPU che GPU">
+                                <Chip 
+                                  label="GPU ✓" 
+                                  size="small" 
+                                  color="success" 
+                                  variant="outlined"
+                                  sx={{ ml: 1, fontSize: '0.7rem' }}
+                                />
+                              </Tooltip>
+                            )}
+                            
                             <Tooltip title={param.explanation}>
                               <IconButton size="small">
                                 <InfoIcon fontSize="small" />
@@ -656,11 +794,18 @@ const ClusteringParametersManager: React.FC = () => {
                           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                             {param.explanation}
                           </Typography>
+                          
+                          {/* 🆕 AVVISO GPU SPECIFICO */}
+                          {param.gpu_supported === false && param.gpu_warning && (
+                            <Alert severity="warning" sx={{ mb: 2, fontSize: '0.8rem' }}>
+                              <Typography variant="caption">
+                                {param.gpu_warning}
+                              </Typography>
+                            </Alert>
+                          )}
 
                           {/* Controllo parametro */}
-                          {renderParameterControl(paramName, param)}
-
-                          {/* Impatto */}
+                          {renderParameterControl(paramName, param)}                          {/* Impatto */}
                           <Accordion sx={{ mt: 2 }}>
                             <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                               <Typography variant="body2">
@@ -696,6 +841,222 @@ const ClusteringParametersManager: React.FC = () => {
                   </Box>
                 ))}
               </Box>
+
+              {/* 🆕 SEZIONE UMAP */}
+              <Paper sx={{ p: 3, mt: 3, bgcolor: 'background.default' }}>
+                <Box display="flex" alignItems="center" mb={2}>
+                  <Typography variant="h5" component="h2" sx={{ flexGrow: 1 }}>
+                    UMAP - Dimensionality Reduction
+                  </Typography>
+                  <Chip 
+                    label="Preprocessing" 
+                    size="small" 
+                    color="info" 
+                    variant="outlined"
+                    sx={{ ml: 1 }}
+                  />
+                </Box>
+                
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                  UMAP (Uniform Manifold Approximation and Projection) riduce la dimensionalità 
+                  degli embeddings preservando la struttura locale dei dati prima di applicare HDBSCAN.
+                  Migliora significativamente le performance del clustering su dataset di grandi dimensioni.
+                </Typography>
+
+                {/* Toggle principale UMAP */}
+                <Box sx={{ mb: 3 }}>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={parameters?.use_umap?.value as boolean || false}
+                        onChange={(e) => updateParameter('use_umap', e.target.checked)}
+                        color="primary"
+                      />
+                    }
+                    label={
+                      <Box>
+                        <Typography variant="subtitle1" component="span">
+                          Abilita UMAP Preprocessing
+                        </Typography>
+                        <Typography variant="caption" display="block" color="text.secondary">
+                          Applica riduzione dimensionale prima del clustering
+                        </Typography>
+                      </Box>
+                    }
+                  />
+                </Box>
+
+                {/* Parametri UMAP - visibili solo se abilitato */}
+                {parameters?.use_umap?.value && (
+                  <Collapse in={parameters?.use_umap?.value as boolean} timeout="auto" unmountOnExit>
+                    <Box display="flex" flexWrap="wrap" gap={2}>
+                      
+                      {/* N Neighbors */}
+                      <Box flex="1 1 300px" minWidth="250px">
+                        <Paper sx={{ p: 2, height: '100%', bgcolor: 'background.paper' }}>
+                          <Box display="flex" alignItems="center" mb={1}>
+                            <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
+                              N Neighbors
+                            </Typography>
+                            <Tooltip title="Numero di vicini considerati per la costruzione del grafo locale">
+                              <IconButton size="small">
+                                <InfoIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
+                          <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
+                            Valori più alti preservano più struttura globale (15-50 raccomandato)
+                          </Typography>
+                          <Slider
+                            value={parameters?.umap_n_neighbors?.value as number || 15}
+                            onChange={(_, value) => updateParameter('umap_n_neighbors', value)}
+                            min={5}
+                            max={100}
+                            step={5}
+                            marks={[
+                              { value: 15, label: '15' },
+                              { value: 30, label: '30' },
+                              { value: 50, label: '50' }
+                            ]}
+                            valueLabelDisplay="auto"
+                          />
+                        </Paper>
+                      </Box>
+
+                      {/* Min Distance */}
+                      <Box flex="1 1 300px" minWidth="250px">
+                        <Paper sx={{ p: 2, height: '100%', bgcolor: 'background.paper' }}>
+                          <Box display="flex" alignItems="center" mb={1}>
+                            <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
+                              Min Distance
+                            </Typography>
+                            <Tooltip title="Distanza minima tra punti nel low-dimensional embedding">
+                              <IconButton size="small">
+                                <InfoIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
+                          <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
+                            Valori più bassi consentono clustering più densi (0.0-0.3 raccomandato)
+                          </Typography>
+                          <Slider
+                            value={parameters?.umap_min_dist?.value as number || 0.1}
+                            onChange={(_, value) => updateParameter('umap_min_dist', value)}
+                            min={0.0}
+                            max={1.0}
+                            step={0.05}
+                            marks={[
+                              { value: 0.0, label: '0.0' },
+                              { value: 0.1, label: '0.1' },
+                              { value: 0.3, label: '0.3' }
+                            ]}
+                            valueLabelDisplay="auto"
+                          />
+                        </Paper>
+                      </Box>
+
+                      {/* Metric */}
+                      <Box flex="1 1 300px" minWidth="250px">
+                        <Paper sx={{ p: 2, height: '100%', bgcolor: 'background.paper' }}>
+                          <Box display="flex" alignItems="center" mb={1}>
+                            <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
+                              Distance Metric
+                            </Typography>
+                            <Tooltip title="Metrica di distanza utilizzata per il calcolo delle similarità">
+                              <IconButton size="small">
+                                <InfoIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
+                          <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
+                            Cosine è ottimale per embeddings testuali
+                          </Typography>
+                          <FormControl fullWidth size="small">
+                            <Select
+                              value={parameters?.umap_metric?.value as string || 'cosine'}
+                              onChange={(e) => updateParameter('umap_metric', e.target.value)}
+                            >
+                              <MenuItem value="cosine">Cosine</MenuItem>
+                              <MenuItem value="euclidean">Euclidean</MenuItem>
+                              <MenuItem value="manhattan">Manhattan</MenuItem>
+                              <MenuItem value="correlation">Correlation</MenuItem>
+                            </Select>
+                          </FormControl>
+                        </Paper>
+                      </Box>
+
+                      {/* N Components */}
+                      <Box flex="1 1 300px" minWidth="250px">
+                        <Paper sx={{ p: 2, height: '100%', bgcolor: 'background.paper' }}>
+                          <Box display="flex" alignItems="center" mb={1}>
+                            <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
+                              Target Dimensions
+                            </Typography>
+                            <Tooltip title="Numero di dimensioni dell'embedding ridotto">
+                              <IconButton size="small">
+                                <InfoIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
+                          <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
+                            Dimensioni finali dopo la riduzione (2-100)
+                          </Typography>
+                          <Slider
+                            value={parameters?.umap_n_components?.value as number || 50}
+                            onChange={(_, value) => updateParameter('umap_n_components', value)}
+                            min={2}
+                            max={100}
+                            step={5}
+                            marks={[
+                              { value: 2, label: '2' },
+                              { value: 50, label: '50' },
+                              { value: 100, label: '100' }
+                            ]}
+                            valueLabelDisplay="auto"
+                          />
+                        </Paper>
+                      </Box>
+
+                      {/* Random State */}
+                      <Box flex="1 1 300px" minWidth="250px">
+                        <Paper sx={{ p: 2, height: '100%', bgcolor: 'background.paper' }}>
+                          <Box display="flex" alignItems="center" mb={1}>
+                            <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
+                              Random Seed
+                            </Typography>
+                            <Tooltip title="Seed per la riproducibilità dei risultati">
+                              <IconButton size="small">
+                                <InfoIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
+                          <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
+                            Imposta un valore fisso per risultati riproducibili
+                          </Typography>
+                          <TextField
+                            type="number"
+                            value={parameters?.umap_random_state?.value as number || 42}
+                            onChange={(e) => updateParameter('umap_random_state', parseInt(e.target.value) || 42)}
+                            size="small"
+                            fullWidth
+                            inputProps={{ min: 1, max: 999999 }}
+                          />
+                        </Paper>
+                      </Box>
+
+                    </Box>
+
+                    {/* Alert informativo sulla performance */}
+                    <Alert severity="info" sx={{ mt: 2 }}>
+                      <Typography variant="body2">
+                        <strong>Performance:</strong> UMAP può richiedere tempo aggiuntivo per la riduzione dimensionale, 
+                        ma generalmente migliora la qualità del clustering e riduce i tempi di HDBSCAN.
+                        Ideale per dataset con embeddings ad alta dimensionalità (768D → 50D tipico).
+                      </Typography>
+                    </Alert>
+                  </Collapse>
+                )}
+              </Paper>
 
               {/* Azioni */}
               <Box display="flex" justifyContent="space-between" alignItems="center" mt={3}>
@@ -751,6 +1112,11 @@ const ClusteringParametersManager: React.FC = () => {
           )}
         </CardContent>
       </Card>
+
+      {/* 🆕 SEZIONE CRONOLOGIA E VERSIONING CLUSTERING */}
+      <Box sx={{ mt: 3 }}>
+        <ClusteringVersionManager />
+      </Box>
       
       {/* 🆕 DIALOG RISULTATI TEST CLUSTERING */}
       <ClusteringTestResults

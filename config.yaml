@@ -15,17 +15,16 @@ bertopic:
     n_neighbors: 10
   use_svd: true
 clustering:
-  allow_single_cluster: false
-  cluster_selection_epsilon: 0.08
-  cluster_selection_method: eom
-  max_outlier_ratio: 0.4
-  metric: euclidean
+  algorithm: hdbscan
+  enabled: true
+clustering:
+  algorithm: hdbscan
+  enabled: true
+  gpu_enabled: true
+  gpu_fallback_cpu: true
+  gpu_memory_limit: 0.8
   min_cluster_size: 5
   min_samples: 3
-  min_silhouette_score: 0.1
-  n_representatives: 2
-conversation_reading:
-  only_user: false
 database:
   database: common
   host: 159.69.223.201
@@ -271,9 +270,10 @@ llm:
     available:
     - mistral:7b
     - llama3.3:70b-instruct-q2_K
-    - llama3.1:8b
-    - llama3.1:70b
+    - gpt-oss:20b
     clients:
+      16c222a9-f293-11ef-9315-96000228e7fe: mistral:7b
+      a0fd7600-f4f7-11ef-9315-96000228e7fe: gpt-oss:20b
       humanitas: mistral:7b
     default: mistral:7b
   ollama:
@@ -352,8 +352,16 @@ tag_database:
   port: 3306
   user: root
 tenant_configs:
+  16c222a9-f293-11ef-9315-96000228e7fe:
+    llm_model: mistral:7b
+  a0fd7600-f4f7-11ef-9315-96000228e7fe:
+    llm_model: gpt-oss:20b
   humanitas:
     embedding_engine: bge_m3
+tokenization:
+  max_tokens: 8000
+  model_name: cl100k_base
+  truncation_strategy: start
 ui_config:
   classification:
     confidence_threshold: 0.7

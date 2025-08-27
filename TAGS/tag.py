@@ -11,6 +11,14 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from TagDatabase.tag_database_connector import TagDatabaseConnector
 
+# Import Tenant class per gestione centralizzata tenant
+try:
+    from Utils.tenant import Tenant
+    TENANT_AVAILABLE = True
+except ImportError:
+    Tenant = None
+    TENANT_AVAILABLE = False
+
 
 class IntelligentTagSuggestionManager:
     """
@@ -136,16 +144,19 @@ class IntelligentTagSuggestionManager:
             self.logger.error(error_msg)
             raise Exception(error_msg)
     
-    def has_existing_classifications(self, client_name: str) -> bool:
+    def has_existing_classifications(self, client_name=None, tenant=None) -> bool:
         """
         Controlla se esistono classificazioni in MongoDB per il cliente.
         MIGRAZIONE: Ora cerca nella collection MongoDB del tenant invece che in MySQL.
         
         Args:
-            client_name (str): Nome del cliente (es. 'alleanza', 'bosch')
+            client_name (str): [DEPRECATED] Nome del cliente - usare tenant invece
+            tenant (Tenant): Oggetto Tenant centralizzato (preferito)
             
         Returns:
             bool: True se il cliente ha classificazioni esistenti, False altrimenti
+            
+        UPGRADE: Preferire l'uso del parametro 'tenant' invece di 'client_name'
             
         Note:
             Cerca nella collection MongoDB usando pattern {tenant_slug}_{tenant_id}
@@ -154,12 +165,22 @@ class IntelligentTagSuggestionManager:
         Last modified: 23/08/2025 - Valerio Bignardi
         """
         try:
-            # STEP 1: Risolvi client_name → tenant_id per MongoDB
-            tenant_id = self._resolve_tenant_id_from_name(client_name)
+            # 🏗️ GESTIONE TENANT CENTRALIZZATA
+            if tenant and TENANT_AVAILABLE:
+                tenant_id = tenant.tenant_id
+                client_name_resolved = tenant.tenant_slug
+                print(f"🎯 TAG: Uso tenant centralizzato {tenant}")
+            elif client_name:
+                # Legacy mode: risolvi client_name
+                tenant_id = self._resolve_tenant_id_from_name(client_name)
+                client_name_resolved = client_name
+                print(f"🔄 TAG: Modalità legacy - risolvo client_name {client_name}")
+            else:
+                raise ValueError("Deve essere fornito 'tenant' (preferito) o 'client_name' (legacy)")
             
             # STEP 2: Genera nome collection usando pattern {tenant_slug}_{tenant_id}
             # Per Alleanza: alleanza_a0fd7600-f4f7-11ef-9315-96000228e7fe
-            collection_name = f"{client_name.lower()}_{tenant_id}"
+            collection_name = f"{client_name_resolved.lower()}_{tenant_id}"
             
             # STEP 3: Connessione a MongoDB
             from pymongo import MongoClient
@@ -193,16 +214,19 @@ class IntelligentTagSuggestionManager:
             # Fallback sicuro: assume cliente nuovo per evitare errori critici
             return False
     
-    def get_suggested_tags_for_client(self, client_name: str) -> List[Dict[str, Any]]:
+    def get_suggested_tags_for_client(self, client_name=None, tenant=None) -> List[Dict[str, Any]]:
         """
         Ottiene i tag suggeriti per un cliente dalla tabella TAGS.tags.
         SICUREZZA MULTI-TENANT: Ogni cliente riceve SOLO i tag del proprio tenant.
         
         Args:
-            client_name (str): Nome del cliente/tenant
+            client_name (str): [DEPRECATED] Nome del cliente - usare tenant invece
+            tenant (Tenant): Oggetto Tenant centralizzato (preferito)
             
         Returns:
             List[Dict]: Lista di tag suggeriti con metadati del tenant
+            
+        UPGRADE: Preferire l'uso del parametro 'tenant' invece di 'client_name'
             
         Raises:
             Exception: Se il tenant non è trovato o non attivo
@@ -214,9 +238,20 @@ class IntelligentTagSuggestionManager:
         Last modified: 23/08/2025 - Valerio Bignardi
         """
         try:
-            # STEP 1: Risolvi client_name → tenant_id per sicurezza multi-tenant
-            tenant_id = self._resolve_tenant_id_from_name(client_name)
-            self.logger.info(f"🔒 MULTI-TENANT: Client '{client_name}' → Tenant ID: {tenant_id}")
+            # 🏗️ GESTIONE TENANT CENTRALIZZATA
+            if tenant and TENANT_AVAILABLE:
+                tenant_id = tenant.tenant_id
+                client_name_resolved = tenant.tenant_slug
+                print(f"🎯 TAG: Uso tenant centralizzato {tenant}")
+            elif client_name:
+                # Legacy mode: risolvi client_name
+                tenant_id = self._resolve_tenant_id_from_name(client_name)
+                client_name_resolved = client_name
+                print(f"🔄 TAG: Modalità legacy - risolvo client_name {client_name}")
+            else:
+                raise ValueError("Deve essere fornito 'tenant' (preferito) o 'client_name' (legacy)")
+                
+            self.logger.info(f"🔒 MULTI-TENANT: Client '{client_name_resolved}' → Tenant ID: {tenant_id}")
             
             # STEP 2: Ottieni SOLO i tag del tenant specificato
             all_tags = self._get_all_available_tags(tenant_id)
@@ -324,16 +359,19 @@ class IntelligentTagSuggestionManager:
             self.logger.error(f"Errore nel caricamento tag dalla tabella tags: {e}")
             return []
     
-    def _get_tag_usage_stats(self, client_name: str) -> Dict[str, Dict[str, Any]]:
+    def _get_tag_usage_stats(self, client_name=None, tenant=None) -> Dict[str, Dict[str, Any]]:
         """
         Ottiene le statistiche di utilizzo dei tag per un cliente dalle classificazioni MongoDB.
         MIGRAZIONE: Ora cerca nella collection MongoDB del tenant invece che in MySQL.
         
         Args:
-            client_name (str): Nome del cliente
+            client_name (str): [DEPRECATED] Nome del cliente - usare tenant invece
+            tenant (Tenant): Oggetto Tenant centralizzato (preferito)
             
         Returns:
             Dict: Statistiche di utilizzo per tag name
+            
+        UPGRADE: Preferire l'uso del parametro 'tenant' invece di 'client_name'
             
         Note:
             Usa aggregation pipeline MongoDB per calcolare COUNT e AVG per ogni tag.
@@ -342,11 +380,21 @@ class IntelligentTagSuggestionManager:
         Last modified: 23/08/2025 - Valerio Bignardi
         """
         try:
-            # STEP 1: Risolvi client_name → tenant_id per MongoDB  
-            tenant_id = self._resolve_tenant_id_from_name(client_name)
+            # 🏗️ GESTIONE TENANT CENTRALIZZATA
+            if tenant and TENANT_AVAILABLE:
+                tenant_id = tenant.tenant_id
+                client_name_resolved = tenant.tenant_slug
+                print(f"🎯 TAG: Uso tenant centralizzato {tenant}")
+            elif client_name:
+                # Legacy mode: risolvi client_name
+                tenant_id = self._resolve_tenant_id_from_name(client_name)
+                client_name_resolved = client_name
+                print(f"🔄 TAG: Modalità legacy - risolvo client_name {client_name}")
+            else:
+                raise ValueError("Deve essere fornito 'tenant' (preferito) o 'client_name' (legacy)")
             
             # STEP 2: Genera nome collection usando pattern {tenant_slug}_{tenant_id}
-            collection_name = f"{client_name.lower()}_{tenant_id}"
+            collection_name = f"{client_name_resolved.lower()}_{tenant_id}"
             
             # STEP 3: Connessione a MongoDB
             from pymongo import MongoClient

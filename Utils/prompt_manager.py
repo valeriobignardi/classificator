@@ -21,6 +21,14 @@ from datetime import datetime
 import os
 import logging
 
+# Importazione classe Tenant per eliminare conversioni ridondanti
+try:
+    from Utils.tenant import Tenant
+    TENANT_AVAILABLE = True
+except ImportError:
+    TENANT_AVAILABLE = False
+    print("⚠️ PROMPT MANAGER: Classe Tenant non disponibile, uso retrocompatibilità")
+
 class PromptManager:
     """
     Gestore centralizzato per prompt multi-tenant con variabili dinamiche
@@ -33,7 +41,12 @@ class PromptManager:
         Args:
             config_path: Percorso file configurazione (default: config.yaml nella root)
         """
-        self.config_path = config_path or '/home/ubuntu/classificazione_discussioni_bck_23_08_2025/config.yaml'
+        # Usa percorso relativo alla root del progetto
+        if config_path is None:
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            config_path = os.path.join(project_root, 'config.yaml')
+        
+        self.config_path = config_path
         self.config = self._load_config()
         self.connection = None
         self._cache = {}  # Cache per prompt caricati
@@ -213,7 +226,7 @@ class PromptManager:
             raise e
     
     def get_prompt(self, 
-                   tenant_id: str,
+                   tenant_or_id,
                    engine: str, 
                    prompt_type: str,
                    prompt_name: str,
@@ -222,7 +235,7 @@ class PromptManager:
         Recupera e processa un prompt con variabili dinamiche
         
         Args:
-            tenant_id: ID del tenant
+            tenant_or_id: Oggetto Tenant o tenant_id (slug/UUID) per compatibilità
             engine: Tipo di engine ('LLM', 'ML', 'FINETUNING')
             prompt_type: Tipo di prompt ('SYSTEM', 'USER', 'TEMPLATE', 'SPECIALIZED')
             prompt_name: Nome identificativo del prompt
@@ -232,8 +245,14 @@ class PromptManager:
             Prompt processato con variabili sostituite, o None se non trovato
         """
         try:
-            # RISOLVE IL TENANT_ID UNA SOLA VOLTA
-            resolved_tenant_id = self._resolve_tenant_id(tenant_id)
+            # Gestione compatibilità Tenant vs tenant_id string
+            if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
+                # Oggetto Tenant - usa direttamente i suoi dati
+                tenant = tenant_or_id
+                resolved_tenant_id = tenant.tenant_id
+            else:
+                # Retrocompatibilità: tenant_id string - normalizza
+                resolved_tenant_id = self._resolve_tenant_id(tenant_or_id)
             
             # Cache key per il prompt
             cache_key = f"{resolved_tenant_id}:{engine}:{prompt_type}:{prompt_name}"
@@ -269,10 +288,13 @@ class PromptManager:
             self.logger.error(f"❌ Errore recupero prompt {cache_key}: {e}")
             return None
     
-    def _load_prompt_from_db(self, tenant_id: str, engine: str, 
+    def _load_prompt_from_db(self, tenant_or_id, engine: str, 
                            prompt_type: str, prompt_name: str) -> Optional[Dict]:
         """
         Carica prompt dal database
+        
+        Args:
+            tenant_or_id: Oggetto Tenant o tenant_id per compatibilità
         
         Returns:
             Dict con 'content', 'dynamic_variables', 'config_parameters' o None
@@ -281,8 +303,14 @@ class PromptManager:
             return None
         
         try:
-            # RISOLVE IL TENANT_ID PRIMA DELLA QUERY
-            resolved_tenant_id = self._resolve_tenant_id(tenant_id)
+            # Gestione compatibilità Tenant vs tenant_id string
+            if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
+                # Oggetto Tenant - usa direttamente i suoi dati
+                tenant = tenant_or_id
+                resolved_tenant_id = tenant.tenant_id
+            else:
+                # Retrocompatibilità: tenant_id string - normalizza
+                resolved_tenant_id = self._resolve_tenant_id(tenant_or_id)
             
             cursor = self.connection.cursor()
             
@@ -778,9 +806,12 @@ Motivazione: Richiesta diretta di prenotazione"""
         except Error as e:
             self.logger.error(f"❌ Errore salvataggio history: {e}")
     
-    def list_prompts_for_tenant(self, tenant_id: str) -> List[Dict]:
+    def list_prompts_for_tenant(self, tenant_or_id) -> List[Dict]:
         """
         Elenca tutti i prompt disponibili per un tenant
+        
+        Args:
+            tenant_or_id: Oggetto Tenant o tenant_id per compatibilità
         
         Returns:
             Lista di dict con info sui prompt
@@ -788,8 +819,14 @@ Motivazione: Richiesta diretta di prenotazione"""
         if not self.connect():
             return []
         
-        # RISOLUZIONE TENANT_ID: Converte tenant_slug in tenant_id se necessario
-        resolved_tenant_id = self._resolve_tenant_id(tenant_id)
+        # Gestione compatibilità Tenant vs tenant_id string
+        if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
+            # Oggetto Tenant - usa direttamente i suoi dati
+            tenant = tenant_or_id
+            resolved_tenant_id = tenant.tenant_id
+        else:
+            # Retrocompatibilità: tenant_id string - normalizza
+            resolved_tenant_id = self._resolve_tenant_id(tenant_or_id)
         
         try:
             cursor = self.connection.cursor()
@@ -874,7 +911,7 @@ Motivazione: Richiesta diretta di prenotazione"""
             # Fallback: restituisce l'identifier originale
             return tenant_identifier
 
-    def get_all_prompts_for_tenant(self, tenant_id: str) -> List[Dict[str, Any]]:
+    def get_all_prompts_for_tenant(self, tenant_or_id) -> List[Dict[str, Any]]:
         """
         Recupera tutti i prompt di un tenant con dettagli completi
         
@@ -887,8 +924,16 @@ Motivazione: Richiesta diretta di prenotazione"""
         if not self.connection:
             self.connect()
         
-        # RISOLUZIONE TENANT_ID: Converte tenant_slug in tenant_id se necessario
-        resolved_tenant_id = self._resolve_tenant_id(tenant_id)
+        # Gestione compatibilità Tenant vs tenant_id string
+        if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
+            # Oggetto Tenant - usa direttamente i suoi dati
+            tenant = tenant_or_id
+            resolved_tenant_id = tenant.tenant_id
+            tenant_display = f"{tenant.tenant_name} ({resolved_tenant_id})"
+        else:
+            # Retrocompatibilità: tenant_id string - normalizza
+            resolved_tenant_id = self._resolve_tenant_id(tenant_or_id)
+            tenant_display = str(tenant_or_id)
         
         try:
             cursor = self.connection.cursor()
@@ -925,7 +970,7 @@ Motivazione: Richiesta diretta di prenotazione"""
             return prompts
             
         except Error as e:
-            self.logger.error(f"❌ Errore recupero prompt per tenant {tenant_id}: {e}")
+            self.logger.error(f"❌ Errore recupero prompt per tenant {tenant_display}: {e}")
             return []
 
     def create_prompt(self,
@@ -1608,7 +1653,7 @@ Motivazione: Richiesta diretta di prenotazione"""
     
     def get_examples_for_placeholder(
         self, 
-        tenant_id: str, 
+        tenant_or_id, 
         engine: str = 'LLM', 
         esempio_type: str = 'CONVERSATION',
         limit: int = None
@@ -1617,7 +1662,7 @@ Motivazione: Richiesta diretta di prenotazione"""
         Recupera esempi formattati per sostituire placeholder {{examples_text}}
         
         Args:
-            tenant_id: ID del tenant
+            tenant_or_id: Oggetto Tenant o tenant_id per compatibilità
             engine: Tipo di engine (LLM, ML, FINETUNING) 
             esempio_type: Tipo di esempio (CONVERSATION, CLASSIFICATION, TEMPLATE)
             limit: Numero massimo di esempi (opzionale)
@@ -1635,8 +1680,16 @@ Motivazione: Richiesta diretta di prenotazione"""
         try:
             cursor = self.connection.cursor()
             
-            # Risolvi tenant_id se necessario
-            resolved_tenant_id = self._resolve_tenant_id(tenant_id)
+            # Gestione compatibilità Tenant vs tenant_id string
+            if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
+                # Oggetto Tenant - usa direttamente i suoi dati
+                tenant = tenant_or_id
+                resolved_tenant_id = tenant.tenant_id
+                tenant_display = f"{tenant.tenant_name} ({resolved_tenant_id})"
+            else:
+                # Retrocompatibilità: tenant_id string - normalizza
+                resolved_tenant_id = self._resolve_tenant_id(tenant_or_id)
+                tenant_display = str(tenant_or_id)
             
             # Query per recuperare esempi attivi
             query = """
@@ -1656,7 +1709,7 @@ Motivazione: Richiesta diretta di prenotazione"""
             esempi = cursor.fetchall()
             
             if not esempi:
-                self.logger.warning(f"⚠️ Nessun esempio trovato per tenant {tenant_id}")
+                self.logger.warning(f"⚠️ Nessun esempio trovato per tenant {tenant_display}")
                 return ""
             
             # Formatta gli esempi
@@ -1676,7 +1729,7 @@ Motivazione: Richiesta diretta di prenotazione"""
     
     def create_example(
         self,
-        tenant_id: str,
+        tenant_or_id,
         esempio_name: str,
         esempio_content: str,
         engine: str = 'LLM',
@@ -1689,7 +1742,7 @@ Motivazione: Richiesta diretta di prenotazione"""
         Crea nuovo esempio nel database
         
         Args:
-            tenant_id: ID del tenant
+            tenant_or_id: Oggetto Tenant o tenant_id per compatibilità
             esempio_name: Nome identificativo dell'esempio
             esempio_content: Contenuto formattato UTENTE:/ASSISTENTE:
             engine: Tipo di engine (LLM, ML, FINETUNING)
@@ -1711,9 +1764,18 @@ Motivazione: Richiesta diretta di prenotazione"""
         try:
             cursor = self.connection.cursor()
             
-            # Risolvi tenant_id e ottieni nome tenant
-            resolved_tenant_id = self._resolve_tenant_id(tenant_id)
-            tenant_name = self._get_tenant_name(resolved_tenant_id)
+            # Gestione compatibilità Tenant vs tenant_id string
+            if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
+                # Oggetto Tenant - usa direttamente i suoi dati
+                tenant = tenant_or_id
+                resolved_tenant_id = tenant.tenant_id
+                tenant_name = tenant.tenant_name
+                tenant_display = f"{tenant.tenant_name} ({resolved_tenant_id})"
+            else:
+                # Retrocompatibilità: tenant_id string - normalizza
+                resolved_tenant_id = self._resolve_tenant_id(tenant_or_id)
+                tenant_name = self._get_tenant_name(resolved_tenant_id)
+                tenant_display = str(tenant_or_id)
             
             # Controlla se esempio già esiste
             check_query = """
@@ -1725,7 +1787,7 @@ Motivazione: Richiesta diretta di prenotazione"""
             existing = cursor.fetchone()
             
             if existing:
-                self.logger.warning(f"⚠️ Esempio '{esempio_name}' già esiste per tenant {tenant_id}")
+                self.logger.warning(f"⚠️ Esempio '{esempio_name}' già esiste per tenant {tenant_display}")
                 return existing[0]
             
             # Inserisci nuovo esempio
@@ -1756,7 +1818,7 @@ Motivazione: Richiesta diretta di prenotazione"""
             esempio_id = cursor.lastrowid
             self.connection.commit()
             
-            self.logger.info(f"✅ Creato esempio '{esempio_name}' ID {esempio_id} per tenant {tenant_id}")
+            self.logger.info(f"✅ Creato esempio '{esempio_name}' ID {esempio_id} per tenant {tenant_display}")
             return esempio_id
             
         except Error as e:
@@ -1767,7 +1829,7 @@ Motivazione: Richiesta diretta di prenotazione"""
     
     def get_examples_list(
         self,
-        tenant_id: str,
+        tenant_or_id,
         engine: str = 'LLM',
         esempio_type: str = None
     ) -> List[Dict[str, Any]]:
@@ -1775,7 +1837,7 @@ Motivazione: Richiesta diretta di prenotazione"""
         Recupera lista esempi per un tenant
         
         Args:
-            tenant_id: ID del tenant
+            tenant_or_id: Oggetto Tenant o tenant_id per compatibilità
             engine: Tipo di engine (LLM, ML, FINETUNING)
             esempio_type: Tipo esempio (opzionale per filtrare)
             
@@ -1792,8 +1854,16 @@ Motivazione: Richiesta diretta di prenotazione"""
         try:
             cursor = self.connection.cursor()
             
-            # Risolvi tenant_id
-            resolved_tenant_id = self._resolve_tenant_id(tenant_id)
+            # Gestione compatibilità Tenant vs tenant_id string  
+            if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
+                # Oggetto Tenant - usa direttamente i suoi dati
+                tenant = tenant_or_id
+                resolved_tenant_id = tenant.tenant_id
+                tenant_display = f"{tenant.tenant_name} ({resolved_tenant_id})"
+            else:
+                # Retrocompatibilità: tenant_id string - normalizza
+                resolved_tenant_id = self._resolve_tenant_id(tenant_or_id)
+                tenant_display = str(tenant_or_id)
             
             # Query dinamica in base ai filtri - Solo esempi attivi
             query = """
@@ -1829,7 +1899,7 @@ Motivazione: Richiesta diretta di prenotazione"""
                     'updated_at': esempio[8].strftime('%Y-%m-%d %H:%M:%S')
                 })
             
-            self.logger.info(f"✅ Recuperati {len(result)} esempi per tenant {tenant_id}")
+            self.logger.info(f"✅ Recuperati {len(result)} esempi per tenant {tenant_display}")
             return result
             
         except Error as e:
@@ -1839,7 +1909,7 @@ Motivazione: Richiesta diretta di prenotazione"""
     def update_example(
         self,
         esempio_id: int,
-        tenant_id: str,
+        tenant_or_id,
         **updates
     ) -> bool:
         """
@@ -1847,7 +1917,7 @@ Motivazione: Richiesta diretta di prenotazione"""
         
         Args:
             esempio_id: ID dell'esempio da aggiornare
-            tenant_id: ID del tenant (per sicurezza)
+            tenant_or_id: Oggetto Tenant o tenant_id per sicurezza
             **updates: Campi da aggiornare
             
         Returns:
@@ -1863,8 +1933,16 @@ Motivazione: Richiesta diretta di prenotazione"""
         try:
             cursor = self.connection.cursor()
             
-            # Risolvi tenant_id
-            resolved_tenant_id = self._resolve_tenant_id(tenant_id)
+            # Gestione compatibilità Tenant vs tenant_id string
+            if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
+                # Oggetto Tenant - usa direttamente i suoi dati
+                tenant = tenant_or_id
+                resolved_tenant_id = tenant.tenant_id
+                tenant_display = f"{tenant.tenant_name} ({resolved_tenant_id})"
+            else:
+                # Retrocompatibilità: tenant_id string - normalizza
+                resolved_tenant_id = self._resolve_tenant_id(tenant_or_id)
+                tenant_display = str(tenant_or_id)
             
             # Costruisci query dinamica
             set_clauses = []
@@ -1902,7 +1980,7 @@ Motivazione: Richiesta diretta di prenotazione"""
                 self.logger.info(f"✅ Aggiornato esempio ID {esempio_id}")
                 return True
             else:
-                self.logger.warning(f"⚠️ Esempio ID {esempio_id} non trovato per tenant {tenant_id}")
+                self.logger.warning(f"⚠️ Esempio ID {esempio_id} non trovato per tenant {tenant_display}")
                 return False
                 
         except Error as e:
@@ -1911,13 +1989,13 @@ Motivazione: Richiesta diretta di prenotazione"""
                 self.connection.rollback()
             return False
     
-    def delete_example(self, esempio_id: int, tenant_id: str) -> bool:
+    def delete_example(self, esempio_id: int, tenant_or_id) -> bool:
         """
         Elimina esempio (soft delete - imposta is_active = False)
         
         Args:
             esempio_id: ID dell'esempio da eliminare
-            tenant_id: ID del tenant (per sicurezza)
+            tenant_or_id: Oggetto Tenant o tenant_id per sicurezza
             
         Returns:
             True se eliminazione riuscita, False altrimenti
@@ -1926,7 +2004,7 @@ Motivazione: Richiesta diretta di prenotazione"""
         Data: 2025-08-25
         Ultimo aggiornamento: 2025-08-25
         """
-        return self.update_example(esempio_id, tenant_id, is_active=False)
+        return self.update_example(esempio_id, tenant_or_id, is_active=False)
     
     def get_prompt_with_examples(
         self,

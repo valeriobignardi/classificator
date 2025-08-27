@@ -3,10 +3,11 @@
 File: openai_embedder.py
 Autore: GitHub Copilot
 Data creazione: 2025-08-25
-Descrizione: Engine di embedding OpenAI (text-embedding-003-large/medium) per configurazione AI
+Descrizione: Engine di embedding OpenAI con tokenizzazione preventiva per gestire conversazioni lunghe
 
 Storia aggiornamenti:
 2025-08-25 - Creazione iniziale con supporto modelli OpenAI embedding
+2025-08-26 - Aggiunta tokenizzazione preventiva con tiktoken per conversazioni lunghe
 """
 
 import sys
@@ -18,9 +19,12 @@ import time
 from typing import Union, List, Optional, Dict, Any
 import logging
 
-# Aggiunta del percorso per BaseEmbedder
+# Aggiunta del percorso per BaseEmbedder e TokenizationManager
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from base_embedder import BaseEmbedder
+
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
+from Utils.tokenization_utils import TokenizationManager
 
 try:
     import openai
@@ -62,7 +66,7 @@ class OpenAIEmbedder(BaseEmbedder):
                  timeout: int = 300,
                  test_on_init: bool = True):
         """
-        Inizializza OpenAI embedder
+        Inizializza OpenAI embedder con tokenizzazione preventiva
         
         Args:
             api_key: Chiave API OpenAI (se None, cerca in variabile ambiente)
@@ -98,6 +102,14 @@ class OpenAIEmbedder(BaseEmbedder):
         
         # Setup logging
         self.logger = logging.getLogger(__name__)
+        
+        # Inizializza TokenizationManager per gestione conversazioni lunghe
+        try:
+            self.tokenizer = TokenizationManager()
+            print(f"✅ TokenizationManager integrato con successo")
+        except Exception as e:
+            print(f"⚠️  Errore inizializzazione TokenizationManager: {e}")
+            self.tokenizer = None
         
         print(f"🚀 Inizializzazione OpenAI embedder:")
         print(f"   🎯 Modello: {self.model_name}")
@@ -135,15 +147,17 @@ class OpenAIEmbedder(BaseEmbedder):
                normalize_embeddings: bool = True,
                batch_size: int = 100,  # OpenAI supporta batch più grandi
                show_progress_bar: bool = False,
+               session_ids: List[str] = None,  # Nuovo parametro per session_ids
                **kwargs) -> np.ndarray:
         """
-        Genera embeddings per i testi usando modello OpenAI
+        Genera embeddings per i testi usando modello OpenAI con tokenizzazione preventiva
         
         Args:
             texts: Testo singolo o lista di testi
             normalize_embeddings: Se normalizzare gli embeddings
             batch_size: Dimensione batch (max 100 per OpenAI)
             show_progress_bar: Mostra barra progresso
+            session_ids: Lista opzionale di session_id corrispondenti ai testi
             
         Returns:
             Array numpy con embeddings shape (n_samples, embedding_dim)
@@ -154,29 +168,34 @@ class OpenAIEmbedder(BaseEmbedder):
         
         print(f"🔍 Encoding {len(texts)} testi con OpenAI {self.model_name}...")
         
+        # Preprocessing con tokenizzazione preventiva
+        if self.tokenizer:
+            processed_texts, tokenization_stats = self.tokenizer.process_conversations_for_clustering(
+                texts, session_ids
+            )
+            print(f"✅ Tokenizzazione completata: {tokenization_stats['truncated_count']} conversazioni troncate")
+        else:
+            print(f"⚠️  TokenizationManager non disponibile, uso preprocessing legacy")
+            processed_texts = []
+            for text in texts:
+                if not text or not text.strip():
+                    processed_texts.append("testo vuoto")
+                else:
+                    processed_texts.append(text.strip()[:30000])  # Limite caratteri di emergenza
+        
         embeddings = []
         
         try:
             # Processa in batch
-            for i in range(0, len(texts), batch_size):
-                batch_texts = texts[i:i+batch_size]
+            for i in range(0, len(processed_texts), batch_size):
+                batch_texts = processed_texts[i:i+batch_size]
+                batch_session_ids = session_ids[i:i+batch_size] if session_ids else None
                 
                 if show_progress_bar:
-                    print(f"📊 Batch {i//batch_size + 1}/{(len(texts)-1)//batch_size + 1}")
-                
-                # Preprocessing testi con gestione token limit
-                processed_texts = []
-                for idx, text in enumerate(batch_texts):
-                    if not text or not text.strip():
-                        processed_texts.append("testo vuoto")
-                    else:
-                        # Usa la nuova logica di truncamento
-                        text = text.strip()
-                        truncated_text = self._truncate_text_to_tokens(text, max_tokens=7500)  # Margine sicurezza
-                        processed_texts.append(truncated_text)
+                    print(f"📊 Batch {i//batch_size + 1}/{(len(processed_texts)-1)//batch_size + 1}")
                 
                 # Richiesta embedding batch a OpenAI
-                batch_embeddings = self._request_embeddings_batch(processed_texts)
+                batch_embeddings = self._request_embeddings_batch(batch_texts, batch_session_ids)
                 embeddings.extend(batch_embeddings)
             
             # Converti a numpy array
@@ -194,12 +213,13 @@ class OpenAIEmbedder(BaseEmbedder):
         except Exception as e:
             raise RuntimeError(f"Errore durante encoding OpenAI: {e}")
     
-    def _request_embeddings_batch(self, texts: List[str]) -> List[np.ndarray]:
+    def _request_embeddings_batch(self, texts: List[str], session_ids: List[str] = None) -> List[np.ndarray]:
         """
-        Richiede embeddings per batch di testi a OpenAI
+        Richiede embeddings per batch di testi a OpenAI (con tokenizzazione preventiva)
         
         Args:
-            texts: Lista testi da processare
+            texts: Lista testi da processare (già tokenizzati e troncati)
+            session_ids: Lista session_id corrispondenti ai testi (opzionale)
             
         Returns:
             Lista di embedding vectors
@@ -223,25 +243,20 @@ class OpenAIEmbedder(BaseEmbedder):
             # Gestione rate limit con retry
             print(f"⏰ Rate limit raggiunto, attesa 60 secondi...")
             time.sleep(60)
-            return self._request_embeddings_batch(texts)
+            return self._request_embeddings_batch(texts, session_ids)
             
         except openai.APIError as e:
-            # Log dettagliato per errori di token limit
+            # Log semplificato per errori API (i token limit sono già gestiti preventivamente)
             error_msg = str(e)
+            print(f"❌ Errore API OpenAI: {error_msg}")
+            
+            # Se è ancora un errore di token (non dovrebbe succedere con la tokenizzazione preventiva)
             if "maximum context length" in error_msg or "token" in error_msg.lower():
-                print(f"🚨 ERRORE TOKEN LIMIT OPENAI:")
-                print(f"   Errore: {error_msg}")
-                print(f"   Numero testi nel batch: {len(texts)}")
-                
-                # Mostra i testi più lunghi che potrebbero aver causato l'errore
+                print(f"⚠️  ERRORE TOKEN IMPREVISTO (nonostante tokenizzazione preventiva):")
+                print(f"   🔍 Numero testi nel batch: {len(texts)}")
                 for i, text in enumerate(texts):
-                    estimated_tokens = self._estimate_tokens(text)
-                    if estimated_tokens > 7000:  # Soglia sospetta
-                        print(f"   📝 Testo {i+1} sospetto ({estimated_tokens} token stimati):")
-                        print(f"      Inizio: '{text[:300]}...'")
-                        print(f"      Fine: '...{text[-300:]}'")
-                        print(f"      Lunghezza: {len(text)} caratteri")
-                        print(f"      " + "="*80)
+                    session_info = f" (Session: {session_ids[i]})" if session_ids and i < len(session_ids) else ""
+                    print(f"   📝 Testo {i+1}{session_info}: {len(text)} caratteri")
             
             raise RuntimeError(f"Errore durante encoding OpenAI: Errore API OpenAI: {e}")
         except Exception as e:
@@ -371,57 +386,7 @@ class OpenAIEmbedder(BaseEmbedder):
             Lista nomi modelli supportati
         """
         return list(cls.MODEL_DIMENSIONS.keys())
-    
-    def _estimate_tokens(self, text: str) -> int:
-        """
-        Stima approssimativa del numero di token per un testo
-        
-        Args:
-            text: Testo da stimare
-            
-        Returns:
-            Numero stimato di token
-            
-        Ultima modifica: 2025-08-25
-        """
-        # Approssimazione: ~4 caratteri per token in italiano/inglese
-        # Include spazi, punteggiatura, ecc.
-        return len(text) // 4 + 1
-    
-    def _truncate_text_to_tokens(self, text: str, max_tokens: int = 8000) -> str:
-        """
-        Tronca un testo per rispettare il limite di token
-        
-        Args:
-            text: Testo da troncare
-            max_tokens: Limite massimo di token
-            
-        Returns:
-            Testo troncato
-            
-        Ultima modifica: 2025-08-25
-        """
-        estimated_tokens = self._estimate_tokens(text)
-        
-        if estimated_tokens <= max_tokens:
-            return text
-            
-        print(f"⚠️  Testo troppo lungo: {estimated_tokens} token stimati (max: {max_tokens})")
-        print(f"📝 Inizio conversazione problematica: '{text[:200]}...'")
-        print(f"📝 Fine conversazione problematica: '...{text[-200:]}'")
-        
-        # Tronca mantenendo circa max_tokens caratteri
-        max_chars = max_tokens * 4
-        truncated = text[:max_chars]
-        
-        # Cerca di terminare su una parola completa
-        last_space = truncated.rfind(' ')
-        if last_space > max_chars * 0.9:  # Se lo spazio è vicino alla fine
-            truncated = truncated[:last_space]
-        
-        print(f"✂️  Testo troncato da {len(text)} a {len(truncated)} caratteri")
-        return truncated
-    
+
     def get_model_info(self) -> Dict[str, Any]:
         """
         Restituisce informazioni sul modello corrente

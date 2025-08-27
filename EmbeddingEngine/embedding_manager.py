@@ -23,6 +23,14 @@ sys.path.append(os.path.join(current_dir, '..', 'EmbeddingEngine'))
 from base_embedder import BaseEmbedder
 from embedding_engine_factory import embedding_factory
 
+# Importazione classe Tenant per eliminare conversioni ridondanti
+try:
+    from Utils.tenant import Tenant
+    TENANT_AVAILABLE = True
+except ImportError:
+    TENANT_AVAILABLE = False
+    print("⚠️ EMBEDDING MANAGER: Classe Tenant non disponibile, uso retrocompatibilità")
+
 
 class EmbeddingManager:
     """
@@ -90,30 +98,62 @@ class EmbeddingManager:
             print(f"⚠️ EMBEDDING MANAGER: Errore normalizzazione '{tenant_identifier}': {e}")
             return tenant_identifier
     
-    def get_shared_embedder(self, tenant_id: str = "default") -> BaseEmbedder:
+    def get_shared_embedder(self, tenant_or_id = "default") -> BaseEmbedder:
         """
         Ottiene embedder condiviso per applicazione
         
         Args:
-            tenant_id: ID tenant per configurazione embedding engine (slug o UUID)
+            tenant_or_id: Oggetto Tenant o tenant_id (slug/UUID) per compatibilità
             
         Returns:
             Embedder condiviso configurato per tenant
         """
+        # Gestione compatibilità Tenant vs tenant_id string
+        if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
+            # Oggetto Tenant - usa direttamente i suoi dati
+            tenant = tenant_or_id
+            normalized_tenant_id = tenant.tenant_id
+            tenant_display = f"{tenant.tenant_name} ({normalized_tenant_id})"
+        else:
+            # Retrocompatibilità: tenant_id string - normalizza
+            normalized_tenant_id = self._normalize_tenant_id(tenant_or_id)
+            tenant_display = str(tenant_or_id)
+            
         import traceback
         stack_trace = ''.join(traceback.format_stack()[-3:-1])
-        print(f"🔍 CHIAMATA get_shared_embedder(tenant_id='{tenant_id}') da:")
+        print(f"🔍 CHIAMATA get_shared_embedder(tenant='{tenant_display}') da:")
         print(f"   {stack_trace.strip()}")
         
-        # NORMALIZZA SEMPRE A UUID
-        normalized_tenant_id = self._normalize_tenant_id(tenant_id)
+        # TENANT ID NORMALIZZATO: {normalized_tenant_id}
         
         with self._manager_lock:
-            # Se stesso tenant, restituisce embedder esistente
+            # Se stesso tenant, verifica coerenza tipo embedder
             if (self._current_embedder is not None and 
                 self._current_tenant_id == normalized_tenant_id):
-                print(f"♻️  Riuso embedder esistente per tenant {normalized_tenant_id}: {type(self._current_embedder).__name__}")
-                return self._current_embedder
+                
+                # CONTROLLO COERENZA: Verifica se il tipo cached è ancora valido
+                current_engine_config = embedding_factory._get_current_engine_type(normalized_tenant_id)
+                cached_type = type(self._current_embedder).__name__.lower()
+                
+                # Mappatura tipi per controllo coerenza
+                type_mapping = {
+                    'labseembedder': 'labse',
+                    'bgemembedder': 'bge_m3', 
+                    'openaiembedder': 'openai_small',
+                    'openailargeembedder': 'openai_large'
+                }
+                
+                expected_engine = current_engine_config if current_engine_config else 'labse'
+                cached_engine = type_mapping.get(cached_type, 'unknown')
+                
+                # Se i tipi sono coerenti, riuso embedder esistente
+                if cached_engine == expected_engine or expected_engine.startswith(cached_engine):
+                    print(f"♻️  Riuso embedder esistente per tenant {normalized_tenant_id}: {type(self._current_embedder).__name__}")
+                    return self._current_embedder
+                else:
+                    print(f"⚠️  INCOERENZA CACHE: embedder cached '{cached_engine}' != config DB '{expected_engine}'")
+                    print(f"🔄 Forzo ricaricamento embedder per tenant {normalized_tenant_id}")
+                    # Continua con cleanup e reload
             
             print(f"🔄 Switch embedder condiviso da {self._current_tenant_id} a {normalized_tenant_id}")
             
@@ -173,32 +213,55 @@ class EmbeddingManager:
                 self._current_embedder = None
                 self._current_tenant_id = None
     
-    def switch_tenant_embedder(self, tenant_id: str, force_reload: bool = False) -> BaseEmbedder:
+    def switch_tenant_embedder(self, tenant_or_id, force_reload: bool = False) -> BaseEmbedder:
         """
         Forza switch a embedder specifico per tenant
         
+        CORREZIONE 2025-08-25: Fix cache inconsistency durante force_reload
+        
         Args:
-            tenant_id: Nuovo tenant ID (slug o UUID)
+            tenant_or_id: Oggetto Tenant o tenant_id (slug/UUID) per compatibilità
             force_reload: Se True, forza reload anche per stesso tenant
             
         Returns:
             Nuovo embedder configurato
         """
-        # NORMALIZZA SEMPRE A UUID
-        normalized_tenant_id = self._normalize_tenant_id(tenant_id)
+        # Gestione compatibilità Tenant vs tenant_id string
+        if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
+            # Oggetto Tenant - usa direttamente i suoi dati
+            tenant = tenant_or_id
+            normalized_tenant_id = tenant.tenant_id
+            tenant_display = f"{tenant.tenant_name} ({normalized_tenant_id})"
+        else:
+            # Retrocompatibilità: tenant_id string - normalizza
+            normalized_tenant_id = self._normalize_tenant_id(tenant_or_id)
+            tenant_display = str(tenant_or_id)
         
         with self._manager_lock:
-            print(f"🔄 Switch forzato embedder a tenant {tenant_id} -> {normalized_tenant_id} (force_reload={force_reload})")
+            print(f"🔄 Switch forzato embedder a tenant {tenant_display} -> {normalized_tenant_id} (force_reload={force_reload})")
             
-            # Se force_reload=True, SEMPRE cleanup e ricarica
+            # Se force_reload=True, SEMPRE cleanup COMPLETO e ricarica
             if force_reload:
                 print(f"🔄 Force reload: cleanup embedder corrente e ricarica configurazione")
+                
+                # *** CORREZIONE CRITICA: CLEANUP COMPLETO ***
                 self._cleanup_current_embedder()
+                
+                # *** AGGIUNTA: RESET ESPLICITO CACHE INTERNA ***
+                self._current_embedder = None
+                self._current_tenant_id = None
+                
+                print(f"🧹 Cache interna EmbeddingManager completamente invalidata")
                 
                 # FORZA ANCHE LA FACTORY A RICARICARE BYPASSANDO LA SUA CACHE
                 try:
                     print(f"🔧 FORCE RELOAD: ordino alla factory di bypassare completamente la cache")
-                    self._current_embedder = embedding_factory.get_embedder_for_tenant(normalized_tenant_id, force_reload=True)
+                    
+                    # *** IMPORTANTE: OTTIENI NUOVO EMBEDDER FRESH ***
+                    new_embedder = embedding_factory.get_embedder_for_tenant(normalized_tenant_id, force_reload=True)
+                    
+                    # *** AGGIORNAMENTO ATOMICO CACHE ***
+                    self._current_embedder = new_embedder
                     self._current_tenant_id = normalized_tenant_id
                     
                     print(f"✅ Embedder FORZATAMENTE ricaricato per tenant {normalized_tenant_id}: {type(self._current_embedder).__name__}")
@@ -249,6 +312,41 @@ class EmbeddingManager:
                 'factory_cache': embedding_factory.get_cache_status()
             }
     
+    def invalidate_cache_for_tenant(self, tenant_or_id):
+        """
+        Invalida esplicitamente la cache per un tenant specifico
+        
+        Scopo: Utile per debug e manutenzione, forza invalidazione cache senza reload
+        
+        Args:
+            tenant_or_id: Oggetto Tenant o tenant_id (slug/UUID) per compatibilità
+            
+        Ultimo aggiornamento: 2025-08-25
+        """
+        # Gestione compatibilità Tenant vs tenant_id string
+        if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
+            # Oggetto Tenant - usa direttamente i suoi dati
+            tenant = tenant_or_id
+            normalized_tenant_id = tenant.tenant_id
+        else:
+            # Retrocompatibilità: tenant_id string - normalizza
+            normalized_tenant_id = self._normalize_tenant_id(tenant_or_id)
+        
+        with self._manager_lock:
+            if (self._current_embedder is not None and 
+                self._current_tenant_id == normalized_tenant_id):
+                
+                print(f"🧹 Invalidazione esplicita cache EmbeddingManager per tenant {normalized_tenant_id}")
+                self._cleanup_current_embedder()
+                
+                # Reset esplicito
+                self._current_embedder = None
+                self._current_tenant_id = None
+                
+                print(f"✅ Cache invalidata per tenant {normalized_tenant_id}")
+            else:
+                print(f"ℹ️ Nessuna cache attiva da invalidare per tenant {normalized_tenant_id}")
+
     def cleanup_all(self):
         """Cleanup completo manager"""
         with self._manager_lock:

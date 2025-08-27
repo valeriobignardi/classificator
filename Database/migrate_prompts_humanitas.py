@@ -34,7 +34,8 @@ class PromptMigrator:
         
     def _load_config(self):
         """Carica configurazione"""
-        with open('/home/ubuntu/classificazione_discussioni/config.yaml', 'r') as f:
+        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
+        with open(config_path, 'r') as f:
             return yaml.safe_load(f)
     
     def connect(self):

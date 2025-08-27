@@ -7,6 +7,7 @@ Descrizione: Engine di embedding BGE-M3 tramite Ollama per sistema di configuraz
 
 Storia aggiornamenti:
 2025-08-25 - Creazione iniziale con supporto Ollama BGE-M3
+2025-08-26 - Aggiunta tokenizzazione preventiva per conversazioni lunghe
 """
 
 import sys
@@ -19,6 +20,17 @@ from typing import Union, List, Optional, Dict, Any
 import logging
 
 # Aggiunta del percorso per BaseEmbedder
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from base_embedder import BaseEmbedder
+
+# Import TokenizationManager per gestione conversazioni lunghe
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
+try:
+    from tokenization_utils import TokenizationManager
+    TOKENIZATION_AVAILABLE = True
+except ImportError:
+    TokenizationManager = None
+    TOKENIZATION_AVAILABLE = False
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from base_embedder import BaseEmbedder
 
@@ -64,6 +76,18 @@ class BGE_M3_Embedder(BaseEmbedder):
         
         # Setup logging
         self.logger = logging.getLogger(__name__)
+        
+        # Inizializza TokenizationManager per gestione conversazioni lunghe
+        self.tokenizer = None
+        if TOKENIZATION_AVAILABLE:
+            try:
+                self.tokenizer = TokenizationManager()
+                print(f"✅ TokenizationManager integrato in BGE-M3 per gestione conversazioni lunghe")
+            except Exception as e:
+                print(f"⚠️  Errore inizializzazione TokenizationManager in BGE-M3: {e}")
+                self.tokenizer = None
+        else:
+            print(f"⚠️  TokenizationManager non disponibile per BGE-M3")
         
         print(f"🚀 Inizializzazione BGE-M3 embedder:")
         print(f"   📡 Server Ollama: {self.ollama_url}")
@@ -143,15 +167,18 @@ class BGE_M3_Embedder(BaseEmbedder):
                normalize_embeddings: bool = True,
                batch_size: int = 16,
                show_progress_bar: bool = False,
+               session_ids: List[str] = None,  # Nuovo parametro per session_ids
                **kwargs) -> np.ndarray:
         """
         Genera embeddings per i testi usando BGE-M3 tramite Ollama
+        con tokenizzazione preventiva per conversazioni lunghe
         
         Args:
             texts: Testo singolo o lista di testi
             normalize_embeddings: Se normalizzare gli embeddings
             batch_size: Dimensione batch per processing
             show_progress_bar: Mostra barra progresso
+            session_ids: Lista degli ID di sessione corrispondenti ai testi (opzionale)
             
         Returns:
             Array numpy con embeddings shape (n_samples, 1024)
@@ -162,16 +189,49 @@ class BGE_M3_Embedder(BaseEmbedder):
         
         print(f"🔍 Encoding {len(texts)} testi con BGE-M3...")
         
+        # ========================================================================
+        # 🔥 TOKENIZZAZIONE PREVENTIVA PER BGE-M3
+        # ========================================================================
+        
+        processed_texts = texts
+        
+        if self.tokenizer:
+            print(f"\n🔍 TOKENIZZAZIONE PREVENTIVA BGE-M3 CLUSTERING")
+            print(f"=" * 60)
+            
+            try:
+                processed_texts, tokenization_stats = self.tokenizer.process_conversations_for_clustering(
+                    texts, session_ids
+                )
+                
+                print(f"✅ Tokenizzazione BGE-M3 completata:")
+                print(f"   📊 Conversazioni processate: {tokenization_stats['processed_count']}")
+                print(f"   📊 Conversazioni troncate: {tokenization_stats['truncated_count']}")
+                print(f"   📊 Token limite configurato: {tokenization_stats['max_tokens']}")
+                if tokenization_stats['truncated_count'] > 0:
+                    print(f"   ✂️  {tokenization_stats['truncated_count']} conversazioni TRONCATE per rispettare limite token")
+                else:
+                    print(f"   ✅ Tutte le conversazioni entro i limiti, nessun troncamento")
+                print(f"=" * 60)
+                
+            except Exception as e:
+                print(f"⚠️  Errore durante tokenizzazione BGE-M3: {e}")
+                print(f"🔄 Fallback a preprocessing legacy")
+                processed_texts = texts
+        else:
+            print(f"⚠️  TokenizationManager non disponibile per BGE-M3")
+            print(f"📏 Usando preprocessing legacy")
+        
         embeddings = []
         
         try:
             # Processa in batch per gestire grandi volumi
-            for i in range(0, len(texts), batch_size):
-                batch_texts = texts[i:i+batch_size]
+            for i in range(0, len(processed_texts), batch_size):
+                batch_texts = processed_texts[i:i+batch_size]
                 batch_embeddings = []
                 
                 if show_progress_bar:
-                    print(f"📊 Batch {i//batch_size + 1}/{(len(texts)-1)//batch_size + 1}")
+                    print(f"📊 Batch {i//batch_size + 1}/{(len(processed_texts)-1)//batch_size + 1}")
                 
                 for text in batch_texts:
                     # Preprocessing testo

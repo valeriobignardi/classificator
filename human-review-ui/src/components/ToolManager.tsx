@@ -42,9 +42,7 @@ import {
   Code as CodeIcon,
   Functions as FunctionsIcon,
   Save as SaveIcon,
-  Cancel as CancelIcon,
-  Visibility as VisibilityIcon,
-  VisibilityOff as VisibilityOffIcon
+  Cancel as CancelIcon
 } from '@mui/icons-material';
 import { useTenant } from '../contexts/TenantContext';
 

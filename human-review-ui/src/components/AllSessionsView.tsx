@@ -1,78 +1,78 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
+  Box,
+  Typography,
   Card,
   CardContent,
-  Typography,
-  Button,
-  Box,
   Chip,
+  CircularProgress,
   Alert,
-  LinearProgress,
-  IconButton,
-  Tooltip,
-  TextField,
+  Button,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
   FormControlLabel,
   Switch,
+  Pagination,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogActions,
-  InputLabel,
-  Select,
-  MenuItem,
-  FormControl
+  TextField,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Stack,
+  Tooltip,
+  IconButton,
+  LinearProgress
 } from '@mui/material';
 import {
-  Refresh as RefreshIcon,
   Add as AddIcon,
+  Refresh as RefreshIcon,
+  FilterList as FilterIcon,
+  ExpandMore as ExpandMoreIcon,
+  PlayArrow as PlayArrowIcon,
+  Warning as WarningIcon,
   CheckCircle as CheckCircleIcon,
   Schedule as ScheduleIcon,
   Assignment as AssignmentIcon,
-  AutoFixHigh as AutoFixHighIcon,
-  PlayArrow as PlayArrowIcon,
-  Settings as SettingsIcon
+  AutoFixHigh as AutoFixHighIcon
 } from '@mui/icons-material';
+import { useTenant } from '../contexts/TenantContext';
 import { apiService } from '../services/apiService';
 import FineTuningPanel from './FineTuningPanel';
 
 interface Classification {
   tag_name: string;
   confidence: number;
-  method: string;
+  source?: string;
   created_at: string;
-  source?: 'database' | 'cache_pending';  // Nuovo campo per distinguere la fonte
+  method?: string;
 }
 
 interface Session {
   session_id: string;
-  conversation_text: string;
-  full_text: string;
-  num_messages: number;
-  num_user_messages: number;
+  client_name?: string;
   status: 'available' | 'in_review_queue' | 'reviewed';
   created_at: string;
-  last_activity: string;
-  classifications: Classification[];
+  conversation_text?: string;
+  full_text?: string;
+  num_messages?: number;
+  num_user_messages?: number;
+  last_activity?: string;
+  session_summary?: string;
+  tags?: string[];
+  predicted_label?: string;
+  confidence?: number;
+  classification_date?: string;
+  classifications?: Classification[];
 }
 
 interface AllSessionsViewProps {
   clientName: string;
-  onSessionAdd: (sessionId: string) => void;
-}
-
-// Nuove interfacce per integrazione MongoDB
-interface MongoTenant {
-  tenant_name: string;
-  client: string;
-  session_count: number;
-  classification_count: number;
-}
-
-interface MongoLabel {
-  label: string;
-  count: number;
-  session_count: number;
-  avg_confidence: number;
+  onSessionAdd?: () => void;
 }
 
 const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSessionAdd }) => {
@@ -83,16 +83,8 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
   const [includeReviewed, setIncludeReviewed] = useState(false);
   const [addingToQueue, setAddingToQueue] = useState<string | null>(null);
   const [currentLimit, setCurrentLimit] = useState<number>(50);
-  const [selectedLabel, setSelectedLabel] = useState<string>('all'); // Nuovo stato per filtro etichetta
-  const [recentlyAddedSessions, setRecentlyAddedSessions] = useState<Set<string>>(new Set()); // Per mostrare temporaneamente sessioni appena aggiunte
-  
-  // Nuovi stati per integrazione MongoDB  
-  const [availableTenants, setAvailableTenants] = useState<MongoTenant[]>([]);
-  const [selectedTenant, setSelectedTenant] = useState<string>('');
-  const [availableLabels, setAvailableLabels] = useState<MongoLabel[]>([]);
-  const [tenantLoading, setTenantLoading] = useState(false);
-  const [labelsLoading, setLabelsLoading] = useState(false);
-  const [mongoMode, setMongoMode] = useState<boolean>(true); // Usa MongoDB per default
+  const [selectedLabel, setSelectedLabel] = useState<string>('all');
+  const [recentlyAddedSessions, setRecentlyAddedSessions] = useState<Set<string>>(new Set());
   
   // Stati per classificazione completa
   const [classificationLoading, setClassificationLoading] = useState(false);
@@ -102,11 +94,11 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
     force_retrain: true,
     max_sessions: null as number | null,
     force_review: false,
-    force_reprocess_all: false  // NUOVO: Riclassifica tutto dall'inizio
+    force_reprocess_all: false
   });
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  const loadSessions = async () => {
+  const loadSessions = useCallback(async () => {
     setLoading(true);
     setError(null);
     
@@ -119,11 +111,11 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
     } finally {
       setLoading(false);
     }
-  };
+  }, [clientName, includeReviewed]);
 
   useEffect(() => {
     loadSessions();
-  }, [clientName, includeReviewed]);
+  }, [loadSessions]);
 
   const handleAddToQueue = async (sessionId: string) => {
     setAddingToQueue(sessionId);
@@ -156,7 +148,9 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
         });
       }, 3000);
       
-      onSessionAdd(sessionId);
+      if (onSessionAdd) {
+        onSessionAdd();
+      }
       setSuccessMessage(`✅ Sessione ${sessionId.substring(0, 12)}... aggiunta alla Review Queue e rimossa dalla lista`);
       
       // Ricarica le sessioni per sincronizzare con il server (in background)
@@ -512,7 +506,7 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
                               border: `1px solid ${borderColor}`,
                               borderRadius: 1,
                               p: 1.5,
-                              mb: index < session.classifications.length - 1 ? 1 : 0,
+                              mb: index < (session.classifications?.length || 0) - 1 ? 1 : 0,
                               backgroundColor: backgroundColor,
                               position: 'relative'
                             }}
@@ -600,9 +594,9 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
                     }}
                   >
                     <Typography variant="body2">
-                      {session.conversation_text.length > 200
+                      {session.conversation_text && session.conversation_text.length > 200
                         ? `${session.conversation_text.substring(0, 200)}...`
-                        : session.conversation_text}
+                        : session.conversation_text || 'Nessun testo disponibile'}
                     </Typography>
                   </Box>
 

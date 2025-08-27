@@ -157,9 +157,10 @@ class QualityGateEngine:
         """
         effective_tenant = tenant_name or self.tenant_name or "humanitas"
         
-        if embedding_manager is not None:
-            return embedding_manager.get_shared_embedder(effective_tenant)
-        else:
+        try:
+            from EmbeddingEngine.simple_embedding_manager import simple_embedding_manager
+            return simple_embedding_manager.get_embedder_for_tenant(effective_tenant)
+        except Exception:
             # Fallback per compatibilità
             from EmbeddingEngine.labse_embedder import LaBSEEmbedder
             return LaBSEEmbedder()
@@ -541,9 +542,10 @@ class QualityGateEngine:
             return []
 
     def resolve_review_case(self, case_id: str, human_decision: str, 
-                          human_confidence: float = 1.0, notes: str = "") -> bool:
+                          human_confidence: float = 1.0, notes: str = "") -> Dict[str, Any]:
         """
         Scopo: Risolve un caso di revisione con la decisione umana usando MongoDB
+               e propaga la decisione ai membri dello stesso cluster se è rappresentante
         
         Parametri input:
             - case_id: ID del caso (MongoDB _id)
@@ -552,13 +554,13 @@ class QualityGateEngine:
             - notes: Note aggiuntive
             
         Output:
-            - True se risolto con successo
+            - Dizionario con risultati dettagliati della risoluzione e propagazione
             
-        Ultimo aggiornamento: 2025-08-21
+        Ultimo aggiornamento: 2025-08-27
         """
         
-        # Risolvi il caso direttamente in MongoDB
-        success = self.mongo_reader.resolve_review_session(
+        # Usa il nuovo metodo con propagazione cluster
+        result = self.mongo_reader.resolve_review_session_with_cluster_propagation(
             case_id=case_id,
             client_name=self.tenant_name,
             human_decision=human_decision,
@@ -566,9 +568,10 @@ class QualityGateEngine:
             human_notes=notes
         )
         
-        if not success:
-            self.logger.warning(f"Caso di revisione {case_id} non trovato")
-            return False
+        if not result.get("case_resolved", False):
+            error = result.get("error", "Motivo sconosciuto")
+            self.logger.warning(f"Caso di revisione {case_id} non risolto: {error}")
+            return result
         
         # Log della decisione per training futuro (manteniamo il log file)
         decision_log = convert_numpy_types({
@@ -583,12 +586,30 @@ class QualityGateEngine:
             'human_confidence': human_confidence,
             'uncertainty_score': 0.8,  # Default
             'novelty_score': 0.5,      # Default
-            'reason': 'mongo_review',
+            'reason': 'mongo_review_with_cluster_propagation',
             'notes': notes,
-            'resolved_at': datetime.now().isoformat()
+            'resolved_at': datetime.now().isoformat(),
+            'cluster_propagation': {
+                'is_representative': result.get("is_representative", False),
+                'propagated_cases': result.get("propagated_cases", 0),
+                'cluster_id': result.get("cluster_id")
+            }
         })
         
-        self.logger.info(f"Risolto caso {case_id}: umano sceglie '{human_decision}'")
+        # Log delle informazioni di propagazione
+        propagated_count = result.get("propagated_cases", 0)
+        is_representative = result.get("is_representative", False)
+        cluster_id = result.get("cluster_id")
+        
+        if is_representative and propagated_count > 0:
+            self.logger.info(f"🔄 Caso {case_id} risolto come RAPPRESENTANTE: '{human_decision}' "
+                           f"propagato a {propagated_count} membri del cluster {cluster_id}")
+        elif is_representative and propagated_count == 0:
+            self.logger.info(f"🎯 Caso {case_id} risolto come RAPPRESENTANTE: '{human_decision}' "
+                           f"(nessun membro da propagare nel cluster {cluster_id})")
+        else:
+            self.logger.info(f"📝 Caso {case_id} risolto: '{human_decision}' "
+                           f"(caso non-rappresentante)")
         
         # Log in JSON per training futuro
         with open(self.training_log_path, 'a', encoding='utf-8') as f:
@@ -598,7 +619,8 @@ class QualityGateEngine:
         self._update_human_tags_cache(human_decision)
         
         self.logger.info(f"Caso {case_id} risolto: {human_decision} (confidenza: {human_confidence})")
-        return True
+        
+        return result
     
     def _save_human_decision_to_database(self, case: ReviewCase, human_decision: str, 
                                        human_confidence: float, notes: str) -> bool:

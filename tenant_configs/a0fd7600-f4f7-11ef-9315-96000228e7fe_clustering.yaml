@@ -1,13 +1,29 @@
 clustering_parameters:
-  cluster_selection_epsilon: 0.2
+  allow_single_cluster: false
+  alpha: 0.1
+  cluster_selection_epsilon: 0.01
+  cluster_selection_method: eom
+  max_cluster_size: 0
   metric: cosine
-  min_cluster_size: 3
-  min_samples: 3
-last_updated: '2025-08-25T19:03:01.333203'
+  min_cluster_size: 2
+  min_samples: 1
+  only_user: true
+  umap_metric: cosine
+  umap_min_dist: 0.1
+  umap_n_components: 50
+  umap_n_neighbors: 15
+  umap_random_state: 42
+  use_umap: true
+last_updated: '2025-08-27T01:21:47.668514'
 previous_config_backup:
-  cluster_selection_epsilon: 0.2
+  allow_single_cluster: false
+  alpha: 0.1
+  cluster_selection_epsilon: 0.01
+  cluster_selection_method: eom
+  max_cluster_size: 0
   metric: cosine
-  min_cluster_size: 8
-  min_samples: 4
+  min_cluster_size: 2
+  min_samples: 1
+  only_user: true
 tenant_id: a0fd7600-f4f7-11ef-9315-96000228e7fe
 updated_by: web_interface

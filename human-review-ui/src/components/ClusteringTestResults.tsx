@@ -24,13 +24,18 @@ import {
   Card,
   CardContent,
   Chip,
-  Alert
+  Alert,
+  Tabs,
+  Tab
 } from '@mui/material';
 import {
   CheckCircle as CheckCircleIcon,
   Error as ErrorIcon,
-  Close as CloseIcon
+  Close as CloseIcon,
+  Assessment as AssessmentIcon,
+  Visibility as VisibilityIcon
 } from '@mui/icons-material';
+import ClusterVisualizationComponent from './ClusterVisualizationComponent';
 
 interface ClusteringTestResult {
   success: boolean;
@@ -68,6 +73,30 @@ interface ClusteringTestResult {
       text_length: number;
     }>;
   };
+  // 🆕 Dati visualizzazione dal backend
+  visualization_data?: {
+    points: Array<{
+      x: number;
+      y: number;
+      z?: number;
+      cluster_id: number;
+      cluster_label: string;
+      session_id: string;
+      text_preview: string;
+    }>;
+    cluster_colors: Record<number, string>;
+    statistics: {
+      total_points: number;
+      n_clusters: number;
+      n_outliers: number;
+      dimensions: number;
+    };
+    coordinates: {
+      tsne_2d: Array<[number, number]>;
+      pca_2d: Array<[number, number]>;
+      pca_3d: Array<[number, number, number]>;
+    };
+  };
 }
 
 interface ClusteringTestResultsProps {
@@ -88,6 +117,8 @@ const ClusteringTestResults: React.FC<ClusteringTestResultsProps> = ({
 }) => {
   console.log('🔍 [CLUSTERING DIALOG] Props ricevute:', { open, result, isLoading });
   console.log('🔍 [CLUSTERING DIALOG] Result details:', result ? JSON.stringify(result, null, 2) : 'NULL');
+  
+  const [activeTab, setActiveTab] = React.useState(0);
   
   if (!result) {
     console.log('❌ [CLUSTERING DIALOG] Result è null, non mostro nulla');
@@ -228,13 +259,55 @@ const ClusteringTestResults: React.FC<ClusteringTestResultsProps> = ({
       </DialogTitle>
 
       <DialogContent dividers>
-        {result.success ? (
-          renderSuccessResult()
-        ) : (
-          <Alert severity="error" sx={{ mb: 2 }}>
-            <Typography variant="h6" gutterBottom>❌ Errore</Typography>
-            <Typography>{result.error || 'Errore sconosciuto durante il test clustering'}</Typography>
-          </Alert>
+        {/* Tabs per organizzare informazioni */}
+        <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
+          <Tabs 
+            value={activeTab} 
+            onChange={(_, newValue) => setActiveTab(newValue)}
+            aria-label="Risultati clustering tabs"
+          >
+            <Tab 
+              label="📊 Statistiche" 
+              icon={<AssessmentIcon />}
+              iconPosition="start"
+            />
+            <Tab 
+              label="🎨 Visualizzazione" 
+              icon={<VisibilityIcon />}
+              iconPosition="start"
+              disabled={!result.visualization_data}
+            />
+          </Tabs>
+        </Box>
+
+        {/* Tab Statistiche */}
+        {activeTab === 0 && (
+          result.success ? (
+            renderSuccessResult()
+          ) : (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              <Typography variant="h6" gutterBottom>❌ Errore</Typography>
+              <Typography>{result.error || 'Errore sconosciuto durante il test clustering'}</Typography>
+            </Alert>
+          )
+        )}
+
+        {/* Tab Visualizzazione */}
+        {activeTab === 1 && result.visualization_data && (
+          <Box>
+            <Alert severity="info" sx={{ mb: 2 }}>
+              <Typography variant="body2">
+                <strong>Visualizzazione Interattiva:</strong> Usa i controlli per esplorare i cluster in 2D/3D. 
+                Hover sui punti per dettagli conversazioni.
+              </Typography>
+            </Alert>
+            
+            <ClusterVisualizationComponent
+              mode="parameters"
+              visualizationData={result.visualization_data}
+              height={600}
+            />
+          </Box>
         )}
       </DialogContent>
 

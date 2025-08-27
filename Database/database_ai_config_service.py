@@ -13,8 +13,18 @@ import mysql.connector
 from mysql.connector import Error
 import os
 import json
+import sys
 from typing import Dict, Optional, Any
 from datetime import datetime
+
+# Import Tenant class per gestione centralizzata tenant
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+try:
+    from Utils.tenant import Tenant
+    TENANT_AVAILABLE = True
+except ImportError:
+    Tenant = None
+    TENANT_AVAILABLE = False
 
 
 class DatabaseAIConfigService:
@@ -141,21 +151,40 @@ class DatabaseAIConfigService:
             print(f"❌ Errore risoluzione tenant_id per '{identifier}': {e}")
             return identifier
     
-    def get_tenant_configuration(self, tenant_id, force_no_cache=False):
+    def get_tenant_configuration(self, tenant_id=None, tenant=None, force_no_cache=False):
         """
         Scopo: Recupera la configurazione AI per un tenant specifico
         
         Parametri di input:
-        - tenant_id: ID del tenant (UUID)
+        - tenant_id: [DEPRECATED] ID del tenant (UUID) - usare tenant invece
+        - tenant: Oggetto Tenant centralizzato (preferito)
         - force_no_cache: Se True, bypassa completamente la cache
         
         Valori di ritorno:
         - dict: Configurazione completa del tenant
         
-        Data ultima modifica: 2025-08-25
+        UPGRADE: Preferire l'uso del parametro 'tenant' invece di 'tenant_id'
+        Data ultima modifica: 2025-08-26
         """
-        # Risolvi tenant_id da slug se necessario
-        resolved_tenant_id = self._resolve_tenant_id(tenant_id)
+        
+        # 🏗️ GESTIONE TENANT CENTRALIZZATA
+        if tenant and TENANT_AVAILABLE:
+            resolved_tenant_id = tenant.tenant_id
+            tenant_info = {
+                'tenant_id': tenant.tenant_id,
+                'tenant_name': tenant.tenant_name,
+                'tenant_slug': tenant.tenant_slug,
+                'tenant_database': tenant.tenant_database
+            }
+            print(f"🎯 DatabaseAI: Uso tenant centralizzato {tenant}")
+        elif tenant_id:
+            # Legacy mode: risolvi tenant_id
+            resolved_tenant_id = self._resolve_tenant_id(tenant_id)
+            tenant_info = None  # Sarà risolto nel database query
+            print(f"🔄 DatabaseAI: Modalità legacy - risolvo tenant_id {tenant_id}")
+        else:
+            raise ValueError("Deve essere fornito 'tenant' (preferito) o 'tenant_id' (legacy)")
+            
         
         # Se force_no_cache=True, bypassa completamente la cache
         if force_no_cache:
@@ -191,17 +220,34 @@ class DatabaseAIConfigService:
             result = cursor.fetchone()
             cursor.close()
             
+            print(f"🔍 [DEBUG] Query eseguita per tenant_id: {resolved_tenant_id}")
+            print(f"🔍 [DEBUG] Risultato database: {result}")
+            
             if result:
-                # Parsea JSON configs se presenti
-                config = {
-                    'tenant_id': result['tenant_id'],
-                    'tenant_name': result['tenant_name'],
-                    'tenant_slug': result['tenant_slug'],
-                    'embedding_engine': result['embedding_engine'],
-                    'llm_engine': result['llm_engine'],
-                    'is_active': result['is_active'],
-                    'updated_at': result['updated_at']
-                }
+                # 🎯 USA INFORMAZIONI TENANT CENTRALIZZATE se disponibili
+                if tenant_info:
+                    # Usa informazioni dal tenant centralizzato (più affidabili)
+                    config = {
+                        'tenant_id': tenant_info['tenant_id'],
+                        'tenant_name': tenant_info['tenant_name'],
+                        'tenant_slug': tenant_info['tenant_slug'],
+                        'tenant_database': tenant_info['tenant_database'],  # Info extra dal Tenant
+                        'embedding_engine': result['embedding_engine'],
+                        'llm_engine': result['llm_engine'],
+                        'is_active': result['is_active'],
+                        'updated_at': result['updated_at']
+                    }
+                else:
+                    # Fallback legacy: usa info dal database
+                    config = {
+                        'tenant_id': result['tenant_id'],
+                        'tenant_name': result['tenant_name'],
+                        'tenant_slug': result['tenant_slug'],
+                        'embedding_engine': result['embedding_engine'],
+                        'llm_engine': result['llm_engine'],
+                        'is_active': result['is_active'],
+                        'updated_at': result['updated_at']
+                    }
                 
                 # Parsea configurazioni JSON
                 if result['embedding_config']:
@@ -402,6 +448,10 @@ class DatabaseAIConfigService:
                 model_name, llm_config_json
             ))
             
+            print(f"🔍 [DEBUG] Salvataggio LLM: tenant_id={tenant_id}, model_name={model_name}")
+            print(f"🔍 [DEBUG] Upsert query: {upsert_query}")
+            print(f"🔍 [DEBUG] Parametri: ({tenant_id}, {tenant_name}, {tenant_slug}, {model_name}, {llm_config_json})")
+            
             self.connection.commit()
             cursor.close()
             
@@ -410,6 +460,22 @@ class DatabaseAIConfigService:
             self._tenant_configs_cache.clear()
             self._cache_timestamp = None
             print("🗑️ Cache configurazioni invalidata dopo modifica LLM engine")
+            
+            # CORREZIONE CRITICA: Invalida cache LLMFactory per forzare reload modello
+            try:
+                import sys
+                import os
+                sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Classification'))
+                from llm_factory import llm_factory
+                
+                # Invalida cache LLM per il tenant specificato
+                llm_factory.invalidate_tenant_cache(tenant_id)
+                print(f"🗑️ Cache LLMFactory invalidata per tenant {tenant_id}")
+                
+            except ImportError:
+                print("⚠️ LLMFactory non disponibile per invalidazione cache")
+            except Exception as e:
+                print(f"⚠️ Errore invalidazione cache LLMFactory: {e}")
             
             print(f"✅ Modello LLM '{model_name}' impostato per tenant '{tenant_name}'")
             

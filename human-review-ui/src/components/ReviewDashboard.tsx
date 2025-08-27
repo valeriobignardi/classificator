@@ -73,14 +73,13 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [uiConfig, setUiConfig] = useState<any>(null);
-  const [customLimit, setCustomLimit] = useState<number | string>('');
   const [currentLimit, setCurrentLimit] = useState<number>(2000);  // AUMENTATO LIMITE INIZIALE: ora parte con 2000 per vedere tutte le sessioni
 
   // Stato per force_review toggle
   const [forceReview, setForceReview] = useState(false);
   
   // 🔍 Context per gestire tenant e prompt status
-  const { selectedTenant, promptStatus } = useTenant();
+  const { promptStatus } = useTenant();
   
   // Stato per dialogo training supervisionato SEMPLIFICATO - 4 PARAMETRI
   const [trainingDialogOpen, setTrainingDialogOpen] = useState(false);
@@ -200,12 +199,6 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
   const handleRefreshCases = useCallback(() => {
     loadCases();
   }, [loadCases]);
-
-  const handleLimitChange = (newLimit: number) => {
-    setCurrentLimit(newLimit);
-    setCustomLimit('');
-    loadCases(newLimit);
-  };
 
   const handleStartSupervisedTraining = async () => {
     setTrainingLoading(true);
@@ -327,8 +320,8 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
   }, [refreshTrigger, handleRefreshCases]);
 
   // Callback quando viene aggiunta una sessione alla queue dal componente AllSessionsView
-  const handleSessionAddedToQueue = useCallback((sessionId: string) => {
-    setSuccessMessage(`Sessione ${sessionId} aggiunta alla review queue`);
+  const handleSessionAddedToQueue = useCallback(() => {
+    setSuccessMessage(`Sessione aggiunta alla review queue`);
     // Ricarica i casi per aggiornare la lista
     handleRefreshCases();
   }, [handleRefreshCases]);

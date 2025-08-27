@@ -22,8 +22,7 @@ import {
 import {
   Assessment as AssessmentIcon,
   PieChart as PieChartIcon,
-  Analytics as AnalyticsIcon,
-  Refresh as RefreshIcon
+  Analytics as AnalyticsIcon
 } from '@mui/icons-material';
 import { Pie } from 'react-chartjs-2';
 import {
@@ -109,7 +108,7 @@ const ReviewStats: React.FC<ReviewStatsProps> = ({ tenant, refreshTrigger }) => 
     if (selectedTenant) {
       loadLabelStatistics();
     }
-  }, [loadLabelStatistics, refreshTrigger]);
+  }, [loadLabelStatistics, refreshTrigger, selectedTenant]);
 
   // Genera colori per il grafico a torta
   const generateColors = (count: number) => {

@@ -1,12 +1,46 @@
 #!/usr/bin/env python3
 """
-File: clustering_test_service_new.py
-Autore: Assistant
-Data creazione: 2025-08-25
-Descrizione: Servizio per test rapidi di clustering HDBSCAN senza LLM utilizzando pipeline esistente
-Storia aggiornamenti: 
-2025-08-25 - Creazione iniziale utilizzando pipeline EndToEndPipeline
+File: clustering_test_service.py
+Autore: Sistema di Classificazione
+Data: 2025-08-25
+
+Descrizione: Servizio per test e validazione algoritmi di clustering HDBSCAN
+Supporta test con campioni configurabili e genera visualizzazioni interattive
+
+Storia aggiornamenti:
+- 2025-08-25: Creazione servizio test clustering
+- 2025-08-26: Aggiunto supporto GPU clustering e parametri avanzati
+- 2025-08-26: Aggiunto sistema suggerimenti ottimizzazione outliers
 """
+
+import os
+import sys
+import time
+import yaml
+import logging
+from typing import Dict, List, Optional, Any, Tuple
+import numpy as np
+
+# Add project root to path
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+sys.path.append(os.path.join(os.path.dirname(__file__)))  # Add Clustering directory
+
+from hdbscan_clusterer import HDBSCANClusterer
+from hdbscan_tuning_guide import HDBSCANTuningGuide
+
+# Importa database risultati clustering per salvataggio automatico
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Database'))
+from clustering_results_db import ClusteringResultsDB
+
+# Importazione classe Tenant per eliminare conversioni ridondanti
+try:
+    from Utils.tenant import Tenant
+    TENANT_AVAILABLE = True
+except ImportError:
+    TENANT_AVAILABLE = False
+    print("⚠️ CLUSTERING TEST: Classe Tenant non disponibile, uso retrocompatibilità")
 
 import sys
 import os
@@ -32,7 +66,6 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Embedd
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Clustering'))
 
 from end_to_end_pipeline import EndToEndPipeline
-from embedding_manager import embedding_manager
 from hdbscan_clusterer import HDBSCANClusterer
 
 
@@ -68,6 +101,20 @@ class ClusteringTestService:
         # Pipeline cache per evitare reinizializzazioni multiple
         self.pipeline_cache = {}
         
+        # Inizializza database per salvataggio risultati clustering
+        try:
+            self.results_db = ClusteringResultsDB(config_path)
+            if hasattr(self, 'logger'):
+                self.logger.info("✅ Database risultati clustering inizializzato")
+            else:
+                print("✅ Database risultati clustering inizializzato")
+        except Exception as e:
+            if hasattr(self, 'logger'):
+                self.logger.error(f"❌ Errore inizializzazione database risultati: {e}")
+            else:
+                print(f"❌ Errore inizializzazione database risultati: {e}")
+            self.results_db = None
+        
     def _setup_logging(self):
         """
         Configura logging per il servizio
@@ -77,39 +124,91 @@ class ClusteringTestService:
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
     
-    def _get_pipeline(self, tenant_id: str) -> EndToEndPipeline:
+    def _get_pipeline(self, tenant_or_id) -> EndToEndPipeline:
         """
         Ottiene pipeline per il tenant specificato con embedder dinamico configurato
         
-        AGGIORNAMENTO 2025-08-25: Usa EmbeddingManager con tenant_id UUID per consistenza
+        AGGIORNAMENTO 2025-08-26: Supporto oggetto Tenant centralizzato
         
         Args:
-            tenant_id: UUID del tenant (es: '16c222a9-f293-11ef-9315-96000228e7fe')
+            tenant_or_id: Oggetto Tenant o tenant_id per retrocompatibilità
             
         Returns:
             Istanza EndToEndPipeline configurata per tenant
         """
+        # Gestione compatibilità Tenant vs tenant_id string
+        if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
+            # Oggetto Tenant - usa direttamente i suoi dati
+            tenant = tenant_or_id
+            tenant_id = tenant.tenant_id
+            tenant_slug = tenant.tenant_slug
+            tenant_display = f"{tenant.tenant_name} ({tenant_id})"
+        else:
+            # Retrocompatibilità: tenant_id string - normalizza
+            tenant_id = tenant_or_id
+            tenant_slug = self._resolve_tenant_slug_from_uuid(tenant_id)
+            tenant_display = str(tenant_or_id)
+            
         if tenant_id not in self.pipeline_cache:
             try:
-                # SEMPRE USA tenant_id (UUID) per consistenza con embedder manager
-                shared_embedder = embedding_manager.get_shared_embedder(tenant_id)
+                # 🔧 RISOLVI UUID -> SLUG per logging/debug
+                tenant_slug = self._resolve_tenant_slug_from_uuid(tenant_id)
+                print(f"🔄 Risoluzione tenant: UUID {tenant_id} -> slug '{tenant_slug}'")
                 
-                # USA DIRETTAMENTE tenant_id (UUID) - NO CONVERSION!
-                # Il tenant_slug verrà risolto internamente dalla pipeline quando necessario
+                # NUOVO SISTEMA: SimpleEmbeddingManager con reset automatico
+                from EmbeddingEngine.simple_embedding_manager import simple_embedding_manager
+                shared_embedder = simple_embedding_manager.get_embedder_for_tenant(tenant_id)
                 
+                # ✅ USA TENANT_UUID per pipeline (che risolverà internamente UUID -> slug)
                 pipeline = EndToEndPipeline(
-                    tenant_slug=tenant_id,  # PASSA UUID direttamente - pipeline risolverà slug quando necessario
+                    tenant_slug=tenant_id,  # ✅ PASSA UUID - pipeline risolverà internamente
                     confidence_threshold=0.7,
                     auto_mode=True,
-                    shared_embedder=shared_embedder  # Passa embedder dinamico
+                    shared_embedder=shared_embedder  # Passa embedder con UUID
                 )
                 self.pipeline_cache[tenant_id] = pipeline  # Cache con UUID come key
-                logging.info(f"✅ Pipeline {tenant_id} inizializzata con embedder dinamico e cached")
+                logging.info(f"✅ Pipeline {tenant_id} inizializzata con slug '{tenant_slug}' e cached")
             except Exception as e:
                 logging.error(f"❌ Errore inizializzazione pipeline per UUID {tenant_id}: {e}")
                 raise RuntimeError(f"Impossibile inizializzare pipeline per UUID {tenant_id}: {e}")
         
-        return self.pipeline_cache[tenant_id]
+        # 🆕 VERIFICA VALIDITÀ EMBEDDER E AUTO-RELOAD SE NECESSARIO
+        pipeline = self.pipeline_cache[tenant_id]
+        
+        try:
+            # Verifica che l'embedder sia valido e abbia il modello caricato
+            if hasattr(pipeline, 'embedder') and pipeline.embedder:
+                # Controlla se il modello è presente e valido
+                if not hasattr(pipeline.embedder, 'model') or pipeline.embedder.model is None:
+                    print(f"⚠️  Embedder per {tenant_id} non ha modello valido, ricarico...")
+                    
+                    # Ricarica il modello embedder
+                    if hasattr(pipeline.embedder, 'load_model'):
+                        pipeline.embedder.load_model()
+                        print(f"✅ Modello embedder ricaricato per {tenant_id}")
+                    else:
+                        # Se non ha load_model, ottieni un nuovo embedder
+                        from EmbeddingEngine.simple_embedding_manager import simple_embedding_manager
+                        new_embedder = simple_embedding_manager.get_embedder_for_tenant(tenant_id)
+                        pipeline.embedder = new_embedder
+                        print(f"✅ Nuovo embedder ottenuto per {tenant_id}")
+                        
+                # Test rapido per verificare che l'embedder funzioni
+                try:
+                    test_embedding = pipeline.embedder.encode(["test"], show_progress_bar=False)
+                    print(f"✅ Embedder per {tenant_id} verificato e funzionante")
+                except Exception as test_error:
+                    print(f"❌ Test embedder fallito per {tenant_id}: {test_error}")
+                    # Forza ricaricamento completo
+                    from EmbeddingEngine.simple_embedding_manager import simple_embedding_manager
+                    pipeline.embedder = simple_embedding_manager.get_embedder_for_tenant(tenant_id)
+                    print(f"🔄 Embedder sostituito completamente per {tenant_id}")
+            
+        except Exception as embedder_check_error:
+            print(f"⚠️  Errore verifica embedder per {tenant_id}: {embedder_check_error}")
+            # In caso di errore, continua con la pipeline esistente (meglio che fallire)
+        
+        return pipeline
     
     def _resolve_tenant_slug_from_uuid(self, tenant_uuid: str) -> str:
         """
@@ -140,13 +239,51 @@ class ClusteringTestService:
         except Exception as e:
             print(f"⚠️ Errore risoluzione tenant slug per UUID {tenant_uuid}: {e}")
             return tenant_uuid
+
+    def _resolve_uuid_from_slug(self, tenant_slug: str) -> str:
+        """
+        Risolve tenant slug in UUID usando database
+        
+        Args:
+            tenant_slug: Slug del tenant (es: 'wopta')
+            
+        Returns:
+            UUID del tenant o slug se non trovato
+        """
+        try:
+            import sys
+            import os
+            sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'MySql'))
+            from connettore import MySqlConnettore
+            
+            # Connessione al database remoto per recuperare il tenant_id dal slug
+            remote = MySqlConnettore()
+            
+            query = """
+            SELECT tenant_id, tenant_name 
+            FROM common.tenants 
+            WHERE tenant_database = %s AND tenant_status = 1
+            """
+            
+            result = remote.esegui_query(query, (tenant_slug,))
+            remote.disconnetti()
+            
+            if result and len(result) > 0:
+                tenant_uuid, tenant_name = result[0]
+                return tenant_uuid
+            else:
+                raise ValueError(f"Tenant slug '{tenant_slug}' non trovato nel database")
+                
+        except Exception as e:
+            print(f"❌ ERRORE risoluzione UUID per slug '{tenant_slug}': {e}")
+            raise RuntimeError(f"Impossibile risolvere tenant slug '{tenant_slug}': {e}")
     
     def load_tenant_clustering_config(self, tenant_id: str) -> Dict[str, Any]:
         """
         Carica la configurazione clustering specifica del tenant
         
         Args:
-            tenant_id: ID del tenant
+            tenant_id: ID o slug del tenant
             
         Returns:
             Dizionario con parametri clustering del tenant
@@ -154,19 +291,44 @@ class ClusteringTestService:
         try:
             # Cerca configurazione tenant-specifica
             tenant_config_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tenant_configs')
-            tenant_config_file = os.path.join(tenant_config_dir, f'{tenant_id}_clustering.yaml')
             
-            if os.path.exists(tenant_config_file):
-                print(f"📁 Carico config tenant-specifica: {tenant_config_file}")
-                with open(tenant_config_file, 'r', encoding='utf-8') as file:
+            # 🔧 [FIX] Prova prima con UUID del tenant se sembra essere un UUID
+            potential_uuid_file = None
+            if '-' in tenant_id and len(tenant_id) == 36:  # Formato UUID
+                potential_uuid_file = os.path.join(tenant_config_dir, f'{tenant_id}_clustering.yaml')
+                print(f"📁 [DEBUG] Tentativo caricamento config UUID: {potential_uuid_file}")
+                
+                if os.path.exists(potential_uuid_file):
+                    print(f"✅ [DEBUG] Trovato file config UUID: {potential_uuid_file}")
+                    with open(potential_uuid_file, 'r', encoding='utf-8') as file:
+                        tenant_config = yaml.safe_load(file)
+                        config_params = tenant_config.get('clustering_parameters', {})
+                        print(f"📋 [DEBUG] Parametri caricati da UUID: {list(config_params.keys())}")
+                        print(f"�️  [DEBUG] UMAP nel config UUID: use_umap = {config_params.get('use_umap', 'NON_TROVATO')}")
+                        return config_params
+                else:
+                    print(f"❌ [DEBUG] File config UUID non trovato: {potential_uuid_file}")
+            
+            # Fallback: slug del tenant
+            tenant_slug_file = os.path.join(tenant_config_dir, f'{tenant_id}_clustering.yaml')
+            print(f"📁 [DEBUG] Fallback a config slug: {tenant_slug_file}")
+            
+            if os.path.exists(tenant_slug_file):
+                print(f"✅ [DEBUG] Trovato file config slug: {tenant_slug_file}")
+                with open(tenant_slug_file, 'r', encoding='utf-8') as file:
                     tenant_config = yaml.safe_load(file)
-                    return tenant_config.get('clustering_parameters', {})
+                    config_params = tenant_config.get('clustering_parameters', {})
+                    print(f"📋 [DEBUG] Parametri caricati da slug: {list(config_params.keys())}")
+                    print(f"🗂️  [DEBUG] UMAP nel config slug: use_umap = {config_params.get('use_umap', 'NON_TROVATO')}")
+                    return config_params
             
             # Fallback: configurazione globale
-            print(f"📁 Uso config globale per tenant {tenant_id}")
+            print(f"📁 [DEBUG] Fallback a config globale per tenant {tenant_id}")
             with open(self.config_path, 'r', encoding='utf-8') as file:
                 config = yaml.safe_load(file)
-                return config.get('clustering', {})
+                global_params = config.get('clustering', {})
+                print(f"📋 [DEBUG] Parametri globali: {list(global_params.keys())}")
+                return global_params
                 
         except Exception as e:
             print(f"⚠️ Errore caricamento config clustering: {e}")
@@ -178,37 +340,76 @@ class ClusteringTestService:
                 'metric': 'cosine'
             }
 
-    def get_sample_conversations(self, tenant: str = 'humanitas', limit: int = 1000) -> Dict[str, Any]:
+    def get_sample_conversations(self, tenant_or_id = 'humanitas', limit: int = 1000) -> Dict[str, Any]:
         """
         Recupera un campione di conversazioni dal database per il tenant utilizzando pipeline
         
         Scopo: Estrarre conversazioni per il test di clustering
         Parametri di input:
-            - tenant (str): Nome del tenant/schema database  
+            - tenant_or_id: Oggetto Tenant, tenant_slug o tenant_id per compatibilità
             - limit (int): Numero massimo di conversazioni da recuperare
         Valori di ritorno:
             - Dict[str, Any]: Dizionario con sessioni per il clustering
-        Data ultima modifica: 2025-08-25
+        Data ultima modifica: 2025-08-26
         """
         try:
-            logging.info(f"📊 Estrazione {limit} conversazioni per tenant '{tenant}'")
-            
-            # Ottieni pipeline per il tenant
-            pipeline = self._get_pipeline(tenant)
+            # Gestione compatibilità Tenant vs tenant string
+            if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
+                # Oggetto Tenant - usa direttamente i suoi dati
+                tenant = tenant_or_id
+                tenant_display = f"{tenant.tenant_name}"
+                logging.info(f"📊 Estrazione {limit} conversazioni per tenant oggetto '{tenant_display}'")
+                pipeline = self._get_pipeline(tenant)  # Passa oggetto Tenant
+            else:
+                # Retrocompatibilità: tenant string
+                tenant_string = tenant_or_id
+                logging.info(f"📊 Estrazione {limit} conversazioni per tenant '{tenant_string}'")
+                
+                # 🔧 CONVERTI SLUG -> UUID per _get_pipeline se necessario
+                if tenant_string != 'humanitas':  # Skip conversione per fallback
+                    tenant_uuid = self._resolve_uuid_from_slug(tenant_string)
+                    print(f"🔄 Risoluzione tenant: slug '{tenant_string}' -> UUID '{tenant_uuid}'")
+                else:
+                    tenant_uuid = tenant_string  # Mantieni fallback per retrocompatibilità
+                
+                # Ottieni pipeline per il tenant UUID
+                pipeline = self._get_pipeline(tenant_uuid)
             
             # Estrai sessioni usando la funzione della pipeline
             sessioni = pipeline.estrai_sessioni(limit=limit)
             
             if not sessioni:
-                logging.warning(f"❌ Nessuna sessione trovata per tenant '{tenant}'")
+                logging.warning(f"❌ Nessuna sessione trovata per tenant '{tenant_or_id}'")
                 return {}
             
-            logging.info(f"✅ Estratte {len(sessioni)} sessioni valide per '{tenant}'")
+            logging.info(f"✅ Estratte {len(sessioni)} sessioni valide per '{tenant_or_id}'")
             return sessioni
             
         except Exception as e:
-            logging.error(f"❌ Errore estrazione conversazioni per {tenant}: {e}")
+            logging.error(f"❌ Errore estrazione conversazioni per {tenant_or_id}: {e}")
             return {}
+    
+    def get_parameter_suggestions(self) -> Dict[str, Any]:
+        """
+        Ottieni descrizioni parametri e preset ottimizzati
+        
+        Returns:
+            Dizionario con descrizioni e preset
+        """
+        return {
+            'parameter_descriptions': HDBSCANTuningGuide.get_parameter_descriptions(),
+            'quick_fix_presets': HDBSCANTuningGuide.get_quick_fix_presets(),
+            'current_defaults': {
+                'min_cluster_size': 15,
+                'min_samples': 3,
+                'cluster_selection_epsilon': 0.08,
+                'metric': 'cosine',
+                'cluster_selection_method': 'eom',
+                'alpha': 1.0,
+                'max_cluster_size': 0,
+                'allow_single_cluster': False
+            }
+        }
     
     def _cleanup_gpu_memory(self):
         """
@@ -235,28 +436,36 @@ class ClusteringTestService:
         except Exception as e:
             print(f"⚠️ Errore durante pulizia memoria GPU: {str(e)}")
 
-    def _clear_pipeline_cache(self):
+    def cleanup_all_pipelines(self):
         """
-        Pulisce la cache delle pipeline per liberare memoria
+        Pulisce tutte le pipeline dalla cache preservando gli embedder
         
-        Scopo: Evita accumulo di modelli in memoria tra test diversi
+        Scopo:
+        Libera memoria da tutte le pipeline cache senza distruggere embedder condivisi
         
-        Data ultima modifica: 2025-08-25
+        AGGIORNAMENTO 2025-08-26: Preservazione embedder per stabilità
+        
+        Data ultima modifica: 2025-08-26
         """
         try:
-            # Libera esplicitamente le pipeline dalla cache
+            # Libera solo risorse non-critiche delle pipeline
             for tenant_slug, pipeline in self.pipeline_cache.items():
                 try:
-                    # Se la pipeline ha un embedder, prova a liberarne la memoria
-                    if hasattr(pipeline, 'embedder') and hasattr(pipeline.embedder, 'model'):
-                        del pipeline.embedder.model
-                        print(f"🧹 Modello embedder per {tenant_slug} liberato dalla memoria")
+                    # Pulizia risorse pipeline senza toccare l'embedder
+                    if hasattr(pipeline, 'classification_service'):
+                        pipeline.classification_service = None
+                        
+                    if hasattr(pipeline, 'clustering_service'):
+                        pipeline.clustering_service = None
+                        
+                    # ✅ NON TOCCARE L'EMBEDDER - è gestito da SimpleEmbeddingManager
+                    print(f"🧹 Pipeline {tenant_slug} pulita (embedder preservato)")
                 except Exception as e:
-                    print(f"⚠️ Errore liberazione embedder per {tenant_slug}: {e}")
+                    print(f"⚠️ Errore pulizia pipeline per {tenant_slug}: {e}")
             
             # Pulisce completamente la cache
             self.pipeline_cache.clear()
-            print(f"🧹 Cache pipeline pulita")
+            print(f"🧹 Cache pipeline pulita completamente")
             
             # Garbage collection
             gc.collect()
@@ -269,27 +478,35 @@ class ClusteringTestService:
         Pulisce la pipeline specifica per un tenant dalla cache
         
         Scopo:
-        Rimuove la pipeline cachata quando l'embedder viene ricaricato,
-        evitando riferimenti a embedder con model=None
+        Rimuove la pipeline cachata SENZA distruggere l'embedder condiviso
+        
+        AGGIORNAMENTO 2025-08-26: Preservazione embedder per evitare errori
         
         Args:
             tenant_id: UUID del tenant da rimuovere dalla cache
             
-        Data ultima modifica: 2025-01-27
+        Data ultima modifica: 2025-08-26
         """
         try:
             if tenant_id in self.pipeline_cache:
                 pipeline = self.pipeline_cache[tenant_id]
                 
-                # Cleanup esplicito del modello embedder se presente
+                # 🔧 NON DISTRUGGERE L'EMBEDDER - è gestito da SimpleEmbeddingManager
+                # OLD PROBLEMATIC CODE:
+                # pipeline.embedder.model = None  ← CAUSA IL BUG
+                
+                # Pulizia solo risorse non-critiche
                 try:
-                    if hasattr(pipeline, 'embedder') and hasattr(pipeline.embedder, 'model'):
-                        if pipeline.embedder.model is not None:
-                            del pipeline.embedder.model
-                        pipeline.embedder.model = None
-                        print(f"🧹 Embedder pipeline per tenant {tenant_id} pulito")
+                    if hasattr(pipeline, 'classification_service'):
+                        pipeline.classification_service = None
+                        
+                    if hasattr(pipeline, 'clustering_service'):
+                        pipeline.clustering_service = None
+                        
+                    # ✅ MANTIENI L'EMBEDDER INTATTO - è condiviso tra operazioni
+                    print(f"🧹 Pipeline per tenant {tenant_id} pulita (embedder preservato)")
                 except Exception as e:
-                    print(f"⚠️ Errore cleanup embedder pipeline: {e}")
+                    print(f"⚠️ Errore cleanup pipeline: {e}")
                 
                 # Rimuove dalla cache
                 del self.pipeline_cache[tenant_id]
@@ -326,22 +543,38 @@ class ClusteringTestService:
             sample_size = 100
         
         try:
-            # 1. Carica configurazione clustering
+            # 1. Carica configurazione clustering con UUID
+            # 🔧 [FIX] Usa UUID per caricare config corretta
+            base_clustering_config = self.load_tenant_clustering_config(tenant_id)
+            print(f"📋 [DEBUG] Configurazione base tenant: {base_clustering_config}")
+            
+            # 2. Risolvi tenant slug per conversazioni (schema DB)
+            # 🔧 [FIX] DB usa slug, config usa UUID
+            tenant_slug = self._resolve_tenant_slug_from_uuid(tenant_id)
+            print(f"🔄 [DEBUG] Risoluzione: UUID '{tenant_id}' -> slug '{tenant_slug}' per DB")
+            
             if custom_parameters:
-                clustering_config = custom_parameters
-                print(f"🎛️ Uso parametri personalizzati: {custom_parameters}")
+                # 🔧 [FIX] Unisci parametri personalizzati con configurazione tenant
+                # anziché sostituire completamente (preserva parametri UMAP)
+                clustering_config = base_clustering_config.copy()
+                clustering_config.update(custom_parameters)
+                print(f"🎛️ [DEBUG] Parametri personalizzati ricevuti: {custom_parameters}")
+                print(f"🔧 [DEBUG] Configurazione finale (base + custom): {clustering_config}")
+                print(f"🗂️  [DEBUG] UMAP preservato: use_umap = {clustering_config.get('use_umap', 'NON_TROVATO')}")
             else:
-                clustering_config = self.load_tenant_clustering_config(tenant_id)
+                clustering_config = base_clustering_config
                 print(f"🎛️ Uso parametri tenant: {clustering_config}")
             
-            # 2. Recupera conversazioni campione usando la pipeline
-            sessioni = self.get_sample_conversations(tenant_id, sample_size)
+            # 3. Recupera conversazioni campione usando tenant_slug per DB
+            # 🔧 [FIX] Usa slug per query DB
+            sessioni = self.get_sample_conversations(tenant_slug, sample_size)
             
             if len(sessioni) < self.min_conversations_required:
                 return {
                     'success': False,
                     'error': f'Troppe poche conversazioni trovate ({len(sessioni)}). Minimo richiesto: {self.min_conversations_required}',
                     'tenant_id': tenant_id,
+                    'tenant_slug': tenant_slug,  # 🔧 [DEBUG] Aggiungi slug per debug
                     'execution_time': time.time() - start_time
                 }
             
@@ -358,14 +591,15 @@ class ClusteringTestService:
                     'success': False,
                     'error': f'Troppe poche conversazioni valide trovate ({len(texts)}). Minimo richiesto: {self.min_conversations_required}',
                     'tenant_id': tenant_id,
+                    'tenant_slug': tenant_slug,  # 🔧 [DEBUG] Aggiungi slug per debug
                     'execution_time': time.time() - start_time
                 }
             
             # 4. Genera embeddings
             print(f"🔍 Generazione embeddings per {len(texts)} conversazioni...")
             try:
-                # Ottieni pipeline e usa il suo embedder
-                pipeline = self._get_pipeline(tenant_id)
+                # 🔧 [FIX] Usa tenant_slug per pipeline (schema DB)
+                pipeline = self._get_pipeline(tenant_slug)
                 embeddings = pipeline.embedder.encode(texts, show_progress_bar=True)
                 print(f"✅ Embeddings generati: {embeddings.shape}")
             except Exception as e:
@@ -373,26 +607,49 @@ class ClusteringTestService:
                     'success': False,
                     'error': f'Errore generazione embeddings: {str(e)}',
                     'tenant_id': tenant_id,
+                    'tenant_slug': tenant_slug,  # 🔧 [DEBUG] Aggiungi slug per debug  
                     'execution_time': time.time() - start_time
                 }
             
             # 5. Esegue clustering HDBSCAN
             print(f"🔗 Avvio clustering HDBSCAN...")
             try:
+                # 🆕 Includere parametri UMAP dal clustering config
                 clusterer = HDBSCANClusterer(
                     min_cluster_size=clustering_config.get('min_cluster_size', 3),
                     min_samples=clustering_config.get('min_samples', 2),
                     cluster_selection_epsilon=clustering_config.get('cluster_selection_epsilon', 0.15),
-                    metric=clustering_config.get('metric', 'cosine')
+                    metric=clustering_config.get('metric', 'cosine'),
+                    # Parametri HDBSCAN avanzati
+                    cluster_selection_method=clustering_config.get('cluster_selection_method', 'eom'),
+                    alpha=clustering_config.get('alpha', 1.0),
+                    max_cluster_size=clustering_config.get('max_cluster_size', 0),
+                    allow_single_cluster=clustering_config.get('allow_single_cluster', False),
+                    
+                    # 🆕 PARAMETRI UMAP - Aggiunto supporto completo
+                    use_umap=clustering_config.get('use_umap', False),
+                    umap_n_neighbors=clustering_config.get('umap_n_neighbors', 15),
+                    umap_min_dist=clustering_config.get('umap_min_dist', 0.1),
+                    umap_metric=clustering_config.get('umap_metric', 'cosine'),
+                    umap_n_components=clustering_config.get('umap_n_components', 50),
+                    umap_random_state=clustering_config.get('umap_random_state', 42)
                 )
                 
                 cluster_labels = clusterer.fit_predict(embeddings)
+                
+                # 🆕 DEBUG: Stampa informazioni dettagliate UMAP
+                print(f"\n🔬 [DEBUG CLUSTERING TEST] Verifica applicazione UMAP...")
+                if hasattr(clusterer, 'print_umap_debug_summary'):
+                    clusterer.print_umap_debug_summary()
+                else:
+                    print(f"⚠️  [DEBUG] Metodo print_umap_debug_summary non disponibile nel clusterer")
                 
             except Exception as e:
                 return {
                     'success': False,
                     'error': f'Errore clustering HDBSCAN: {str(e)}',
                     'tenant_id': tenant_id,
+                    'tenant_slug': tenant_slug,  # 🔧 [DEBUG] Aggiungi slug per debug
                     'execution_time': time.time() - start_time
                 }
             
@@ -405,10 +662,23 @@ class ClusteringTestService:
             # 7. Calcola metriche di qualità
             quality_metrics = self._calculate_quality_metrics(embeddings, cluster_labels)
             
-            # 8. Costruisce cluster dettagliati
+            # 8. Genera suggerimenti per ottimizzazione
+            tuning_analysis = None
+            if n_outliers > 0:
+                tuning_analysis = HDBSCANTuningGuide.analyze_outlier_problem(
+                    n_points=len(embeddings),
+                    n_outliers=n_outliers, 
+                    current_params=clustering_config
+                )
+            
+            # 9. Genera dati per visualizzazioni interattive
+            print("🎨 Generazione dati per visualizzazioni frontend...")
+            visualization_data = self._generate_visualization_data(embeddings, cluster_labels, texts, session_ids)
+            
+            # 9. Costruisce cluster dettagliati
             detailed_clusters = self._build_detailed_clusters(texts, session_ids, cluster_labels)
             
-            # 9. Analizza outliers
+            # 10. Analizza outliers
             outlier_analysis = self._analyze_outliers(texts, session_ids, cluster_labels, embeddings)
             
             execution_time = time.time() - start_time
@@ -416,13 +686,11 @@ class ClusteringTestService:
             print(f"✅ Clustering completato in {execution_time:.2f}s")
             print(f"📊 Risultati: {n_clusters} clusters, {n_outliers} outliers, {n_clustered} conversazioni clusterizzate")
             
-            # 🧹 IMPORTANTE: Pulizia completa memoria dopo il test
-            self._clear_pipeline_cache()  # Pulisce prima la cache delle pipeline
-            self._cleanup_gpu_memory()    # Poi pulisce la memoria GPU
-            
-            return {
+            # Costruisci risultato finale
+            result_data = {
                 'success': True,
                 'tenant_id': tenant_id,
+                'tenant_slug': tenant_slug,  # 🔧 [DEBUG] Aggiungi slug per debug
                 'execution_time': execution_time,
                 'statistics': {
                     'total_conversations': len(texts),
@@ -435,20 +703,52 @@ class ClusteringTestService:
                 'quality_metrics': quality_metrics,
                 'detailed_clusters': detailed_clusters,
                 'outlier_analysis': outlier_analysis,
+                'visualization_data': visualization_data,  # ✨ NUOVO: Dati per grafici frontend
+                'tuning_suggestions': tuning_analysis,  # 🎯 NUOVO: Suggerimenti ottimizzazione
                 'recommendations': self._generate_recommendations(
                     len(texts), n_clusters, n_outliers, quality_metrics
                 )
             }
             
+            # 🆕 SALVATAGGIO AUTOMATICO NEL DATABASE
+            if self.results_db:
+                try:
+                    saved_result = self.results_db.save_clustering_result(
+                        tenant_id=tenant_id,
+                        results_data=result_data,
+                        parameters_data=clustering_config,
+                        execution_time=execution_time
+                    )
+                    
+                    if saved_result and saved_result.get('record_id'):
+                        print(f"💾 Risultati salvati nel database con ID: {saved_result['record_id']}")
+                        result_data['saved_version_id'] = saved_result['record_id']
+                        result_data['version_number'] = saved_result['version_number']
+                        result_data['tenant_id'] = tenant_id
+                    else:
+                        print("⚠️ Errore nel salvataggio risultati nel database")
+                        
+                except Exception as e:
+                    print(f"⚠️ Errore salvataggio database: {e}")
+            else:
+                print("⚠️ Database risultati non disponibile - salvataggio saltato")
+            
+            # 🧹 IMPORTANTE: Pulizia completa memoria dopo il test
+            self.cleanup_all_pipelines()  # Pulisce la cache delle pipeline
+            self._cleanup_gpu_memory()    # Poi pulisce la memoria GPU
+            
+            return result_data
+            
         except Exception as e:
             # 🧹 Pulizia memoria anche in caso di errore
-            self._clear_pipeline_cache()
+            self.cleanup_all_pipelines()
             self._cleanup_gpu_memory()
             
             return {
                 'success': False,
                 'error': f'Errore generale nel test clustering: {str(e)}',
                 'tenant_id': tenant_id,
+                'tenant_slug': tenant_slug if 'tenant_slug' in locals() else 'unknown',  # 🔧 [DEBUG] Safe slug per debug
                 'execution_time': time.time() - start_time
             }
     
@@ -508,6 +808,136 @@ class ClusteringTestService:
         except Exception as e:
             return {
                 'error': f'Errore calcolo metriche: {str(e)}'
+            }
+    
+    def _generate_visualization_data(self, 
+                                   embeddings: np.ndarray, 
+                                   cluster_labels: np.ndarray,
+                                   texts: List[str],
+                                   session_ids: List[str]) -> Dict[str, Any]:
+        """
+        Genera dati per le visualizzazioni interattive del clustering
+        
+        Args:
+            embeddings: Array numpy con gli embeddings originali
+            cluster_labels: Array numpy con le etichette dei cluster  
+            texts: Lista testi delle conversazioni
+            session_ids: Lista ID sessioni
+            
+        Returns:
+            Dizionario con dati di visualizzazione per il frontend
+            
+        Data ultima modifica: 2025-08-26
+        """
+        try:
+            from sklearn.manifold import TSNE
+            from sklearn.decomposition import PCA
+            import numpy as np
+            
+            visualization_data = {}
+            
+            # 1. Riduzione dimensionale 2D con t-SNE
+            print("🔍 Generazione coordinate t-SNE 2D...")
+            tsne_2d = TSNE(n_components=2, random_state=42, perplexity=min(30, len(embeddings)-1))
+            tsne_coords = tsne_2d.fit_transform(embeddings)
+            
+            # 2. Riduzione dimensionale 2D con PCA  
+            print("🔍 Generazione coordinate PCA 2D...")
+            pca_2d = PCA(n_components=2, random_state=42)
+            pca_coords = pca_2d.fit_transform(embeddings)
+            
+            # 3. Riduzione dimensionale 3D con PCA
+            print("🔍 Generazione coordinate PCA 3D...")
+            if embeddings.shape[1] >= 3:
+                pca_3d = PCA(n_components=3, random_state=42)
+                pca_3d_coords = pca_3d.fit_transform(embeddings)
+            else:
+                # Fallback per embeddings con meno di 3 dimensioni
+                pca_3d_coords = np.column_stack([pca_coords, np.zeros(len(pca_coords))])
+            
+            # 4. Prepara i dati per ogni punto
+            points_data = []
+            for i, (session_id, text, label) in enumerate(zip(session_ids, texts, cluster_labels)):
+                point_data = {
+                    'session_id': session_id,
+                    'cluster_id': int(label) if label != -1 else -1,  # Frontend expects cluster_id
+                    'cluster_label': f'Cluster {int(label)}' if label != -1 else 'Outliers',  # Frontend expects string
+                    'text_preview': text[:150] + "..." if len(text) > 150 else text,
+                    'text_length': len(text),
+                    'is_outlier': label == -1,
+                    # Frontend expects x,y,z - aggiungiamo coordinate multiple
+                    'x': float(tsne_coords[i, 0]),      # Default to t-SNE coordinates
+                    'y': float(tsne_coords[i, 1]),
+                    'z': float(pca_3d_coords[i, 2]),    # 3D coordinate
+                    # Manteniamo anche coordinate specifiche per backend
+                    'tsne_x': float(tsne_coords[i, 0]),
+                    'tsne_y': float(tsne_coords[i, 1]),
+                    'pca_x': float(pca_coords[i, 0]),
+                    'pca_y': float(pca_coords[i, 1]),
+                    'pca_3d_x': float(pca_3d_coords[i, 0]),
+                    'pca_3d_y': float(pca_3d_coords[i, 1]),
+                    'pca_3d_z': float(pca_3d_coords[i, 2])
+                }
+                points_data.append(point_data)
+            
+            # 5. Statistiche sui cluster per colorazione
+            cluster_stats = {}
+            cluster_colors = {}  # Frontend expects cluster_colors
+            unique_labels = set(cluster_labels)
+            for label in unique_labels:
+                if label == -1:  # Outliers
+                    cluster_stats[-1] = {
+                        'label': 'Outliers',
+                        'count': int(np.sum(cluster_labels == -1)),
+                        'color': '#666666'
+                    }
+                    cluster_colors[-1] = '#666666'
+                else:
+                    color = f'hsl({(int(label) * 137.5) % 360}, 70%, 50%)'
+                    cluster_stats[int(label)] = {
+                        'label': f'Cluster {int(label)}',
+                        'count': int(np.sum(cluster_labels == label)),
+                        'color': color
+                    }
+                    cluster_colors[int(label)] = color
+            
+            visualization_data = {
+                'points': points_data,
+                'cluster_info': cluster_stats,
+                'cluster_colors': cluster_colors,  # Add cluster_colors for frontend
+                'dimensions': {
+                    'original': embeddings.shape[1],
+                    'tsne_2d': 2,
+                    'pca_2d': 2,
+                    'pca_3d': 3
+                },
+                'explained_variance_ratio': {
+                    'pca_2d': pca_2d.explained_variance_ratio_.tolist(),
+                    'pca_3d': pca_3d.explained_variance_ratio_.tolist() if embeddings.shape[1] >= 3 else [0.0, 0.0, 0.0]
+                },
+                'total_points': len(points_data),
+                'n_clusters': len([l for l in unique_labels if l != -1]),
+                'n_outliers': int(np.sum(cluster_labels == -1))
+            }
+            
+            print(f"✅ Dati visualizzazione generati: {len(points_data)} punti, {visualization_data['n_clusters']} cluster")
+            
+            return visualization_data
+            
+        except ImportError as e:
+            return {
+                'error': f'Librerie visualizzazione non disponibili: {str(e)}',
+                'points': [],
+                'cluster_info': {},
+                'dimensions': {'original': 0}
+            }
+        except Exception as e:
+            print(f"❌ Errore generazione dati visualizzazione: {e}")
+            return {
+                'error': f'Errore nella generazione dati visualizzazione: {str(e)}',
+                'points': [],
+                'cluster_info': {},
+                'dimensions': {'original': 0}
             }
     
     def _build_detailed_clusters(self, texts: List[str], session_ids: List[str], labels: np.ndarray) -> Dict[str, Any]:

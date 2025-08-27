@@ -54,6 +54,10 @@ from advanced_ensemble_classifier import AdvancedEnsembleClassifier
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from mongo_classification_reader import MongoClassificationReader
 
+# 🆕 Import per gestione parametri tenant UMAP
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
+from tenant_config_helper import TenantConfigHelper
+
 # Import BERTopic provider
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'TopicModeling'))
 try:
@@ -90,13 +94,25 @@ class EndToEndPipeline:
             auto_mode: Se True, modalità automatica (None = legge da config)
             shared_embedder: Embedder condiviso per evitare CUDA out of memory
         """
-        self.tenant_slug = tenant_slug
+        
+        # 🎯 NUOVO SISTEMA: Crea oggetto Tenant UNA VOLTA con TUTTE le info
+        from Utils.tenant import Tenant
+        
+        # Determina se il parametro è UUID o slug e crea oggetto Tenant
+        if Tenant._is_valid_uuid(tenant_slug):
+            self.tenant = Tenant.from_uuid(tenant_slug)
+        else:
+            self.tenant = Tenant.from_slug(tenant_slug)
+        
+        # Mantieni retrocompatibilità per codice esistente
+        self.tenant_id = self.tenant.tenant_id
+        self.tenant_slug = self.tenant.tenant_slug
         
         # Inizializza helper per naming tenant-aware
         self.mongo_reader = MongoClassificationReader()
         
-        # Mappa tenant_slug -> tenant_id UUID reale
-        self.tenant_id = self._resolve_tenant_id_from_slug(tenant_slug)
+        # 🆕 Inizializza helper per parametri tenant UMAP
+        self.config_helper = TenantConfigHelper()
         
         # Carica configurazione
         if config_path is None:
@@ -161,7 +177,13 @@ class EndToEndPipeline:
         print(f"   🔄 Auto retrain: {self.auto_retrain}")
         
         self.lettore = LettoreConversazioni()
-        self.aggregator = SessionAggregator(schema=tenant_slug)
+        
+        # 🐛 DEBUG: Verifica quale schema viene passato all'aggregator
+        print(f"🔍 DEBUG - tenant_slug passato alla pipeline: '{tenant_slug}'")
+        print(f"🔍 DEBUG - self.tenant_slug risolto: '{self.tenant_slug}'")
+        print(f"🔍 DEBUG - Inizializzo SessionAggregator con schema: '{self.tenant_slug}' e tenant_id: '{self.tenant_id}'")
+        
+        self.aggregator = SessionAggregator(schema=self.tenant_slug, tenant_id=self.tenant_id)
         
         # Usa embedder condiviso se fornito, altrimenti usa sistema dinamico
         if shared_embedder is not None:
@@ -170,7 +192,7 @@ class EndToEndPipeline:
         else:
             print("🎯 Utilizzo sistema dinamico per embedder - LAZY LOADING per tenant")
             self.embedder = None  # Sarà caricato quando serve tramite _get_embedder()
-            self.tenant_slug = tenant_slug  # Salvato per lazy loading
+            # tenant_slug già risolto nell'inizializzazione
             
         # Usa parametri di clustering da config o da parametri passati
         cluster_min_size = (min_cluster_size if min_cluster_size is not None 
@@ -180,9 +202,48 @@ class EndToEndPipeline:
                               else clustering_config.get('min_samples', 
                                    pipeline_config.get('default_min_samples', 3)))
         
+        # 🔧 [FIX] Passa TUTTI i parametri tenant-specific all'HDBSCANClusterer
+        cluster_alpha = clustering_config.get('alpha', 1.0)
+        cluster_selection_method = clustering_config.get('cluster_selection_method', 'eom')
+        cluster_selection_epsilon = clustering_config.get('cluster_selection_epsilon', 0.05)
+        cluster_metric = clustering_config.get('metric', 'cosine')
+        cluster_allow_single = clustering_config.get('allow_single_cluster', False)
+        cluster_max_size = clustering_config.get('max_cluster_size', 0)
+        
+        # 🆕 PARAMETRI UMAP da tenant config
+        umap_params = self.config_helper.get_umap_parameters(self.tenant_id)
+        
+        print(f"🔧 [FIX DEBUG] Parametri tenant passati a HDBSCANClusterer:")
+        print(f"   min_cluster_size: {cluster_min_size}")
+        print(f"   min_samples: {cluster_min_samples}")
+        print(f"   alpha: {cluster_alpha}")
+        print(f"   cluster_selection_method: {cluster_selection_method}")
+        print(f"   cluster_selection_epsilon: {cluster_selection_epsilon}")
+        print(f"   metric: {cluster_metric}")
+        print(f"   allow_single_cluster: {cluster_allow_single}")
+        print(f"   max_cluster_size: {cluster_max_size}")
+        print(f"   🗂️  use_umap: {umap_params['use_umap']}")
+        if umap_params['use_umap']:
+            print(f"   🗂️  umap_n_neighbors: {umap_params['n_neighbors']}")
+            print(f"   🗂️  umap_min_dist: {umap_params['min_dist']}")
+            print(f"   🗂️  umap_n_components: {umap_params['n_components']}")
+        
         self.clusterer = HDBSCANClusterer(
             min_cluster_size=cluster_min_size,
             min_samples=cluster_min_samples,
+            alpha=cluster_alpha,
+            cluster_selection_method=cluster_selection_method,
+            cluster_selection_epsilon=cluster_selection_epsilon,
+            metric=cluster_metric,
+            allow_single_cluster=cluster_allow_single,
+            max_cluster_size=cluster_max_size,
+            # 🆕 PARAMETRI UMAP
+            use_umap=umap_params['use_umap'],
+            umap_n_neighbors=umap_params['n_neighbors'],
+            umap_min_dist=umap_params['min_dist'],
+            umap_metric=umap_params['metric'],
+            umap_n_components=umap_params['n_components'],
+            umap_random_state=umap_params['random_state'],
             config_path=config_path
         )
         # Non serve più classifier separato - tutto nell'ensemble
@@ -346,6 +407,34 @@ class EndToEndPipeline:
             
         return sessioni_filtrate
     
+    def _generate_cluster_info_from_labels(self, cluster_labels: np.ndarray, session_texts: List[str]) -> Dict[int, Dict[str, Any]]:
+        """
+        Genera cluster_info basico dai cluster labels per visualizzazione
+        
+        Args:
+            cluster_labels: Array delle etichette cluster
+            session_texts: Lista dei testi corrispondenti
+            
+        Returns:
+            Dizionario cluster_info compatibile
+        """
+        cluster_info = {}
+        unique_labels = set(cluster_labels)
+        
+        for label in unique_labels:
+            if label != -1:  # Esclude outlier
+                indices = [i for i, l in enumerate(cluster_labels) if l == label]
+                cluster_info[label] = {
+                    'intent': f'cluster_hdbscan_{label}',
+                    'size': len(indices),
+                    'indices': indices,
+                    'intent_string': f'Cluster HDBSCAN {label}',
+                    'classification_method': 'hdbscan_optimized',
+                    'average_confidence': 0.7  # Default per clustering ottimizzato
+                }
+        
+        return cluster_info
+    
     def _get_embedder(self):
         """
         Ottiene embedder per pipeline tramite sistema dinamico (lazy loading)
@@ -364,62 +453,20 @@ class EndToEndPipeline:
             # Import dinamico per evitare circular dependencies
             try:
                 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'EmbeddingEngine'))
-                from embedding_manager import embedding_manager
+                from simple_embedding_manager import simple_embedding_manager
                 
-                # CORREZIONE: Usa sempre tenant_slug come tenant_id (UUID) per embedding manager
+                # NUOVO SISTEMA: SimpleEmbeddingManager con reset automatico
                 # Il tenant_slug in EndToEndPipeline ora contiene l'UUID, non lo slug human-readable
-                self.embedder = embedding_manager.get_shared_embedder(self.tenant_slug)
+                self.embedder = simple_embedding_manager.get_embedder_for_tenant(self.tenant_slug)
                 print(f"✅ Embedder caricato per tenant UUID '{self.tenant_slug}': {type(self.embedder).__name__}")
                 
             except ImportError as e:
-                print(f"⚠️ Fallback: Impossibile importare embedding_manager: {e}")
+                print(f"⚠️ Fallback: Impossibile importare simple_embedding_manager: {e}")
                 print(f"🔄 Uso fallback LaBSE hardcodato")
                 from labse_embedder import LaBSEEmbedder
                 self.embedder = LaBSEEmbedder()
                 
         return self.embedder
-    
-    def _resolve_tenant_id_from_slug(self, tenant_slug: str) -> str:
-        """
-        Risolve il tenant_slug (es: 'alleanza') nel corretto tenant_id UUID.
-        
-        Args:
-            tenant_slug: Slug del tenant (es: 'alleanza', 'humanitas')
-            
-        Returns:
-            str: Tenant ID UUID corretto per il database TAG
-        """
-        try:
-            # Import del connettore per database remoto
-            sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'MySql'))
-            from connettore import MySqlConnettore
-            
-            # Connessione al database remoto per recuperare il tenant_id
-            remote = MySqlConnettore()
-            
-            # Query per trovare il tenant_id dal tenant_database (slug)
-            query = """
-            SELECT tenant_id, tenant_name 
-            FROM common.tenants 
-            WHERE tenant_database = %s AND tenant_status = 1
-            """
-            
-            result = remote.esegui_query(query, (tenant_slug,))
-            remote.disconnetti()
-            
-            if result and len(result) > 0:
-                tenant_id, tenant_name = result[0]
-                print(f"🔍 Risoluzione tenant: '{tenant_slug}' -> '{tenant_id}' ({tenant_name})")
-                return tenant_id
-            else:
-                print(f"⚠️ Tenant '{tenant_slug}' non trovato, uso fallback 'humanitas'")
-                # Fallback al tenant humanitas se non trovato
-                return "humanitas"
-                
-        except Exception as e:
-            print(f"❌ Errore risoluzione tenant '{tenant_slug}': {e}")
-            print(f"   Uso fallback 'humanitas'")
-            return "humanitas"
     
     def _analyze_and_show_problematic_conversations(self, sessioni: Dict[str, Dict], 
                                                    testi: List[str], 
@@ -617,7 +664,7 @@ class EndToEndPipeline:
         session_ids = list(sessioni.keys())
         
         try:
-            embeddings = self._get_embedder().encode(testi, show_progress_bar=True)
+            embeddings = self._get_embedder().encode(testi, show_progress_bar=True, session_ids=session_ids)
             print(f"✅ Embedding generati: shape {embeddings.shape}")
             
         except Exception as e:
@@ -710,7 +757,8 @@ class EndToEndPipeline:
             # USA SOLO IL SISTEMA INTELLIGENTE PURO
             intelligent_clusterer = IntelligentIntentClusterer(
                 config_path=self.clusterer.config_path,
-                llm_classifier=self.ensemble_classifier.llm_classifier if self.ensemble_classifier else None
+                llm_classifier=self.ensemble_classifier.llm_classifier if self.ensemble_classifier else None,
+                tenant_id=self.tenant_id  # 🗂️  [NEW] Passa tenant_id per config specifica
             )
             cluster_labels, cluster_info = intelligent_clusterer.cluster_intelligently(testi, embeddings)
             cluster_labels = np.array(cluster_labels)
@@ -833,9 +881,36 @@ class EndToEndPipeline:
             method = info.get('classification_method', 'unknown')
             print(f"    - Cluster {cluster_id}: {intent_string} ({info['size']} conv., conf: {confidence:.2f}, metodo: {method})")
         
-        # Applica dedupplicazione intelligente delle etichette
-        if suggested_labels:
-            suggested_labels = self.label_deduplicator.prevent_duplicate_labels(suggested_labels)
+        # Salva i dati dell'ultimo clustering per le visualizzazioni
+        self._last_embeddings = embeddings
+        self._last_cluster_labels = cluster_labels
+        
+        # Genera cluster info usando i session texts
+        session_texts = [sessioni[sid].get('testo_completo', '') for sid in list(sessioni.keys())]
+        self._last_cluster_info = self._generate_cluster_info_from_labels(cluster_labels, session_texts)
+        
+        # NUOVA FUNZIONALITÀ: Visualizzazione grafica cluster
+        try:
+            from Utils.cluster_visualization import ClusterVisualizationManager
+            
+            visualizer = ClusterVisualizationManager()
+            session_texts = [sessioni[sid].get('testo_completo', '') for sid in list(sessioni.keys())]
+            
+            # Visualizzazione per PARAMETRI CLUSTERING (senza etichette finali)
+            print("\n🎨 GENERAZIONE VISUALIZZAZIONI PARAMETRI CLUSTERING...")
+            visualization_results = visualizer.visualize_clustering_parameters(
+                embeddings=embeddings,
+                cluster_labels=cluster_labels,
+                cluster_info=cluster_info,
+                session_texts=session_texts,
+                save_html=True,
+                show_console=True
+            )
+            
+        except ImportError:
+            print("⚠️ Sistema visualizzazione non disponibile - installare plotly")
+        except Exception as e:
+            print(f"⚠️ Errore nella visualizzazione cluster: {e}")
         
         return embeddings, cluster_labels, representatives, suggested_labels
     
@@ -908,7 +983,7 @@ class EndToEndPipeline:
         # Ora usiamo direttamente embeddings e labels per l'ensemble
         session_ids = list(sessioni.keys())
         session_texts = [sessioni[sid]['testo_completo'] for sid in session_ids]
-        train_embeddings = self._get_embedder().encode(session_texts)
+        train_embeddings = self._get_embedder().encode(session_texts, session_ids=session_ids)
         
         # Crea labels array dai reviewed_labels
         train_labels = []
@@ -1198,7 +1273,7 @@ class EndToEndPipeline:
             session_ids.append(session_id)
         
         # Genera embedding
-        embeddings = self._get_embedder().encode(session_texts)
+        embeddings = self._get_embedder().encode(session_texts, session_ids=session_ids)
         
         # Converte etichette in array
         labels_array = np.array(session_labels)
@@ -1598,6 +1673,40 @@ class EndToEndPipeline:
             ens = stats['ensemble_stats']
             print(f"  🔗 Ensemble: {ens['llm_predictions']} LLM + {ens['ml_predictions']} ML")
             print(f"  🤝 Accordi: {ens['ensemble_agreements']}, Disaccordi: {ens['ensemble_disagreements']}")
+        
+        # NUOVA FUNZIONALITÀ: Visualizzazione grafica STATISTICHE COMPLETE
+        # (con etichette finali dopo classificazione)
+        try:
+            from Utils.cluster_visualization import ClusterVisualizationManager
+            
+            visualizer = ClusterVisualizationManager()
+            session_texts = [sessioni[sid].get('testo_completo', '') for sid in session_ids]
+            
+            # Verifica se abbiamo i dati del clustering precedente
+            if (hasattr(self, '_last_embeddings') and 
+                hasattr(self, '_last_cluster_labels') and 
+                hasattr(self, '_last_cluster_info')):
+                
+                print("\n🎨 GENERAZIONE VISUALIZZAZIONI STATISTICHE COMPLETE...")
+                # Visualizzazione per STATISTICHE (con etichette finali)
+                visualization_results = visualizer.visualize_classification_statistics(
+                    embeddings=self._last_embeddings,  # Embeddings dell'ultimo clustering
+                    cluster_labels=self._last_cluster_labels,  # Cluster labels dell'ultimo clustering
+                    final_predictions=predictions,  # Predizioni finali con etichette
+                    cluster_info=self._last_cluster_info,  # Info cluster
+                    session_texts=session_texts,
+                    save_html=True,
+                    show_console=True
+                )
+            else:
+                print("ℹ️  Visualizzazione avanzata richiede esecuzione clustering prima della classificazione")
+                
+        except ImportError:
+            print("⚠️ Sistema visualizzazione avanzato non disponibile - installare plotly")
+        except Exception as e:
+            print(f"⚠️ Errore nella visualizzazione statistiche avanzate: {e}")
+            import traceback
+            traceback.print_exc()
         
         return stats
     
@@ -2760,7 +2869,8 @@ class EndToEndPipeline:
         print(f"  🧩 Re-clustering di {len(tutte_sessioni_outlier)} outlier...")
         
         outlier_texts = [dati['testo_completo'] for dati in tutte_sessioni_outlier.values()]
-        outlier_embeddings = self._get_embedder().encode(outlier_texts)
+        outlier_session_ids = list(tutte_sessioni_outlier.keys())
+        outlier_embeddings = self._get_embedder().encode(outlier_texts, session_ids=outlier_session_ids)
         
         # Usa parametri più permissivi per outlier
         from Clustering.hdbscan_clusterer import HDBSCANClusterer
@@ -2853,14 +2963,26 @@ class EndToEndPipeline:
                 print(f"   ✅ Riutilizzo BERTopic provider esistente dall'ensemble")
                 # Genera solo embedding e clustering semplice senza riaddestramento BERTopic
                 testi = [sessioni[sid]['testo_completo'] for sid in session_ids]
-                embeddings = self._get_embedder().encode(testi)
+                embeddings = self._get_embedder().encode(testi, session_ids=session_ids)
                 
                 # Clustering semplice con HDBSCAN sui puri embeddings
                 cluster_labels = self.clusterer.fit_predict(embeddings)
                 cluster_info = self._generate_cluster_info_from_labels(cluster_labels, session_texts)
+                
+                # Salva dati per visualizzazione statistiche finali
+                self._last_embeddings = embeddings
+                self._last_cluster_labels = cluster_labels
+                self._last_cluster_info = cluster_info
+                
             else:
                 print(f"   ⚠️ Nessun BERTopic provider nell'ensemble, fallback a clustering completo")
-                cluster_labels, cluster_info = self.esegui_clustering(sessioni)
+                embeddings, cluster_labels, representatives, suggested_labels = self.esegui_clustering(sessioni)
+                cluster_info = self._generate_cluster_info_from_labels(cluster_labels, session_texts)
+                
+                # Salva dati per visualizzazione statistiche finali
+                self._last_embeddings = embeddings
+                self._last_cluster_labels = cluster_labels
+                self._last_cluster_info = cluster_info
                 
             n_clusters = len([l for l in cluster_labels if l != -1])
             n_outliers = sum(1 for l in cluster_labels if l == -1)
@@ -3295,7 +3417,70 @@ class EndToEndPipeline:
         print(f"   📊 Distribuzione per cluster:")
         for cluster_id, cluster_info in stats['propagated_by_cluster'].items():
             print(f"      Cluster {cluster_id}: {cluster_info['count']} sessioni → '{cluster_info['label']}'")
+    
+    def reload_llm_configuration(self) -> Dict[str, Any]:
+        """
+        Ricarica configurazione LLM per il tenant corrente della pipeline
         
+        FUNZIONE CRITICA: Permette di aggiornare il modello LLM
+        senza riavviare il server quando l'utente cambia configurazione da React UI.
+        
+        Returns:
+            Risultato del reload con dettagli
+            
+        Ultima modifica: 26 Agosto 2025
+        """
+        try:
+            print(f"🔄 RELOAD LLM CONFIGURATION per pipeline tenant {self.tenant_slug}")
+            
+            # Usa ensemble classifier per reload
+            if hasattr(self, 'ensemble_classifier') and self.ensemble_classifier:
+                result = self.ensemble_classifier.reload_llm_configuration(self.tenant_slug)
+                
+                if result.get('success'):
+                    print(f"✅ Pipeline LLM ricaricato: {result.get('old_model')} -> {result.get('new_model')}")
+                else:
+                    print(f"❌ Errore reload pipeline LLM: {result.get('error')}")
+                
+                return result
+            else:
+                return {
+                    'success': False,
+                    'error': 'Ensemble classifier non disponibile nella pipeline'
+                }
+                
+        except Exception as e:
+            print(f"❌ Errore reload LLM configuration pipeline: {e}")
+            return {
+                'success': False,
+                'error': f'Errore pipeline reload: {str(e)}'
+            }
+    
+    def get_current_llm_info(self) -> Dict[str, Any]:
+        """
+        Ottiene informazioni sul modello LLM corrente della pipeline
+        
+        Returns:
+            Informazioni dettagliate su configurazione LLM
+        """
+        try:
+            if hasattr(self, 'ensemble_classifier') and self.ensemble_classifier:
+                llm_info = self.ensemble_classifier.get_current_llm_info()
+                llm_info['tenant_slug'] = self.tenant_slug
+                llm_info['pipeline_ready'] = True
+                return llm_info
+            else:
+                return {
+                    'pipeline_ready': False,
+                    'error': 'Ensemble classifier non disponibile',
+                    'tenant_slug': self.tenant_slug
+                }
+        except Exception as e:
+            return {
+                'pipeline_ready': False,
+                'error': f'Errore info LLM: {str(e)}',
+                'tenant_slug': self.tenant_slug
+            }
         return stats
 
 

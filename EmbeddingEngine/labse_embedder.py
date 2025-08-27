@@ -13,6 +13,15 @@ from sentence_transformers import SentenceTransformer
 sys.path.append(os.path.dirname(__file__))
 from base_embedder import BaseEmbedder
 
+# Import TokenizationManager per gestione conversazioni lunghe
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
+try:
+    from tokenization_utils import TokenizationManager
+    TOKENIZATION_AVAILABLE = True
+except ImportError:
+    TokenizationManager = None
+    TOKENIZATION_AVAILABLE = False
+
 class LaBSEEmbedder(BaseEmbedder):
     """
     Embedder basato su LaBSE (Language-agnostic BERT Sentence Embedding)
@@ -37,6 +46,18 @@ class LaBSEEmbedder(BaseEmbedder):
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
         else:
             self.device = device
+            
+        # Inizializza TokenizationManager per gestione conversazioni lunghe
+        self.tokenizer = None
+        if TOKENIZATION_AVAILABLE:
+            try:
+                self.tokenizer = TokenizationManager()
+                print(f"✅ TokenizationManager integrato in LaBSE per gestione conversazioni lunghe")
+            except Exception as e:
+                print(f"⚠️  Errore inizializzazione TokenizationManager in LaBSE: {e}")
+                self.tokenizer = None
+        else:
+            print(f"⚠️  TokenizationManager non disponibile per LaBSE")
             
         print(f"🚀 Inizializzazione LaBSE embedder su device: {self.device}")
         self.load_model()
@@ -112,15 +133,18 @@ class LaBSEEmbedder(BaseEmbedder):
                normalize_embeddings: bool = True,
                batch_size: int = 32,
                show_progress_bar: bool = False,
+               session_ids: List[str] = None,  # Nuovo parametro per session_ids
                **kwargs) -> np.ndarray:
         """
         Converte testo(i) in embedding(s) con gestione errori migliorata
+        e tokenizzazione preventiva per conversazioni lunghe
         
         Args:
             texts: Singolo testo o lista di testi
             normalize_embeddings: Se normalizzare gli embedding (raccomandato)
             batch_size: Dimensione del batch per l'inferenza
             show_progress_bar: Mostra progress bar per batch grandi
+            session_ids: Lista degli ID di sessione corrispondenti ai testi (opzionale)
             **kwargs: Parametri aggiuntivi per SentenceTransformer
             
         Returns:
@@ -134,15 +158,48 @@ class LaBSEEmbedder(BaseEmbedder):
             if isinstance(texts, str):
                 texts = [texts]
             
-            # Preprocessing: rimuove testi vuoti
-            processed_texts = []
-            for text in texts:
-                if text and text.strip():
-                    processed_texts.append(text.strip())
-                else:
-                    processed_texts.append("testo vuoto")  # Placeholder per testi vuoti
+            print(f"🔍 Encoding {len(texts)} testi con LaBSE su device {self.device}...")
             
-            print(f"🔍 Encoding {len(processed_texts)} testi su device {self.device}...")
+            # ========================================================================
+            # 🔥 TOKENIZZAZIONE PREVENTIVA PER LABSE 
+            # ========================================================================
+            
+            processed_texts = texts
+            
+            if self.tokenizer:
+                print(f"\n🔍 TOKENIZZAZIONE PREVENTIVA LABSE CLUSTERING")
+                print(f"=" * 60)
+                
+                try:
+                    processed_texts, tokenization_stats = self.tokenizer.process_conversations_for_clustering(
+                        texts, session_ids
+                    )
+                    
+                    print(f"✅ Tokenizzazione LaBSE completata:")
+                    print(f"   📊 Conversazioni processate: {tokenization_stats['total_conversations']}")
+                    print(f"   📊 Conversazioni troncate: {tokenization_stats['truncated_count']}")
+                    print(f"   📊 Token limite configurato: {self.tokenizer.max_tokens}")
+                    if tokenization_stats['truncated_count'] > 0:
+                        print(f"   ✂️  {tokenization_stats['truncated_count']} conversazioni TRONCATE per rispettare limite token")
+                    else:
+                        print(f"   ✅ Tutte le conversazioni entro i limiti, nessun troncamento")
+                    print(f"=" * 60)
+                    
+                except Exception as e:
+                    print(f"⚠️  Errore durante tokenizzazione LaBSE: {e}")
+                    print(f"🔄 Fallback a preprocessing legacy")
+                    processed_texts = texts
+            else:
+                print(f"⚠️  TokenizationManager non disponibile per LaBSE")
+                print(f"� Usando preprocessing legacy")
+            
+            # Preprocessing legacy: rimuove testi vuoti
+            final_processed_texts = []
+            for text in processed_texts:
+                if text and text.strip():
+                    final_processed_texts.append(text.strip())
+                else:
+                    final_processed_texts.append("testo vuoto")  # Placeholder per testi vuoti
             
             # Verifica stato del modello prima dell'encoding
             if hasattr(self.model, '_modules') and self.device == "cuda":
@@ -162,7 +219,7 @@ class LaBSEEmbedder(BaseEmbedder):
                 safe_batch_size = min(batch_size, 16)  # Limita batch size su GPU
                 with torch.amp.autocast('cuda'):  # Mixed precision per efficienza
                     embeddings = self.model.encode(
-                        processed_texts,
+                        final_processed_texts,
                         normalize_embeddings=normalize_embeddings,
                         batch_size=safe_batch_size,
                         show_progress_bar=show_progress_bar,
@@ -172,7 +229,7 @@ class LaBSEEmbedder(BaseEmbedder):
             else:
                 # Per CPU, usiamo il batch size originale
                 embeddings = self.model.encode(
-                    processed_texts,
+                    final_processed_texts,
                     normalize_embeddings=normalize_embeddings,
                     batch_size=batch_size,
                     show_progress_bar=show_progress_bar,

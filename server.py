@@ -179,8 +179,8 @@ class ClassificationService:
         Returns:
             Embedder configurato per tenant specifico
         """
-        from EmbeddingEngine.embedding_manager import embedding_manager
-        return embedding_manager.get_shared_embedder(tenant_id)
+        from EmbeddingEngine.simple_embedding_manager import simple_embedding_manager
+        return simple_embedding_manager.get_embedder_for_tenant(tenant_id)
     
     def get_mongo_reader(self, client_name: str) -> MongoClassificationReader:
         """
@@ -933,6 +933,43 @@ class ClassificationService:
                 'client': client_name,
                 'timestamp': datetime.now().isoformat()
             }
+    
+    def has_cached_pipeline(self, client_name: str) -> bool:
+        """
+        Verifica se esiste una pipeline in cache per il cliente
+        
+        Args:
+            client_name: Nome del cliente
+            
+        Returns:
+            True se la pipeline è in cache, False altrimenti
+        """
+        return client_name in self.pipelines
+    
+    def invalidate_pipeline_cache(self, client_name: str) -> bool:
+        """
+        Invalida la cache della pipeline per un cliente
+        La pipeline sarà ricaricata al prossimo accesso
+        
+        Args:
+            client_name: Nome del cliente
+            
+        Returns:
+            True se la pipeline è stata rimossa dalla cache, False se non era presente
+        """
+        if client_name in self.pipelines:
+            # Rimuovi la pipeline dalla cache
+            del self.pipelines[client_name]
+            
+            # Rimuovi anche il lock associato se esiste
+            if client_name in self._pipeline_locks:
+                del self._pipeline_locks[client_name]
+            
+            print(f"🗑️ Cache pipeline invalidata per cliente: {client_name}")
+            return True
+        else:
+            print(f"ℹ️ Nessuna pipeline in cache da invalidare per: {client_name}")
+            return False
 
 # Istanza globale del servizio
 classification_service = ClassificationService()
@@ -2052,20 +2089,48 @@ def api_resolve_case(client_name: str, case_id: str):
         # Ottieni il QualityGateEngine
         quality_gate = classification_service.get_quality_gate(client_name)
         
-        # Risolvi il caso
-        quality_gate.resolve_review_case(
+        # Risolvi il caso con propagazione cluster
+        result = quality_gate.resolve_review_case(
             case_id=case_id,
             human_decision=human_decision,
             human_confidence=confidence,
             notes=notes
         )
         
-        return jsonify({
+        # Controlla se la risoluzione è avvenuta con successo
+        if not result.get("case_resolved", False):
+            error = result.get("error", "Errore sconosciuto nella risoluzione")
+            return jsonify({
+                'success': False,
+                'error': error,
+                'case_id': case_id,
+                'client': client_name
+            }), 500
+        
+        # Prepara risposta dettagliata con informazioni di propagazione
+        response_data = {
             'success': True,
             'message': f'Caso {case_id} risolto con decisione: {human_decision}',
             'case_id': case_id,
-            'client': client_name
-        }), 200
+            'client': client_name,
+            'human_decision': human_decision,
+            'confidence': confidence,
+            'cluster_info': {
+                'is_representative': result.get("is_representative", False),
+                'cluster_id': result.get("cluster_id"),
+                'propagated_cases': result.get("propagated_cases", 0)
+            }
+        }
+        
+        # Aggiungi messaggio specifico se c'è stata propagazione
+        if result.get("is_representative", False) and result.get("propagated_cases", 0) > 0:
+            cluster_id = result.get("cluster_id")
+            propagated_count = result.get("propagated_cases", 0)
+            response_data['message'] += f' - Propagato a {propagated_count} membri del cluster {cluster_id}'
+        elif result.get("is_representative", False):
+            response_data['message'] += ' - Caso rappresentante (nessun membro da propagare)'
+        
+        return jsonify(response_data), 200
         
     except Exception as e:
         return jsonify({
@@ -4884,7 +4949,8 @@ def get_clustering_parameters(tenant_id):
                     'low': 'Molti cluster piccoli, classificazione molto specifica',
                     'medium': 'Bilanciamento tra specificità e generalizzazione',
                     'high': 'Pochi cluster grandi, classificazione più generale'
-                }
+                },
+                'gpu_supported': True  # ✅ SUPPORTATO SU GPU
             },
             'min_samples': {
                 'value': clustering_config.get('min_samples', 3),
@@ -4897,7 +4963,8 @@ def get_clustering_parameters(tenant_id):
                     'low': 'Cluster più aperti, include più conversazioni borderline',
                     'medium': 'Bilanciamento tra inclusione e qualità',
                     'high': 'Cluster più chiusi, solo conversazioni molto simili'
-                }
+                },
+                'gpu_supported': True  # ✅ SUPPORTATO SU GPU
             },
             'cluster_selection_epsilon': {
                 'value': clustering_config.get('cluster_selection_epsilon', 0.08),
@@ -4912,7 +4979,8 @@ def get_clustering_parameters(tenant_id):
                     'medium': 'Raggruppamento bilanciato',
                     'high': 'Pochi cluster grandi, raggruppamento aggressivo'
                 },
-                'recommendation': 'AUMENTA a 0.15-0.25 se hai troppe etichette simili!'
+                'recommendation': 'AUMENTA a 0.15-0.25 se hai troppe etichette simili!',
+                'gpu_supported': True  # ✅ SUPPORTATO SU GPU
             },
             'metric': {
                 'value': clustering_config.get('metric', 'euclidean'),
@@ -4925,7 +4993,182 @@ def get_clustering_parameters(tenant_id):
                     'euclidean': 'Distanza geometrica standard',
                     'manhattan': 'Somma delle differenze assolute'
                 },
-                'recommendation': 'Usa COSINE per conversazioni testuali!'
+                'recommendation': 'Usa COSINE per conversazioni testuali!',
+                'gpu_supported': True  # ✅ SUPPORTATO SU GPU
+            },
+            
+            # 🆕 NUOVI PARAMETRI AVANZATI HDBSCAN
+            'cluster_selection_method': {
+                'value': clustering_config.get('cluster_selection_method', 'eom'),
+                'default': 'eom',
+                'options': ['eom', 'leaf'],
+                'description': 'Metodo selezione cluster',
+                'explanation': 'Strategia per selezionare i cluster finali dall\'albero gerarchico. EOM è più conservativo, LEAF più aggressivo.',
+                'impact': {
+                    'eom': 'Selezione conservativa - preferisce cluster stabili',
+                    'leaf': 'Selezione aggressiva - può creare più micro-cluster'
+                },
+                'recommendation': 'USA LEAF per ridurre outlier se EOM ne produce troppi!',
+                'gpu_supported': True  # ✅ SUPPORTATO SU GPU
+            },
+            'alpha': {
+                'value': clustering_config.get('alpha', 1.0),
+                'default': 1.0,
+                'min': 0.1,
+                'max': 2.0,
+                'step': 0.1,
+                'description': 'Controllo noise/outlier',
+                'explanation': 'Regola la sensitività ai punti rumorosi. Valori più bassi riducono outlier, più alti li aumentano.',
+                'impact': {
+                    'low': 'Meno outlier, cluster più inclusivi',
+                    'medium': 'Bilanciamento standard',
+                    'high': 'Più outlier, cluster più esclusivi'
+                },
+                'recommendation': 'RIDUCI a 0.3-0.5 se hai troppi outlier!',
+                'gpu_supported': True  # ✅ SUPPORTATO SU GPU
+            },
+            'max_cluster_size': {
+                'value': clustering_config.get('max_cluster_size', 0),
+                'default': 0,
+                'min': 0,
+                'max': 1000,
+                'step': 1,
+                'description': 'Dimensione massima cluster',
+                'explanation': 'Limita il numero massimo di conversazioni per cluster. 0 = nessun limite.',
+                'impact': {
+                    'low': 'Cluster piccoli ma molti',
+                    'medium': 'Clusters di dimensione bilanciata',
+                    'high': 'Permette cluster molto grandi'
+                },
+                'recommendation': 'Usa 50-200 per evitare cluster troppo generici',
+                'gpu_supported': False,  # 🆕 NON SUPPORTATO SU GPU
+                'gpu_warning': '⚠️ Questo parametro è IGNORATO quando il clustering usa GPU (cuML)'
+            },
+            'allow_single_cluster': {
+                'value': clustering_config.get('allow_single_cluster', False),
+                'default': False,
+                'options': [True, False],
+                'description': 'Permetti cluster singolo',
+                'explanation': 'Se True, HDBSCAN può decidere che tutte le conversazioni appartengono a un solo grande cluster.',
+                'impact': {
+                    True: 'Possibile un singolo cluster se i dati sono molto omogenei',
+                    False: 'Forza la creazione di più cluster distinti'
+                },
+                'recommendation': 'Attiva solo se i tuoi dati sono molto omogenei!',
+                'gpu_supported': True  # ✅ SUPPORTATO SU GPU
+            },
+            'only_user': {
+                'value': clustering_config.get('only_user', False),
+                'default': False,
+                'options': [True, False],
+                'description': 'Solo messaggi utente',
+                'explanation': 'Se attivato, durante la lettura delle conversazioni verranno considerati SOLO i messaggi degli utenti, ignorando completamente le risposte del sistema/assistente.',
+                'impact': {
+                    True: 'Classificazione basata solo sui messaggi degli utenti - più focalizzata sulle richieste',
+                    False: 'Classificazione sull\'intera conversazione - include anche le risposte del sistema'
+                },
+                'recommendation': 'Attiva se vuoi classificare solo le richieste degli utenti, ignorando le risposte',
+                'gpu_supported': True,  # ✅ Supportato - è un filtro pre-processing
+                'category': 'preprocessing'  # 🆕 Categoria per raggruppamento nell'UI
+            },
+            
+            # 🆕 PARAMETRI UMAP per riduzione dimensionalità
+            'use_umap': {
+                'value': clustering_config.get('use_umap', False),
+                'default': False,
+                'options': [True, False],
+                'description': 'Abilita preprocessing UMAP',
+                'explanation': 'UMAP riduce la dimensionalità degli embeddings (768D → 50D tipico) prima di applicare HDBSCAN, migliorando performance e qualità del clustering.',
+                'impact': {
+                    True: 'Migliore qualità clustering e performance su dataset grandi, preserva struttura locale',
+                    False: 'Clustering diretto sugli embeddings originali - più veloce per dataset piccoli'
+                },
+                'recommendation': 'Attiva per dataset con >1000 conversazioni o embeddings ad alta dimensionalità',
+                'gpu_supported': True,
+                'category': 'dimensionality_reduction'
+            },
+            'umap_n_neighbors': {
+                'value': clustering_config.get('umap_n_neighbors', 15),
+                'default': 15,
+                'min': 5,
+                'max': 100,
+                'step': 5,
+                'description': 'UMAP: Vicini per grafo locale',
+                'explanation': 'Numero di vicini considerati per costruire il grafo locale. Valori più alti preservano più struttura globale.',
+                'impact': {
+                    'low': 'Focus su struttura molto locale, cluster piccoli e dettagliati',
+                    'medium': 'Bilanciamento tra struttura locale e globale',
+                    'high': 'Preserva più struttura globale, cluster più generali'
+                },
+                'recommendation': 'Usa 15-30 per testi, 30-50 per dataset complessi',
+                'gpu_supported': True,
+                'category': 'dimensionality_reduction'
+            },
+            'umap_min_dist': {
+                'value': clustering_config.get('umap_min_dist', 0.1),
+                'default': 0.1,
+                'min': 0.0,
+                'max': 1.0,
+                'step': 0.05,
+                'description': 'UMAP: Distanza minima punti',
+                'explanation': 'Distanza minima tra punti nel low-dimensional embedding. Valori più bassi permettono clustering più densi.',
+                'impact': {
+                    'low': 'Punti più vicini, cluster più compatti e definiti',
+                    'medium': 'Bilanciamento tra compattezza e separazione',
+                    'high': 'Punti più sparsi, cluster più separati'
+                },
+                'recommendation': 'Usa 0.0-0.1 per clustering densi, 0.2-0.3 per separazione',
+                'gpu_supported': True,
+                'category': 'dimensionality_reduction'
+            },
+            'umap_metric': {
+                'value': clustering_config.get('umap_metric', 'cosine'),
+                'default': 'cosine',
+                'options': ['cosine', 'euclidean', 'manhattan', 'correlation'],
+                'description': 'UMAP: Metrica di distanza',
+                'explanation': 'Metrica utilizzata per calcolare le distanze nel processo di riduzione dimensionale.',
+                'impact': {
+                    'cosine': 'Ottimale per embeddings testuali - considera angoli tra vettori',
+                    'euclidean': 'Distanza geometrica standard - buona per dati numerici',
+                    'manhattan': 'Somma differenze assolute - robusta agli outlier',
+                    'correlation': 'Basata sulla correlazione - per dati con pattern lineari'
+                },
+                'recommendation': 'Usa COSINE per embeddings di testi, EUCLIDEAN per dati numerici',
+                'gpu_supported': True,
+                'category': 'dimensionality_reduction'
+            },
+            'umap_n_components': {
+                'value': clustering_config.get('umap_n_components', 50),
+                'default': 50,
+                'min': 2,
+                'max': 100,
+                'step': 5,
+                'description': 'UMAP: Dimensioni finali',
+                'explanation': 'Numero di dimensioni dell\'embedding ridotto. Più dimensioni preservano più informazioni ma richiedono più tempo.',
+                'impact': {
+                    'low': 'Riduzione aggressiva, veloce ma può perdere dettagli',
+                    'medium': 'Bilanciamento tra performance e qualità',
+                    'high': 'Preserva più informazioni, più lento ma migliore qualità'
+                },
+                'recommendation': 'Usa 20-50 per testi, 50-100 per dati complessi',
+                'gpu_supported': True,
+                'category': 'dimensionality_reduction'
+            },
+            'umap_random_state': {
+                'value': clustering_config.get('umap_random_state', 42),
+                'default': 42,
+                'min': 0,
+                'max': 999999,
+                'step': 1,
+                'description': 'UMAP: Seed riproducibilità',
+                'explanation': 'Seed per generatore numeri casuali - garantisce risultati riproducibili tra esecuzioni.',
+                'impact': {
+                    'fixed': 'Risultati sempre identici - utile per test e debug',
+                    'random': 'Risultati possono variare leggermente tra esecuzioni'
+                },
+                'recommendation': 'Usa un valore fisso (42) per riproducibilità o cambia per esplorare variazioni',
+                'gpu_supported': True,
+                'category': 'dimensionality_reduction'
             }
         }
         
@@ -4985,7 +5228,22 @@ def update_clustering_parameters(tenant_id):
             'min_cluster_size': (2, 50),
             'min_samples': (1, 20),
             'cluster_selection_epsilon': (0.01, 0.5),
-            'metric': ['cosine', 'euclidean', 'manhattan']
+            'metric': ['cosine', 'euclidean', 'manhattan'],
+            
+            # 🆕 VALIDAZIONI NUOVI PARAMETRI
+            'cluster_selection_method': ['eom', 'leaf'],
+            'alpha': (0.1, 2.0),
+            'max_cluster_size': (0, 1000),
+            'allow_single_cluster': [True, False],
+            'only_user': [True, False],  # 🆕 Validazione per only_user
+            
+            # 🆕 VALIDAZIONI PARAMETRI UMAP
+            'use_umap': [True, False],
+            'umap_n_neighbors': (5, 100),
+            'umap_min_dist': (0.0, 1.0),
+            'umap_metric': ['cosine', 'euclidean', 'manhattan', 'chebyshev', 'minkowski'],
+            'umap_n_components': (2, 100),
+            'umap_random_state': (0, 999999)
         }
         
         for param_name, param_value in new_params.items():
@@ -5168,6 +5426,19 @@ def test_clustering_preview(tenant_id):
         sys.path.append(os.path.join(os.path.dirname(__file__), 'Clustering'))
         from clustering_test_service import ClusteringTestService
         
+        # PROTEZIONE: Verifica se è una chiamata accidentale durante cambio LLM
+        request_data = request.get_json() or {}
+        source_context = request_data.get('source_context', None)
+        
+        # Se la chiamata arriva dal contesto LLM, blocca
+        if source_context == 'llm_change' or 'llm' in str(request_data).lower():
+            print(f"🚫 [API] BLOCCATO test clustering accidentale durante cambio LLM per tenant: {tenant_id}")
+            return jsonify({
+                'success': False,
+                'error': 'Test clustering bloccato durante cambio LLM per evitare interferenze',
+                'blocked_reason': 'llm_change_protection'
+            }), 400
+        
         print(f"🧪 [API] Test clustering richiesto per tenant: {tenant_id}")
         
         # CONVERTE tenant_id UUID in tenant_slug per la pipeline
@@ -5175,7 +5446,6 @@ def test_clustering_preview(tenant_id):
         print(f"🔄 [API] Tenant UUID {tenant_id} -> slug '{tenant_slug}'")
         
         # Parse parametri dalla richiesta
-        request_data = request.get_json() or {}
         custom_parameters = request_data.get('parameters', None)
         sample_size = request_data.get('sample_size', None)
         
@@ -5187,10 +5457,10 @@ def test_clustering_preview(tenant_id):
         # Inizializza servizio test
         test_service = ClusteringTestService()
         
-        # Esegue test clustering usando il tenant_slug
+        # Esegue test clustering usando il tenant_id UUID
         print(f"⚡ [API] Avvio test clustering...")
         result = test_service.run_clustering_test(
-            tenant_id=tenant_slug,  # USA TENANT_SLUG INVECE DI TENANT_ID
+            tenant_id=tenant_id,  # 🔧 [FIX] USA TENANT_ID UUID per config corretta
             custom_parameters=custom_parameters,
             sample_size=sample_size
         )
@@ -5227,6 +5497,758 @@ def test_clustering_preview(tenant_id):
     except Exception as e:
         error_msg = f'Errore test clustering: {str(e)}'
         print(f"❌ [API] {error_msg}")
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': tenant_id
+        }), 500
+
+
+@app.route('/api/statistics/<tenant_id>/clustering', methods=['GET'])
+def get_clustering_statistics(tenant_id):
+    """
+    Recupera statistiche complete di clustering post-classificazione per la sezione STATISTICHE
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Query Parameters:
+        - days_back: giorni di storico da analizzare (default: 30)
+        - include_visualizations: se includere dati per grafici (default: true)
+        - sample_limit: limite conversazioni per performance (default: 5000)
+        
+    Returns:
+        JSON con statistiche complete clustering + classificazione:
+        - clustering_stats: statistiche cluster originali
+        - classification_stats: statistiche etichette finali assegnate
+        - visualization_data: coordinate e dati per grafici interattivi
+        - cluster_vs_labels: analisi comparativa cluster vs etichette finali
+        - quality_metrics: metriche avanzate di qualità
+        
+    Autore: Sistema di Classificazione  
+    Data: 2025-08-26
+    """
+    try:
+        import sys
+        import os
+        from datetime import datetime, timedelta
+        
+        # Import dei servizi necessari
+        sys.path.append(os.path.join(os.path.dirname(__file__), 'MySql'))
+        sys.path.append(os.path.join(os.path.dirname(__file__), 'MongoDB'))  
+        sys.path.append(os.path.join(os.path.dirname(__file__), 'Pipeline'))
+        
+        from connettore import MySqlConnettore
+        from mongo_classification_reader import MongoClassificationReader
+        from end_to_end_pipeline import EndToEndPipeline
+        
+        # Parametri query
+        days_back = request.args.get('days_back', '30')
+        include_visualizations = request.args.get('include_visualizations', 'true').lower() == 'true'
+        sample_limit = int(request.args.get('sample_limit', '5000'))
+        
+        print(f"📈 [API] Statistiche clustering per tenant {tenant_id}")
+        print(f"   📅 Giorni storico: {days_back}")
+        print(f"   🎨 Include visualizzazioni: {include_visualizations}")
+        print(f"   📊 Limite campioni: {sample_limit}")
+        
+        # 1. Risolvi tenant_id UUID -> tenant_slug
+        def _resolve_tenant_slug_from_id(tenant_uuid: str) -> str:
+            remote = MySqlConnettore()
+            query = """
+            SELECT tenant_database, tenant_name 
+            FROM common.tenants 
+            WHERE tenant_id = %s AND tenant_status = 1
+            """
+            result = remote.esegui_query(query, (tenant_uuid,))
+            remote.disconnetti()
+            
+            if result:
+                # result è una lista di tuple: [(tenant_database, tenant_name), ...]
+                return result[0][0]  # prima riga, primo campo (tenant_database)
+            else:
+                raise ValueError(f"Tenant {tenant_uuid} non trovato o inattivo")
+        
+        tenant_slug = _resolve_tenant_slug_from_id(tenant_id)
+        print(f"✅ [API] Tenant risolto: {tenant_id} -> {tenant_slug}")
+        
+        # 2. Inizializza reader classificazioni MongoDB
+        mongo_reader = MongoClassificationReader()
+        mongo_reader.connect()
+        
+        # 3. Recupera classificazioni recenti con clustering info
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=int(days_back))
+        
+        print(f"🔍 [API] Estrazione classificazioni {start_date} -> {end_date}")
+        
+        classifications = mongo_reader.get_tenant_classifications_with_clustering(
+            tenant_slug=tenant_slug,
+            start_date=start_date, 
+            end_date=end_date,
+            limit=sample_limit
+        )
+        
+        mongo_reader.disconnect()
+        
+        if not classifications:
+            return jsonify({
+                'success': False,
+                'error': f'Nessuna classificazione trovata per {tenant_slug} negli ultimi {days_back} giorni',
+                'tenant_id': tenant_id,
+                'tenant_slug': tenant_slug
+            }), 404
+        
+        print(f"✅ [API] Trovate {len(classifications)} classificazioni")
+        
+        # 4. Estrai dati per analisi
+        session_texts = []
+        cluster_labels = []
+        final_predictions = []
+        session_ids = []
+        
+        for classification in classifications:
+            if 'testo_completo' in classification and 'cluster_label' in classification:
+                session_texts.append(classification['testo_completo'])
+                cluster_labels.append(classification.get('cluster_label', -1))
+                final_predictions.append({
+                    'prediction': classification.get('predicted_label', 'unknown'),
+                    'confidence': classification.get('confidence', 0.0),
+                    'method': classification.get('classification_method', 'unknown')
+                })
+                session_ids.append(classification.get('session_id', f'session_{len(session_ids)}'))
+        
+        if len(session_texts) < 10:
+            return jsonify({
+                'success': False,
+                'error': f'Troppo poche classificazioni valide trovate ({len(session_texts)}). Minimo: 10',
+                'tenant_id': tenant_id
+            }), 400
+        
+        # 5. Genera statistiche clustering vs classificazione
+        import numpy as np
+        cluster_labels_array = np.array(cluster_labels)
+        
+        # Statistiche clustering
+        unique_clusters = set(cluster_labels)
+        n_clusters = len(unique_clusters) - (1 if -1 in unique_clusters else 0)
+        n_outliers = int(np.sum(cluster_labels_array == -1))
+        
+        # Statistiche classificazione
+        prediction_labels = [pred['prediction'] for pred in final_predictions]
+        unique_predictions = set(prediction_labels)
+        prediction_counts = {label: prediction_labels.count(label) for label in unique_predictions}
+        
+        # Confidence statistics
+        confidences = [pred['confidence'] for pred in final_predictions]
+        avg_confidence = np.mean(confidences) if confidences else 0.0
+        
+        # Metodi utilizzati
+        methods = [pred['method'] for pred in final_predictions]
+        method_counts = {method: methods.count(method) for method in set(methods)}
+        
+        # 6. Analisi cluster vs etichette finali (purezza cluster)
+        cluster_purity = {}
+        for cluster_id in unique_clusters:
+            if cluster_id == -1:
+                continue
+            cluster_mask = cluster_labels_array == cluster_id
+            cluster_predictions = [prediction_labels[i] for i, mask in enumerate(cluster_mask) if mask]
+            
+            if cluster_predictions:
+                most_common_label = max(set(cluster_predictions), key=cluster_predictions.count)
+                purity = cluster_predictions.count(most_common_label) / len(cluster_predictions)
+                cluster_purity[int(cluster_id)] = {
+                    'most_common_label': most_common_label,
+                    'purity': purity,
+                    'size': len(cluster_predictions),
+                    'label_distribution': {label: cluster_predictions.count(label) for label in set(cluster_predictions)}
+                }
+        
+        result_data = {
+            'success': True,
+            'tenant_id': tenant_id,
+            'tenant_slug': tenant_slug,
+            'date_range': {
+                'start': start_date.isoformat(),
+                'end': end_date.isoformat(),
+                'days': int(days_back)
+            },
+            'clustering_stats': {
+                'total_conversations': len(session_texts),
+                'n_clusters': n_clusters,
+                'n_outliers': n_outliers,
+                'clustering_ratio': round((len(session_texts) - n_outliers) / len(session_texts), 3) if len(session_texts) > 0 else 0
+            },
+            'classification_stats': {
+                'unique_labels': len(unique_predictions),
+                'label_distribution': prediction_counts,
+                'avg_confidence': round(avg_confidence, 3),
+                'method_distribution': method_counts
+            },
+            'cluster_vs_labels': {
+                'cluster_purity': cluster_purity,
+                'avg_purity': round(np.mean([cp['purity'] for cp in cluster_purity.values()]), 3) if cluster_purity else 0.0
+            }
+        }
+        
+        # 7. Aggiungi dati visualizzazione se richiesti
+        if include_visualizations and len(session_texts) > 0:
+            try:
+                print("🎨 [API] Generazione dati visualizzazione...")
+                
+                # Inizializza pipeline per ottenere embeddings
+                pipeline = EndToEndPipeline(config_path='config.yaml', tenant_slug=tenant_slug)
+                embedder = pipeline._get_embedder()
+                
+                # Genera embeddings (campione se troppi)
+                if len(session_texts) > 2000:
+                    indices = np.random.choice(len(session_texts), 2000, replace=False)
+                    sample_texts = [session_texts[i] for i in indices]
+                    sample_cluster_labels = cluster_labels_array[indices]
+                    sample_session_ids = [session_ids[i] for i in indices]
+                    sample_predictions = [final_predictions[i] for i in indices]
+                else:
+                    sample_texts = session_texts
+                    sample_cluster_labels = cluster_labels_array
+                    sample_session_ids = session_ids
+                    sample_predictions = final_predictions
+                
+                print(f"🔍 [API] Generazione embeddings per {len(sample_texts)} campioni...")
+                embeddings = embedder.encode(sample_texts, show_progress_bar=False)
+                
+                # Usa ClusteringTestService per generare dati visualizzazione
+                sys.path.append(os.path.join(os.path.dirname(__file__), 'Clustering'))
+                from clustering_test_service import ClusteringTestService
+                
+                clustering_service = ClusteringTestService()
+                visualization_data = clustering_service._generate_visualization_data(
+                    embeddings, sample_cluster_labels, sample_texts, sample_session_ids
+                )
+                
+                # Aggiungi info etichette finali ai punti
+                for i, point in enumerate(visualization_data.get('points', [])):
+                    if i < len(sample_predictions):
+                        point.update({
+                            'final_prediction': sample_predictions[i]['prediction'],
+                            'prediction_confidence': sample_predictions[i]['confidence'],
+                            'classification_method': sample_predictions[i]['method']
+                        })
+                
+                result_data['visualization_data'] = visualization_data
+                print("✅ [API] Dati visualizzazione generati con successo")
+                
+            except Exception as viz_error:
+                print(f"⚠️ [API] Errore generazione visualizzazioni: {viz_error}")
+                result_data['visualization_error'] = str(viz_error)
+        
+        print(f"✅ [API] Statistiche clustering generate con successo")
+        
+        # Sanifica per JSON serialization
+        sanitized_result = sanitize_for_json(result_data)
+        return jsonify(sanitized_result), 200
+        
+    except Exception as e:
+        error_msg = f'Errore recupero statistiche clustering: {str(e)}'
+        print(f"❌ [API] {error_msg}")
+        import traceback
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': tenant_id
+        }), 500
+
+
+# ==================== ENDPOINT LLM CONFIGURATION RELOAD ====================
+
+@app.route('/api/llm/<client_name>/reload', methods=['POST'])
+def reload_llm_configuration(client_name: str):
+    """
+    ⚡ MODIFICA ARCHITETTURALE: Solo reload configurazione LLM, NO pipeline completa
+    
+    OTTIMIZZAZIONE CRITICA: 
+    - Evita caricamento LaBSE (1.4GB GPU memory) per semplice cambio LLM
+    - Solo salvataggio configurazione in database
+    - Pipeline completa caricata solo quando serve (test, training, classificazione)
+    
+    Args:
+        client_name: Nome del tenant/cliente
+        
+    Returns:
+        Risultato del reload con dettagli del cambio modello
+    """
+    try:
+        print(f"🔄 [API] Reload LLM configuration (solo config, NO pipeline) per tenant {client_name}")
+        
+        # Verifica configurazione esistente
+        try:
+            tenant_id = client_name
+            config = ai_config_service.get_tenant_configuration(tenant_id)
+            if not config or not config.get('llm_model'):
+                print(f"❌ [API] Tenant {client_name} non ha configurazione LLM - non posso fare reload")
+                return jsonify({
+                    'success': False,
+                    'error': f'Tenant {client_name} non ha configurazione LLM salvata. Configura prima il modello LLM.'
+                }), 404
+                
+        except Exception as e:
+            print(f"❌ [API] Errore verifica configurazione per {client_name}: {e}")
+            return jsonify({
+                'success': False,
+                'error': f'Errore verifica configurazione per tenant {client_name}: {str(e)}'
+            }), 500
+        
+        # 🎯 NUOVO APPROCCIO: Solo invalidazione cache pipeline esistente
+        # Non caricare pipeline completa - sarà caricata quando serve davvero
+        old_model = config.get('llm_model', 'unknown')
+        
+        # Invalida cache pipeline se esiste (senza caricarla)
+        if classification_service.has_cached_pipeline(client_name):
+            print(f"🗑️ [API] Invalidando cache pipeline esistente per {client_name}")
+            classification_service.invalidate_pipeline_cache(client_name)
+        
+        # La configurazione è già salvata in database - nessun reload di pipeline necessario
+        
+        print(f"✅ [API] Configurazione LLM aggiornata per {client_name}: modello={old_model}")
+        print(f"🚀 [API] Pipeline completa sarà caricata solo quando necessaria (test/training/classificazione)")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Configurazione LLM aggiornata per {client_name}',
+            'tenant_id': client_name,
+            'model': config.get('llm_model'),
+            'cache_invalidated': classification_service.has_cached_pipeline(client_name),
+            'note': 'Pipeline completa sarà caricata solo quando necessaria per operazioni pesanti',
+            'timestamp': datetime.now().isoformat()
+        }), 200
+            
+    except Exception as e:
+        error_msg = f'Errore reload LLM configuration: {str(e)}'
+        print(f"❌ [API] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': client_name
+        }), 500
+
+
+@app.route('/api/llm/<client_name>/info', methods=['GET'])
+def get_current_llm_info(client_name: str):
+    """
+    Ottieni informazioni sul modello LLM corrente per un tenant
+    
+    Args:
+        client_name: Nome del tenant/cliente
+        
+    Returns:
+        Informazioni dettagliate sul modello LLM in uso
+    """
+    try:
+        print(f"ℹ️  [API] Richiesta info LLM per tenant {client_name}")
+        
+        # Ottieni pipeline esistente
+        pipeline = classification_service.get_pipeline(client_name)
+        
+        if not pipeline:
+            return jsonify({
+                'success': False,
+                'error': f'Pipeline non trovata per tenant {client_name}'
+            }), 404
+        
+        # Ottieni informazioni LLM
+        llm_info = pipeline.get_current_llm_info()
+        
+        return jsonify({
+            'success': True,
+            'tenant_id': client_name,
+            'llm_info': llm_info,
+            'timestamp': datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        error_msg = f'Errore recupero info LLM: {str(e)}'
+        print(f"❌ [API] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': client_name
+        }), 500
+
+
+# ====== NUOVI ENDPOINT PER GESTIONE STORICO CLUSTERING ======
+
+@app.route('/api/clustering/<tenant_id>/history', methods=['GET'])
+def get_clustering_history(tenant_id):
+    """
+    Recupera storico completo test clustering per tenant con versioning
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Query Parameters:
+        - limit: numero massimo versioni da restituire (default: 50)
+        
+    Returns:
+        JSON con storico versioni clustering:
+        - versions: lista versioni ordinate dalla più recente
+        - total_count: numero totale versioni disponibili
+        - tenant_id: ID tenant
+        
+    Autore: Sistema di Classificazione
+    Data: 2025-08-27
+    """
+    try:
+        from Database.clustering_results_db import ClusteringResultsDB
+        
+        limit = int(request.args.get('limit', '50'))
+        
+        # Inizializza database risultati
+        results_db = ClusteringResultsDB()
+        
+        if not results_db.connect():
+            return jsonify({
+                'success': False,
+                'error': 'Impossibile connettersi al database risultati',
+                'tenant_id': tenant_id
+            }), 500
+        
+        # Recupera storico
+        history = results_db.get_clustering_history(tenant_id, limit)
+        results_db.disconnect()
+        
+        print(f"📈 [API] Recuperato storico clustering: {len(history)} versioni per tenant {tenant_id}")
+        
+        return jsonify({
+            'success': True,
+            'tenant_id': tenant_id,
+            'data': history,  # Cambiato da 'versions' a 'data'
+            'total_versions': len(history)  # Cambiato da 'total_count' a 'total_versions'
+        }), 200
+        
+    except Exception as e:
+        error_msg = f'Errore recupero storico clustering: {str(e)}'
+        print(f"❌ [API] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': tenant_id
+        }), 500
+
+
+@app.route('/api/clustering/<tenant_id>/version/<int:version_number>', methods=['GET'])
+def get_clustering_version(tenant_id, version_number):
+    """
+    Recupera dati completi di una versione specifica clustering
+    
+    Args:
+        tenant_id: ID del tenant
+        version_number: Numero versione da recuperare
+        
+    Returns:
+        JSON con dati completi versione:
+        - version_data: dati risultati clustering
+        - parameters_data: parametri HDBSCAN/UMAP utilizzati
+        - metadata: info versione (timestamp, execution_time, etc.)
+        
+    Autore: Sistema di Classificazione
+    Data: 2025-08-27
+    """
+    try:
+        from Database.clustering_results_db import ClusteringResultsDB
+        
+        # Inizializza database risultati
+        results_db = ClusteringResultsDB()
+        
+        if not results_db.connect():
+            return jsonify({
+                'success': False,
+                'error': 'Impossibile connettersi al database risultati',
+                'tenant_id': tenant_id
+            }), 500
+        
+        # Recupera versione specifica
+        version_data = results_db.get_clustering_version(tenant_id, version_number)
+        results_db.disconnect()
+        
+        if not version_data:
+            return jsonify({
+                'success': False,
+                'error': f'Versione {version_number} non trovata per tenant {tenant_id}',
+                'tenant_id': tenant_id,
+                'version_number': version_number
+            }), 404
+        
+        print(f"📊 [API] Recuperata versione {version_number} per tenant {tenant_id}")
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'id': version_data['id'],
+                'version_number': version_data['version_number'],
+                'tenant_id': tenant_id,
+                'created_at': version_data['created_at'],
+                'results_data': version_data['results_data'],
+                'parameters_data': version_data['parameters_data'],
+                'n_clusters': version_data['n_clusters'],
+                'n_outliers': version_data['n_outliers'],
+                'silhouette_score': version_data['silhouette_score'],
+                'execution_time': version_data['execution_time']
+            }
+        }), 200
+        
+    except Exception as e:
+        error_msg = f'Errore recupero versione clustering: {str(e)}'
+        print(f"❌ [API] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': tenant_id,
+            'version_number': version_number
+        }), 500
+
+
+@app.route('/api/clustering/<tenant_id>/latest', methods=['GET'])
+def get_latest_clustering(tenant_id):
+    """
+    Recupera ultima versione clustering per tenant
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        JSON con dati ultima versione o messaggio se non disponibile
+        
+    Autore: Sistema di Classificazione
+    Data: 2025-08-27
+    """
+    try:
+        from Database.clustering_results_db import ClusteringResultsDB
+        
+        # Inizializza database risultati
+        results_db = ClusteringResultsDB()
+        
+        if not results_db.connect():
+            return jsonify({
+                'success': False,
+                'error': 'Impossibile connettersi al database risultati',
+                'tenant_id': tenant_id
+            }), 500
+        
+        # Recupera ultima versione
+        latest_data = results_db.get_latest_clustering(tenant_id)
+        results_db.disconnect()
+        
+        if not latest_data:
+            return jsonify({
+                'success': True,
+                'tenant_id': tenant_id,
+                'has_data': False,
+                'message': 'Nessun test clustering effettuato per questo tenant'
+            }), 200
+        
+        print(f"📊 [API] Recuperata ultima versione (v{latest_data['version_number']}) per tenant {tenant_id}")
+        
+        return jsonify({
+            'success': True,
+            'tenant_id': tenant_id,
+            'has_data': True,
+            'version_number': latest_data['version_number'],
+            'version_data': latest_data['results_data'],
+            'parameters_data': latest_data['parameters_data'],
+            'metadata': {
+                'id': latest_data['id'],
+                'created_at': latest_data['created_at'],
+                'execution_time': latest_data['execution_time'],
+                'n_clusters': latest_data['n_clusters'],
+                'n_outliers': latest_data['n_outliers'],
+                'n_conversations': latest_data['n_conversations'],
+                'clustering_ratio': latest_data['clustering_ratio'],
+                'silhouette_score': latest_data['silhouette_score']
+            }
+        }), 200
+        
+    except Exception as e:
+        error_msg = f'Errore recupero ultima versione clustering: {str(e)}'
+        print(f"❌ [API] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': tenant_id
+        }), 500
+
+
+@app.route('/api/clustering/<tenant_id>/compare/<int:version1>/<int:version2>', methods=['GET'])
+def compare_clustering_versions(tenant_id, version1, version2):
+    """
+    Confronta due versioni clustering per analisi comparativa
+    
+    Args:
+        tenant_id: ID del tenant
+        version1: Prima versione da confrontare
+        version2: Seconda versione da confrontare
+        
+    Returns:
+        JSON con dati delle due versioni e metriche comparative
+        
+    Autore: Sistema di Classificazione
+    Data: 2025-08-27
+    """
+    try:
+        from Database.clustering_results_db import ClusteringResultsDB
+        
+        # Inizializza database risultati
+        results_db = ClusteringResultsDB()
+        
+        if not results_db.connect():
+            return jsonify({
+                'success': False,
+                'error': 'Impossibile connettersi al database risultati',
+                'tenant_id': tenant_id
+            }), 500
+        
+        # Recupera dati per confronto
+        comparison_data = results_db.get_comparison_data(tenant_id, version1, version2)
+        results_db.disconnect()
+        
+        if not comparison_data:
+            return jsonify({
+                'success': False,
+                'error': f'Una o entrambe le versioni ({version1}, {version2}) non trovate',
+                'tenant_id': tenant_id,
+                'version1': version1,
+                'version2': version2
+            }), 404
+        
+        # Calcola metriche comparative
+        v1_stats = comparison_data['version1']['results_data']['statistics']
+        v2_stats = comparison_data['version2']['results_data']['statistics']
+        v1_quality = comparison_data['version1']['results_data']['quality_metrics']
+        v2_quality = comparison_data['version2']['results_data']['quality_metrics']
+        
+        comparison_metrics = {
+            'clusters_diff': v2_stats['n_clusters'] - v1_stats['n_clusters'],
+            'outliers_diff': v2_stats['n_outliers'] - v1_stats['n_outliers'],
+            'ratio_diff': v2_stats['clustering_ratio'] - v1_stats['clustering_ratio'],
+            'silhouette_diff': v2_quality.get('silhouette_score', 0) - v1_quality.get('silhouette_score', 0),
+            'execution_time_diff': comparison_data['version2']['execution_time'] - comparison_data['version1']['execution_time']
+        }
+        
+        print(f"🔄 [API] Confronto versioni {version1} vs {version2} per tenant {tenant_id}")
+        
+        return jsonify({
+            'success': True,
+            'tenant_id': tenant_id,
+            'version1': {
+                'number': version1,
+                'data': comparison_data['version1']['results_data'],
+                'parameters': comparison_data['version1']['parameters_data'],
+                'metadata': {
+                    'created_at': comparison_data['version1']['created_at'],
+                    'execution_time': comparison_data['version1']['execution_time']
+                }
+            },
+            'version2': {
+                'number': version2,
+                'data': comparison_data['version2']['results_data'],
+                'parameters': comparison_data['version2']['parameters_data'],
+                'metadata': {
+                    'created_at': comparison_data['version2']['created_at'],
+                    'execution_time': comparison_data['version2']['execution_time']
+                }
+            },
+            'comparison_metrics': comparison_metrics
+        }), 200
+        
+    except Exception as e:
+        error_msg = f'Errore confronto versioni clustering: {str(e)}'
+        print(f"❌ [API] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': tenant_id,
+            'version1': version1,
+            'version2': version2
+        }), 500
+
+
+@app.route('/api/clustering/<tenant_id>/metrics-trend', methods=['GET'])
+def get_clustering_metrics_trend(tenant_id):
+    """
+    Recupera trend metriche clustering per visualizzazioni evolutive
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Query Parameters:
+        - limit: numero versioni da includere (default: 20)
+        
+    Returns:
+        JSON con dati trend per grafici temporali:
+        - trend_data: metriche ordinate per versione
+        - metrics_summary: statistiche aggregate trend
+        
+    Autore: Sistema di Classificazione
+    Data: 2025-08-27
+    """
+    try:
+        from Database.clustering_results_db import ClusteringResultsDB
+        
+        limit = int(request.args.get('limit', '20'))
+        
+        # Inizializza database risultati
+        results_db = ClusteringResultsDB()
+        
+        if not results_db.connect():
+            return jsonify({
+                'success': False,
+                'error': 'Impossibile connettersi al database risultati',
+                'tenant_id': tenant_id
+            }), 500
+        
+        # Recupera trend metriche
+        trend_data = results_db.get_metrics_trend(tenant_id, limit)
+        results_db.disconnect()
+        
+        if not trend_data:
+            return jsonify({
+                'success': True,
+                'tenant_id': tenant_id,
+                'has_data': False,
+                'message': 'Nessun dato disponibile per trend analysis'
+            }), 200
+        
+        # Calcola statistiche aggregate
+        metrics_summary = {
+            'total_versions': len(trend_data),
+            'avg_clusters': sum(d['n_clusters'] for d in trend_data if d['n_clusters']) / len([d for d in trend_data if d['n_clusters']]) if trend_data else 0,
+            'avg_outliers': sum(d['n_outliers'] for d in trend_data if d['n_outliers']) / len([d for d in trend_data if d['n_outliers']]) if trend_data else 0,
+            'avg_silhouette': sum(d['silhouette_score'] for d in trend_data if d['silhouette_score']) / len([d for d in trend_data if d['silhouette_score']]) if trend_data else 0,
+            'best_silhouette': max((d['silhouette_score'] for d in trend_data if d['silhouette_score']), default=0),
+            'best_version': next((d['version_number'] for d in trend_data if d['silhouette_score'] == max((x['silhouette_score'] for x in trend_data if x['silhouette_score']), default=0)), None) if trend_data else None
+        }
+        
+        print(f"📈 [API] Trend metriche clustering: {len(trend_data)} versioni per tenant {tenant_id}")
+        
+        return jsonify({
+            'success': True,
+            'tenant_id': tenant_id,
+            'has_data': True,
+            'trend_data': trend_data,
+            'metrics_summary': metrics_summary
+        }), 200
+        
+    except Exception as e:
+        error_msg = f'Errore recupero trend metriche: {str(e)}'
+        print(f"❌ [API] {error_msg}")
+        
         return jsonify({
             'success': False,
             'error': error_msg,

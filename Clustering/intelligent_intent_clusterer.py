@@ -10,10 +10,18 @@ import yaml
 import os
 from typing import Dict, List, Tuple, Set, Any, Optional
 from collections import defaultdict, Counter
-from sklearn.cluster import HDBSCAN
+# 🔧 [REMOVED] from sklearn.cluster import HDBSCAN  # Ora usiamo HDBSCANClusterer custom
 from sklearn.metrics import silhouette_score
 import logging
-import logging
+
+# 🔧 [FIX] Import HDBSCANClusterer all'inizio per evitare problemi di contesto
+try:
+    from .hdbscan_clusterer import HDBSCANClusterer
+except ImportError:
+    # Fallback per contesti dove import relativo non funziona
+    import sys
+    sys.path.append(os.path.dirname(__file__))
+    from hdbscan_clusterer import HDBSCANClusterer
 
 class IntelligentIntentClusterer:
     """
@@ -21,19 +29,21 @@ class IntelligentIntentClusterer:
     senza bisogno di pattern predefiniti. Approccio completamente ML-driven.
     """
     
-    def __init__(self, config_path: str = None, llm_classifier=None):
+    def __init__(self, config_path: str = None, llm_classifier=None, tenant_id: str = None):
         """
         Inizializza il clusterer intelligente
         
         Args:
-            config_path: Percorso del file di configurazione
+            config_path: Percorso del file di configurazione globale
             llm_classifier: Classificatore LLM per analisi intent
+            tenant_id: ID del tenant per configurazione specifica
         """
         if config_path is None:
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
         
         self.config_path = config_path
         self.llm_classifier = llm_classifier
+        self.tenant_id = tenant_id  # 🗂️  [NEW] Memorizza tenant_id
         self.load_intelligent_config()
         
         # Setup logging
@@ -43,9 +53,25 @@ class IntelligentIntentClusterer:
     def load_intelligent_config(self):
         """Carica la configurazione per clustering intelligente"""
         try:
+            # 🗂️  [NEW] Carica prima config tenant-specific se disponibile
+            tenant_clustering_config = {}
+            if self.tenant_id:
+                tenant_config_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'tenant_configs')
+                tenant_config_file = os.path.join(tenant_config_dir, f'{self.tenant_id}_clustering.yaml')
+                
+                if os.path.exists(tenant_config_file):
+                    print(f"🗂️  [DEBUG] Caricamento config tenant-specific: {tenant_config_file}")
+                    with open(tenant_config_file, 'r', encoding='utf-8') as file:
+                        tenant_config = yaml.safe_load(file)
+                        tenant_clustering_config = tenant_config.get('clustering_parameters', {})
+                        print(f"🗂️  [DEBUG] Config tenant caricato: {list(tenant_clustering_config.keys())}")
+                else:
+                    print(f"🗂️  [DEBUG] Config tenant non trovato: {tenant_config_file}")
+            
+            # Carica config globale
             with open(self.config_path, 'r', encoding='utf-8') as file:
                 config = yaml.safe_load(file)
-            
+
             intelligent_config = config.get('intelligent_clustering', {})
             self.enabled = intelligent_config.get('enabled', True)
             self.use_llm_primary = intelligent_config.get('use_llm_primary', True)
@@ -63,12 +89,23 @@ class IntelligentIntentClusterer:
                 'problemi_tecnici', 'info_generali', 'cortesia', 'altro'
             ])
             
-            # Configurazione clustering HDBSCAN per sub-clustering semantico
+            # 🗂️  [NEW] Configurazione clustering: prima tenant-specific, poi globale come fallback
             clustering_config = config.get('clustering', {})
-            self.min_cluster_size = clustering_config.get('min_cluster_size', 2)
-            self.min_samples = clustering_config.get('min_samples', 1)
-            self.cluster_selection_epsilon = clustering_config.get('cluster_selection_epsilon', 0.03)
-            self.metric = clustering_config.get('metric', 'euclidean')
+            
+            # Usa config tenant se disponibile, altrimenti fallback a globale
+            self.min_cluster_size = tenant_clustering_config.get('min_cluster_size', clustering_config.get('min_cluster_size', 2))
+            self.min_samples = tenant_clustering_config.get('min_samples', clustering_config.get('min_samples', 1))
+            self.cluster_selection_epsilon = tenant_clustering_config.get('cluster_selection_epsilon', clustering_config.get('cluster_selection_epsilon', 0.03))
+            self.metric = tenant_clustering_config.get('metric', clustering_config.get('metric', 'euclidean'))
+            
+            # 🗂️  [NEW] Parametri UMAP per supporto completo
+            self.use_umap = tenant_clustering_config.get('use_umap', clustering_config.get('use_umap', True))
+            self.umap_n_neighbors = tenant_clustering_config.get('umap_n_neighbors', clustering_config.get('umap_n_neighbors', 30))
+            self.umap_n_components = tenant_clustering_config.get('umap_n_components', clustering_config.get('umap_n_components', 52))
+            self.umap_min_dist = tenant_clustering_config.get('umap_min_dist', clustering_config.get('umap_min_dist', 0.2))
+            self.umap_metric = tenant_clustering_config.get('umap_metric', clustering_config.get('umap_metric', 'cosine'))
+            
+            print(f"🗂️  [DEBUG] UMAP config finale: use_umap={self.use_umap}, n_components={self.umap_n_components}, min_dist={self.umap_min_dist}")
             
             # Parametri per selezione rappresentanti diversificati
             diverse_config = intelligent_config.get('diverse_representatives', {})
@@ -78,13 +115,6 @@ class IntelligentIntentClusterer:
             self.consensus_strategy = diverse_config.get('consensus_strategy', 'majority')
             self.majority_threshold = diverse_config.get('majority_threshold', 0.6)
             self.consensus_confidence_bonus = diverse_config.get('consensus_confidence_bonus', 0.1)
-            
-            # Configurazione clustering HDBSCAN per sub-clustering semantico
-            clustering_config = config.get('clustering', {})
-            self.min_cluster_size = clustering_config.get('min_cluster_size', 2)
-            self.min_samples = clustering_config.get('min_samples', 1)
-            self.cluster_selection_epsilon = clustering_config.get('cluster_selection_epsilon', 0.03)
-            self.metric = clustering_config.get('metric', 'euclidean')
             
             print(f"🧠 Clustering intelligente configurato:")
             print(f"   🎯 Categorie intent suggerite: {len(self.intent_categories)}")
@@ -258,12 +288,19 @@ class IntelligentIntentClusterer:
                 # Estrai embeddings per questo intent
                 intent_embeddings = embeddings[indices]
                 
-                # Applica HDBSCAN
-                clusterer = HDBSCAN(
+                # Applica HDBSCAN con supporto UMAP (import già fatto all'inizio)
+                
+                clusterer = HDBSCANClusterer(
                     min_cluster_size=self.min_cluster_size,
                     min_samples=self.min_samples,
                     cluster_selection_epsilon=self.cluster_selection_epsilon,
-                    metric=self.metric
+                    metric=self.metric,
+                    # 🗂️  Parametri UMAP dal config
+                    use_umap=getattr(self, 'use_umap', True),
+                    umap_n_neighbors=getattr(self, 'umap_n_neighbors', 30),
+                    umap_n_components=getattr(self, 'umap_n_components', 52),
+                    umap_min_dist=getattr(self, 'umap_min_dist', 0.2),
+                    umap_metric=getattr(self, 'umap_metric', 'cosine')
                 )
                 
                 sub_labels = clusterer.fit_predict(intent_embeddings)
@@ -328,11 +365,21 @@ class IntelligentIntentClusterer:
         
         # FASE 1: Clustering semantico con HDBSCAN (parametri più restrittivi)
         print(f"📊 Fase 1: Clustering semantico con HDBSCAN...")
-        clusterer = HDBSCAN(
+        
+        # 🔧 [FIX] Usa HDBSCANClusterer con supporto UMAP (import già fatto all'inizio)
+        
+        # Crea clusterer con supporto UMAP
+        clusterer = HDBSCANClusterer(
             min_cluster_size=self.min_cluster_size,
             min_samples=self.min_samples,
             cluster_selection_epsilon=self.cluster_selection_epsilon,
-            metric=self.metric
+            metric=self.metric,
+            # 🗂️  Parametri UMAP dal config
+            use_umap=getattr(self, 'use_umap', True),
+            umap_n_neighbors=getattr(self, 'umap_n_neighbors', 30),
+            umap_n_components=getattr(self, 'umap_n_components', 52),
+            umap_min_dist=getattr(self, 'umap_min_dist', 0.2),
+            umap_metric=getattr(self, 'umap_metric', 'cosine')
         )
         
         # Controllo: HDBSCAN richiede almeno 2 campioni

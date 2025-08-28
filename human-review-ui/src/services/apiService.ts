@@ -499,6 +499,8 @@ class ApiService {
     }>;
     quality_metrics: {
       silhouette_score: number;
+      davies_bouldin_score: number;
+      calinski_harabasz_score: number;
       outlier_ratio: number;
       cluster_balance: string;
       quality_assessment: string;
@@ -573,7 +575,14 @@ class ApiService {
           execution_time: 0,
           statistics: { total_conversations: 0, n_clusters: 0, n_outliers: 0, clustering_ratio: 0, parameters_used: {} },
           detailed_clusters: [],
-          quality_metrics: { silhouette_score: 0, outlier_ratio: 0, cluster_balance: 'error', quality_assessment: 'error' },
+          quality_metrics: { 
+            silhouette_score: 0, 
+            davies_bouldin_score: 0,
+            calinski_harabasz_score: 0,
+            outlier_ratio: 0, 
+            cluster_balance: 'error', 
+            quality_assessment: 'error' 
+          },
           outlier_analysis: { count: 0, ratio: 0, analysis: 'error', recommendation: '', sample_outliers: [] }
         };
       }

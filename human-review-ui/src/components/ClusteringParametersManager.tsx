@@ -905,7 +905,11 @@ const ClusteringParametersManager: React.FC = () => {
                             </Tooltip>
                           </Box>
                           <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
-                            Valori più alti preservano più struttura globale (15-50 raccomandato)
+                            <strong>📊 Impatto delle variazioni:</strong><br/>
+                            • <strong>Valori bassi (5-10):</strong> Preserva struttura locale, crea cluster più piccoli e dettagliati<br/>
+                            • <strong>Valori medi (15-30):</strong> Bilanciamento ottimale globale/locale (raccomandato)<br/>
+                            • <strong>Valori alti (50+):</strong> Preserva struttura globale, cluster più grandi ma meno precisi<br/>
+                            💡 <strong>Consiglio:</strong> Inizia con 15-20 per dati testuali
                           </Typography>
                           <Slider
                             value={parameters?.umap_n_neighbors?.value as number || 15}
@@ -937,7 +941,11 @@ const ClusteringParametersManager: React.FC = () => {
                             </Tooltip>
                           </Box>
                           <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
-                            Valori più bassi consentono clustering più densi (0.0-0.3 raccomandato)
+                            <strong>📊 Impatto delle variazioni:</strong><br/>
+                            • <strong>0.0:</strong> Punti molto vicini, clustering denso e compatto<br/>
+                            • <strong>0.1 (raccomandato):</strong> Bilanciamento ottimale densità/separazione<br/>
+                            • <strong>0.3+:</strong> Maggiore dispersione, cluster meno densi ma più separati<br/>
+                            💡 <strong>Consiglio:</strong> 0.1 funziona bene per la maggior parte dei casi
                           </Typography>
                           <Slider
                             value={parameters?.umap_min_dist?.value as number || 0.1}
@@ -969,7 +977,11 @@ const ClusteringParametersManager: React.FC = () => {
                             </Tooltip>
                           </Box>
                           <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
-                            Cosine è ottimale per embeddings testuali
+                            <strong>📊 Impatto delle variazioni:</strong><br/>
+                            • <strong>Cosine:</strong> Ottimale per testi, ignora lunghezza e si concentra su direzione semantica<br/>
+                            • <strong>Euclidean:</strong> Distanza geometrica standard, può essere influenzato dalla magnitudo<br/>
+                            • <strong>Manhattan:</strong> Distanza L1, meno sensibile agli outlier<br/>
+                            💡 <strong>Raccomandazione:</strong> Usa sempre <strong>cosine</strong> per embeddings testuali
                           </Typography>
                           <FormControl fullWidth size="small">
                             <Select
@@ -999,7 +1011,11 @@ const ClusteringParametersManager: React.FC = () => {
                             </Tooltip>
                           </Box>
                           <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
-                            Dimensioni finali dopo la riduzione (2-100)
+                            <strong>📊 Impatto delle variazioni:</strong><br/>
+                            • <strong>2-5 dim:</strong> Massima riduzione, solo per visualizzazione 2D/3D<br/>
+                            • <strong>10-20 dim:</strong> Buon bilanciamento riduzione/informazione (raccomandato)<br/>
+                            • <strong>50+ dim:</strong> Preserva più informazione ma aumenta tempo computazionale<br/>
+                            💡 <strong>Consiglio:</strong> 10-15 dimensioni per clustering efficace (da 768→12 nell'ottimale)
                           </Typography>
                           <Slider
                             value={parameters?.umap_n_components?.value as number || 50}
@@ -1031,7 +1047,10 @@ const ClusteringParametersManager: React.FC = () => {
                             </Tooltip>
                           </Box>
                           <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
-                            Imposta un valore fisso per risultati riproducibili
+                            <strong>📊 Scopo:</strong> Garantisce risultati identici tra esecuzioni multiple<br/>
+                            • <strong>Valore fisso (es. 42):</strong> Risultati riproducibili per confronti<br/>
+                            • <strong>Cambiare valore:</strong> Esplora variazioni casuali nell'algoritmo<br/>
+                            💡 <strong>Consiglio:</strong> Mantieni 42 per consistenza, cambia solo per testare robustezza
                           </Typography>
                           <TextField
                             type="number"

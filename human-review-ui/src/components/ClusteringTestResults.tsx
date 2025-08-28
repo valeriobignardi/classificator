@@ -49,8 +49,11 @@ interface ClusteringTestResult {
   };
   quality_metrics?: {
     silhouette_score: number;
-    calinski_harabasz_score: number;
     davies_bouldin_score: number;
+    calinski_harabasz_score: number;
+    outlier_ratio: number;
+    cluster_balance: string;
+    quality_assessment: string;
   };
   recommendations?: string[];
   detailed_clusters?: {
@@ -170,24 +173,62 @@ const ClusteringTestResults: React.FC<ClusteringTestResultsProps> = ({
         {result.quality_metrics && (
           <Card sx={{ mb: 2 }}>
             <CardContent>
-              <Typography variant="h6" gutterBottom>🎯 Qualità Clustering</Typography>
-              <Box display="flex" flexWrap="wrap" gap={1}>
-                <Chip 
-                  label={`Silhouette: ${result.quality_metrics.silhouette_score?.toFixed(3) || 'N/A'}`} 
-                  size="small" 
-                  variant="outlined" 
-                />
-                <Chip 
-                  label={`Calinski-Harabasz: ${result.quality_metrics.calinski_harabasz_score?.toFixed(1) || 'N/A'}`} 
-                  size="small" 
-                  variant="outlined" 
-                />
-                <Chip 
-                  label={`Davies-Bouldin: ${result.quality_metrics.davies_bouldin_score?.toFixed(3) || 'N/A'}`} 
-                  size="small" 
-                  variant="outlined" 
-                />
+              <Typography variant="h6" gutterBottom>🎯 Metriche di Qualità Clustering</Typography>
+              
+              {/* Silhouette Score */}
+              <Box sx={{ mb: 2, p: 2, border: '1px solid #e0e0e0', borderRadius: 1 }}>
+                <Box display="flex" alignItems="center" gap={1} mb={1}>
+                  <Chip 
+                    label={`Silhouette: ${result.quality_metrics.silhouette_score?.toFixed(3) || 'N/A'}`} 
+                    color={result.quality_metrics.silhouette_score > 0.5 ? 'success' : result.quality_metrics.silhouette_score > 0.25 ? 'warning' : 'error'}
+                    size="medium" 
+                  />
+                </Box>
+                <Typography variant="body2" color="text.secondary">
+                  <strong>Silhouette Score:</strong> Misura quanto ogni punto è simile al suo cluster rispetto agli altri cluster. 
+                  Valori: -1 (pessimo) a +1 (ottimo). Soglia consigliata: ≥0.5 per clustering di alta qualità.
+                </Typography>
               </Box>
+
+              {/* Davies-Bouldin Index */}
+              <Box sx={{ mb: 2, p: 2, border: '1px solid #e0e0e0', borderRadius: 1 }}>
+                <Box display="flex" alignItems="center" gap={1} mb={1}>
+                  <Chip 
+                    label={`Davies-Bouldin: ${result.quality_metrics.davies_bouldin_score?.toFixed(3) || 'N/A'}`} 
+                    color={result.quality_metrics.davies_bouldin_score < 1 ? 'success' : result.quality_metrics.davies_bouldin_score < 2 ? 'warning' : 'error'}
+                    size="medium" 
+                  />
+                </Box>
+                <Typography variant="body2" color="text.secondary">
+                  <strong>Davies-Bouldin Index:</strong> Misura la compattezza interna dei cluster e la separazione tra cluster. 
+                  Valori più bassi sono migliori (0 = perfetto). Soglia consigliata: &lt;1.0 per clustering eccellente.
+                </Typography>
+              </Box>
+
+              {/* Calinski-Harabasz Index */}
+              <Box sx={{ mb: 2, p: 2, border: '1px solid #e0e0e0', borderRadius: 1 }}>
+                <Box display="flex" alignItems="center" gap={1} mb={1}>
+                  <Chip 
+                    label={`Calinski-Harabasz: ${result.quality_metrics.calinski_harabasz_score?.toFixed(1) || 'N/A'}`} 
+                    color={result.quality_metrics.calinski_harabasz_score > 100 ? 'success' : result.quality_metrics.calinski_harabasz_score > 50 ? 'warning' : 'error'}
+                    size="medium" 
+                  />
+                </Box>
+                <Typography variant="body2" color="text.secondary">
+                  <strong>Calinski-Harabasz Index:</strong> Rapporto tra dispersione tra-cluster e intra-cluster. 
+                  Valori più alti indicano cluster ben definiti e separati. Soglia consigliata: ≥100 per buona separazione.
+                </Typography>
+              </Box>
+
+              {/* Riepilogo qualitativo */}
+              {result.quality_metrics.quality_assessment && (
+                <Box sx={{ mt: 2, p: 2, bgcolor: '#f5f5f5', borderRadius: 1 }}>
+                  <Typography variant="body2" fontWeight="bold">
+                    📋 Valutazione Complessiva: {result.quality_metrics.quality_assessment}
+                  </Typography>
+                </Box>
+              )}
+              
             </CardContent>
           </Card>
         )}

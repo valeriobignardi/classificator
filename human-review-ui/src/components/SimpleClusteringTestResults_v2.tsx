@@ -31,8 +31,11 @@ interface ClusteringTestResult {
   };
   quality_metrics?: {
     silhouette_score: number;
-    calinski_harabasz_score: number;
     davies_bouldin_score: number;
+    calinski_harabasz_score: number;
+    outlier_ratio: number;
+    cluster_balance: string;
+    quality_assessment: string;
   };
   recommendations?: string[];
   detailed_clusters?: {
@@ -106,24 +109,50 @@ const SimpleClusteringTestResults_v2: React.FC<Props> = ({ open, onClose, result
         {result.quality_metrics && (
           <Card sx={{ mb: 2 }}>
             <CardContent>
-              <Typography variant="h6" gutterBottom>🎯 Qualità Clustering</Typography>
-              <Box display="flex" flexWrap="wrap" gap={1}>
-                <Chip 
-                  label={`Silhouette: ${result.quality_metrics.silhouette_score?.toFixed(3) || 'N/A'}`} 
-                  size="small" 
-                  variant="outlined" 
-                />
-                <Chip 
-                  label={`Calinski-Harabasz: ${result.quality_metrics.calinski_harabasz_score?.toFixed(1) || 'N/A'}`} 
-                  size="small" 
-                  variant="outlined" 
-                />
-                <Chip 
-                  label={`Davies-Bouldin: ${result.quality_metrics.davies_bouldin_score?.toFixed(3) || 'N/A'}`} 
-                  size="small" 
-                  variant="outlined" 
-                />
+              <Typography variant="h6" gutterBottom>🎯 Metriche di Qualità Clustering</Typography>
+              
+              {/* Silhouette Score */}
+              <Box sx={{ mb: 2, p: 1.5, border: '1px solid #e0e0e0', borderRadius: 1 }}>
+                <Box display="flex" alignItems="center" gap={1} mb={1}>
+                  <Chip 
+                    label={`Silhouette: ${result.quality_metrics.silhouette_score?.toFixed(3) || 'N/A'}`} 
+                    color={result.quality_metrics.silhouette_score > 0.5 ? 'success' : result.quality_metrics.silhouette_score > 0.25 ? 'warning' : 'error'}
+                    size="small" 
+                  />
+                </Box>
+                <Typography variant="caption" color="text.secondary">
+                  Misura la coesione dei cluster. Valori ≥0.5 = ottimo clustering.
+                </Typography>
               </Box>
+
+              {/* Davies-Bouldin Index */}
+              <Box sx={{ mb: 2, p: 1.5, border: '1px solid #e0e0e0', borderRadius: 1 }}>
+                <Box display="flex" alignItems="center" gap={1} mb={1}>
+                  <Chip 
+                    label={`Davies-Bouldin: ${result.quality_metrics.davies_bouldin_score?.toFixed(3) || 'N/A'}`} 
+                    color={result.quality_metrics.davies_bouldin_score < 1 ? 'success' : result.quality_metrics.davies_bouldin_score < 2 ? 'warning' : 'error'}
+                    size="small" 
+                  />
+                </Box>
+                <Typography variant="caption" color="text.secondary">
+                  Valuta compattezza interna. Valori &lt;1.0 = eccellente separazione.
+                </Typography>
+              </Box>
+
+              {/* Calinski-Harabasz Index */}
+              <Box sx={{ mb: 1.5, p: 1.5, border: '1px solid #e0e0e0', borderRadius: 1 }}>
+                <Box display="flex" alignItems="center" gap={1} mb={1}>
+                  <Chip 
+                    label={`Calinski-Harabasz: ${result.quality_metrics.calinski_harabasz_score?.toFixed(1) || 'N/A'}`} 
+                    color={result.quality_metrics.calinski_harabasz_score > 100 ? 'success' : result.quality_metrics.calinski_harabasz_score > 50 ? 'warning' : 'error'}
+                    size="small" 
+                  />
+                </Box>
+                <Typography variant="caption" color="text.secondary">
+                  Rapporto dispersione tra/intra cluster. Valori ≥100 = buona definizione.
+                </Typography>
+              </Box>
+              
             </CardContent>
           </Card>
         )}

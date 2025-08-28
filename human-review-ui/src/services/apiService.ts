@@ -1093,11 +1093,42 @@ class ApiService {
     };
     error?: string;
   }> {
-    return this.handleRequest(
-      axios.get(`${API_BASE_URL}/clustering/${tenantId}/metrics-trend`, {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/clustering/${tenantId}/metrics-trend`, {
         params: { days }
-      })
-    );
+      });
+      
+      // Il backend restituisce direttamente la struttura, la adattiamo al formato atteso
+      const backendData = response.data;
+      
+      return {
+        success: backendData.success || false,
+        data: {
+          trend_data: backendData.trend_data || [],
+          metrics_summary: backendData.metrics_summary || {},
+          has_data: backendData.has_data || false,
+          tenant_id: backendData.tenant_id || tenantId
+        }
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        data: {
+          trend_data: [],
+          metrics_summary: {
+            avg_clusters: 0,
+            avg_outliers: 0,
+            avg_silhouette: 0,
+            best_silhouette: 0,
+            best_version: 0,
+            total_versions: 0
+          },
+          has_data: false,
+          tenant_id: tenantId
+        },
+        error: error.response?.data?.message || error.message || 'Errore chiamata API'
+      };
+    }
   }
 }
 

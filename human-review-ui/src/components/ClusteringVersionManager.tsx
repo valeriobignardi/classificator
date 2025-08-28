@@ -289,13 +289,22 @@ const ClusteringVersionManager: React.FC = () => {
     setError(null);
 
     try {
+      console.log('🔍 [DEBUG] Chiamata API getClusteringMetricsTrend per tenant:', selectedTenant.tenant_id, 'giorni:', trendDays);
       const response = await apiService.getClusteringMetricsTrend(selectedTenant.tenant_id, trendDays);
+      
+      console.log('📊 [DEBUG] Risposta API trend:', response);
+      
       if (response.success && response.data) {
+        console.log('✅ [DEBUG] Dati trend ricevuti:', response.data);
+        console.log('📈 [DEBUG] Trend data array:', response.data.trend_data?.length || 0, 'elementi');
+        console.log('📋 [DEBUG] Metrics summary:', response.data.metrics_summary);
         setTrendData(response.data);
       } else {
+        console.error('❌ [DEBUG] Errore risposta API:', response.error);
         setError(response.error || 'Errore caricamento trend');
       }
     } catch (err: any) {
+      console.error('❌ [DEBUG] Eccezione chiamata API:', err);
       setError(`Errore: ${err.message}`);
     } finally {
       setLoading(false);

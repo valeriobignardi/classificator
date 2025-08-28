@@ -1,17 +1,16 @@
 """
 Sistema di validazione per i tag "ALTRO" durante il training supervisionato
 
-Gestisce il flusso di validazione quando LLM etichetta come "ALTRO":
-1. Ottiene raw response del LLM 
-2. Fa classificare anche a BERTopic
-3. Se concordano: procede con controllo similarità
-4. Se non concordano: rimanda alla decisione umana
-5. Controllo similarità semantica con tag esistenti
-6. Se similarità >= 90%: usa tag esistente
-7. Se < 90%: aggiunge nuovo tag
+Nuova logica basata su embedding semantico:
+1. Ottiene proposta tag dalla raw response LLM
+2. Calcola embedding della proposta con motore tenant-specific
+3. Confronta embedding con tutti i tag esistenti
+4. Se similarità >= 85%: usa tag esistente più simile
+5. Se similarità < 85%: crea nuovo tag dalla proposta LLM
 
-Autore: Pipeline Humanitas  
-Data: 23 Agosto 2025
+Autore: Valerio Bignardi
+Data: 28 Agosto 2025
+Ultima modifica: 2025-08-28 - Riscrittura completa con logica embedding-based
 """
 
 import sys
@@ -26,10 +25,11 @@ from dataclasses import dataclass
 
 # Aggiunge i percorsi necessari
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'EmbeddingEngine'))
-sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'TagDatabase'))
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Database'))
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from tag_manager import TagDatabaseManager
+from schema_manager import ClassificationSchemaManager
 from mongo_classification_reader import MongoClassificationReader
 
 # Import per embedding dinamico
@@ -43,64 +43,113 @@ except ImportError:
 @dataclass
 class ValidationResult:
     """
-    Risultato della validazione di un tag "ALTRO"
+    Risultato della validazione di un tag "ALTRO" - versione embedding-based
     """
     should_add_new_tag: bool
     final_tag: str
     confidence: float
-    validation_path: str  # "llm_bertopic_agree", "human_decision", "similarity_match"
+    validation_path: str  # "similarity_match", "new_tag_created", "error"
     similarity_score: Optional[float] = None
     matched_existing_tag: Optional[str] = None
-    bertopic_suggestion: Optional[str] = None
-    llm_raw_response: Optional[str] = None
+    llm_suggested_tag: Optional[str] = None
     needs_human_review: bool = False
 
 class AltroTagValidator:
     """
-    Validatore per i tag classificati come "ALTRO" durante il training supervisionato
+    Validatore per i tag classificati come "ALTRO" - versione embedding-based
+    
+    Nuova implementazione basata su:
+    - Embedding semantico della proposta LLM
+    - Confronto con embedding di tag esistenti
+    - Soglia configurabile per decidere nuovo vs esistente
     """
     
-    def __init__(self, tenant_id: str, similarity_threshold: float = 0.9):
+    def __init__(self, tenant_id: str, config: Dict[str, Any] = None):
         """
-        Inizializza il validatore
+        Inizializza il validatore embedding-based
         
-        Scopo della funzione: Inizializza validatore ALTRO con embedder configurato per tenant
-        Parametri di input: tenant_id (ID tenant), similarity_threshold (soglia similarità)
+        Scopo della funzione: Inizializza validatore con embedder e configurazione
+        Parametri di input: tenant_id (ID tenant), config (configurazione opzionale)
         Parametri di output: Istanza AltroTagValidator configurata
         Valori di ritorno: None (costruttore)
-        Tracciamento aggiornamenti: 2025-08-28 - Aggiunto supporto embedding dinamico per tenant
+        Tracciamento aggiornamenti: 2025-08-28 - Riscrittura completa embedding-based
         
         Args:
             tenant_id: ID del tenant
-            similarity_threshold: Soglia di similarità per considerare tag equivalenti (default 0.9)
+            config: Configurazione completa (se None, carica da file)
             
         Autore: Valerio Bignardi
         Data: 2025-08-28
         """
         self.tenant_id = tenant_id
-        self.similarity_threshold = similarity_threshold
         self.logger = logging.getLogger(__name__)
         
+        # Carica configurazione
+        self.config = config if config else self._load_config()
+        
+        # Parametri da configurazione
+        altro_config = self.config.get('altro_tag_validator', {})
+        self.similarity_threshold = altro_config.get('semantic_similarity_threshold', 0.85)
+        self.enable_cache = altro_config.get('enable_embedding_cache', True)
+        self.max_cache_size = altro_config.get('max_embedding_cache_size', 1000)
+        
+        self.logger.info(f"🔧 AltroTagValidator inizializzato - soglia: {self.similarity_threshold}")
+        
         # Inizializza i componenti necessari
-        self.tag_manager = TagDatabaseManager()
+        self.schema_manager = ClassificationSchemaManager()
         self.db_connector = MongoClassificationReader()
         
-        # ✅ CORREZIONE: Usa embedder dinamico configurato per il tenant
+        # ✅ Embedder dinamico configurato per il tenant
         self.embedder = self._get_dynamic_embedder()
         
-        # Cache per i tag esistenti e loro embeddings
-        self._existing_tags_cache = None
-        self._existing_embeddings_cache = None
+        # Cache per embedding dei tag esistenti (performance)
+        self._embedding_cache = {} if self.enable_cache else None
+        self._tags_cache = None
+        self._last_cache_update = None
     
+    def _load_config(self) -> Dict[str, Any]:
+        """
+        Carica configurazione da config.yaml
+        
+        Scopo della funzione: Legge configurazione sistema da file
+        Parametri di input: None
+        Parametri di output: Dict con configurazione completa
+        Valori di ritorno: Configurazione caricata
+        Tracciamento aggiornamenti: 2025-08-28 - Creata per nuova implementazione
+        
+        Returns:
+            Configurazione completa del sistema
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-28
+        """
+        try:
+            import yaml
+            config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
+            
+            with open(config_path, 'r', encoding='utf-8') as f:
+                return yaml.safe_load(f)
+                
+        except Exception as e:
+            self.logger.error(f"❌ Errore caricamento config: {e}")
+            # Configurazione di fallback
+            return {
+                'altro_tag_validator': {
+                    'semantic_similarity_threshold': 0.85,
+                    'enable_embedding_cache': True,
+                    'max_embedding_cache_size': 1000
+                }
+            }
+
     def _get_dynamic_embedder(self):
         """
-        Ottiene embedder dinamico configurato per il tenant dal database
+        Ottiene embedder dinamico configurato per il tenant
         
-        Scopo della funzione: Carica embedder rispettando configurazione tenant
-        Parametri di input: None (usa self.tenant_id)
+        Scopo della funzione: Inizializza embedder tenant-specific da configurazione
+        Parametri di input: None (usa self.tenant_id e self.config)
         Parametri di output: Istanza embedder configurata
-        Valori di ritorno: BaseEmbedder configurato per tenant
-        Tracciamento aggiornamenti: 2025-08-28 - Creata per supporto configurazione dinamica
+        Valori di ritorno: Embedder pronto all'uso
+        Tracciamento aggiornamenti: 2025-08-28 - Creata per nuova architettura
         
         Returns:
             Embedder configurato per il tenant
@@ -109,504 +158,454 @@ class AltroTagValidator:
         Data: 2025-08-28
         """
         try:
+            # ✅ Usa il simple_embedding_manager (istanza singleton)
             if EMBEDDING_MANAGER_AVAILABLE:
-                self.logger.info(f"🔧 Caricamento embedder dinamico per tenant {self.tenant_id}")
+                # Ottiene embedder configurato per il tenant
                 embedder = simple_embedding_manager.get_embedder_for_tenant(self.tenant_id)
                 
-                # Verifica che l'embedder abbia il metodo calculate_similarity
-                if not hasattr(embedder, 'calculate_similarity'):
-                    self.logger.warning(f"⚠️ Embedder {type(embedder).__name__} non ha calculate_similarity, aggiungo wrapper")
-                    return self._wrap_embedder_with_similarity(embedder)
-                
-                self.logger.info(f"✅ Embedder dinamico caricato: {type(embedder).__name__}")
+                self.logger.info(f"✅ Embedder dinamico inizializzato per tenant {self.tenant_id}")
                 return embedder
             else:
-                self.logger.warning("⚠️ EmbeddingManager non disponibile, fallback a LaBSE")
-                return self._get_fallback_embedder()
+                # Fallback al LaBSE embedder
+                self.logger.warning("⚠️ Usando fallback LaBSEEmbedder")
+                return LaBSEEmbedder()
                 
         except Exception as e:
-            self.logger.error(f"❌ Errore caricamento embedder dinamico: {e}")
-            return self._get_fallback_embedder()
-    
-    def _get_fallback_embedder(self):
+            self.logger.error(f"❌ Errore inizializzazione embedder: {e}")
+            # Fallback estremo
+            if not EMBEDDING_MANAGER_AVAILABLE:
+                return LaBSEEmbedder()
+            raise e
+
+    def _get_tag_embedding(self, tag_text: str) -> np.ndarray:
         """
-        Embedder di fallback quando il sistema dinamico non è disponibile
+        Calcola embedding di un tag con caching
         
-        Scopo della funzione: Fornisce embedder di backup in caso di errori
-        Parametri di input: None
-        Parametri di output: LaBSEEmbedder di fallback
-        Valori di ritorno: Istanza LaBSEEmbedder
-        Tracciamento aggiornamenti: 2025-08-28 - Creata per gestione fallback
-        
-        Returns:
-            LaBSEEmbedder di fallback
-            
-        Autore: Valerio Bignardi  
-        Data: 2025-08-28
-        """
-        from EmbeddingEngine.labse_embedder import LaBSEEmbedder
-        return LaBSEEmbedder()
-    
-    def _wrap_embedder_with_similarity(self, embedder):
-        """
-        Aggiunge metodo calculate_similarity a embedder che non lo hanno
-        
-        Scopo della funzione: Compatibilità con embedder legacy senza calculate_similarity
-        Parametri di input: embedder (istanza BaseEmbedder)
-        Parametri di output: embedder con metodo aggiunto
-        Valori di ritorno: Embedder wrappato
-        Tracciamento aggiornamenti: 2025-08-28 - Creata per retrocompatibilità
+        Scopo della funzione: Ottiene embedding di un tag con gestione cache
+        Parametri di input: tag_text (testo del tag)
+        Parametri di output: Embedding normalizzato del tag
+        Valori di ritorno: Array numpy con embedding
+        Tracciamento aggiornamenti: 2025-08-28 - Creata per nuova logica
         
         Args:
-            embedder: Embedder da wrappare
+            tag_text: Testo del tag da embeddare
             
         Returns:
-            Embedder con calculate_similarity aggiunto
+            Embedding normalizzato del tag
             
         Autore: Valerio Bignardi
         Data: 2025-08-28
         """
-        def calculate_similarity(text1: str, text2: str) -> float:
-            try:
-                emb1 = embedder.encode([text1])[0]
-                emb2 = embedder.encode([text2])[0]
-                return max(0.0, float(embedder.cosine_similarity(emb1, emb2)))
-            except Exception as e:
-                self.logger.warning(f"Errore calcolo similarità wrapper: {e}")
-                return 0.0
-        
-        # Aggiungi il metodo dinamicamente
-        embedder.calculate_similarity = calculate_similarity
-        return embedder
-        
-    def validate_altro_classification(self, 
-                                    conversation_text: str,
-                                    llm_classifier: Any,
-                                    bertopic_model: Any,
-                                    force_human_decision: bool = False) -> ValidationResult:
-        """
-        Valida una classificazione "ALTRO" durante il training supervisionato
-        
-        Args:
-            conversation_text: Testo della conversazione da validare
-            llm_classifier: Istanza del classificatore LLM
-            bertopic_model: Modello BERTopic per la classificazione alternativa
-            force_human_decision: Se True, forza la decisione umana
-            
-        Returns:
-            ValidationResult con la decisione finale
-        """
-        self.logger.info(f"Validando classificazione ALTRO per tenant {self.tenant_id}")
+        # Verifica cache se abilitata
+        if self.enable_cache and self._embedding_cache and tag_text in self._embedding_cache:
+            return self._embedding_cache[tag_text]
         
         try:
-            # 1. Ottieni la raw response dell'LLM 
-            llm_raw_response = self._get_llm_raw_response(conversation_text, llm_classifier)
-            self.logger.debug(f"LLM raw response: {llm_raw_response}")
-            
-            # 2. Ottieni classificazione da BERTopic
-            bertopic_suggestion = self._get_bertopic_classification(conversation_text, bertopic_model)
-            self.logger.debug(f"BERTopic suggestion: {bertopic_suggestion}")
-            
-            # 3. Se forzata decisione umana, rimanda subito
-            if force_human_decision:
-                return ValidationResult(
-                    should_add_new_tag=False,
-                    final_tag="altro",
-                    confidence=0.5,
-                    validation_path="human_decision_forced",
-                    bertopic_suggestion=bertopic_suggestion,
-                    llm_raw_response=llm_raw_response,
-                    needs_human_review=True
-                )
-            
-            # 4. Controlla concordanza LLM + BERTopic
-            if self._check_agreement(llm_raw_response, bertopic_suggestion):
-                self.logger.info("LLM e BERTopic concordano, procedo con controllo similarità")
-                
-                # 5. Estrai il tag suggerito (da LLM o BERTopic)
-                suggested_tag = self._extract_best_suggestion(llm_raw_response, bertopic_suggestion)
-                
-                # 6. Controllo similarità semantica con tag esistenti
-                similarity_result = self._check_semantic_similarity(suggested_tag)
-                
-                if similarity_result['max_similarity'] >= self.similarity_threshold:
-                    # Usa tag esistente
-                    return ValidationResult(
-                        should_add_new_tag=False,
-                        final_tag=similarity_result['most_similar_tag'],
-                        confidence=similarity_result['max_similarity'],
-                        validation_path="similarity_match",
-                        similarity_score=similarity_result['max_similarity'],
-                        matched_existing_tag=similarity_result['most_similar_tag'],
-                        bertopic_suggestion=bertopic_suggestion,
-                        llm_raw_response=llm_raw_response
-                    )
-                else:
-                    # Aggiungi nuovo tag
-                    return ValidationResult(
-                        should_add_new_tag=True,
-                        final_tag=suggested_tag,
-                        confidence=0.8,  # Alta confidenza per nuovo tag validato
-                        validation_path="llm_bertopic_agree",
-                        similarity_score=similarity_result['max_similarity'],
-                        bertopic_suggestion=bertopic_suggestion,
-                        llm_raw_response=llm_raw_response
-                    )
+            # Calcola embedding
+            if hasattr(self.embedder, 'get_embedding'):
+                embedding = self.embedder.get_embedding(tag_text)
             else:
-                self.logger.info("LLM e BERTopic NON concordano, rimando alla decisione umana")
+                # Fallback per embedder senza get_embedding
+                embedding = self.embedder.encode([tag_text])[0]
+            
+            # Normalizza embedding
+            if isinstance(embedding, list):
+                embedding = np.array(embedding)
+            
+            # Normalizzazione L2 per similarità coseno
+            norm = np.linalg.norm(embedding)
+            if norm > 0:
+                embedding = embedding / norm
+            
+            # Salva in cache se abilitata
+            if self.enable_cache and self._embedding_cache:
+                # Gestisce dimensione cache
+                if len(self._embedding_cache) >= self.max_cache_size:
+                    # Rimuove primo elemento (FIFO)
+                    oldest_key = next(iter(self._embedding_cache))
+                    del self._embedding_cache[oldest_key]
                 
-                # Non concordano, rimanda alla decisione umana
-                return ValidationResult(
-                    should_add_new_tag=False,
-                    final_tag="altro",
-                    confidence=0.3,  # Bassa confidenza per conflitto
-                    validation_path="human_decision",
-                    bertopic_suggestion=bertopic_suggestion,
-                    llm_raw_response=llm_raw_response,
-                    needs_human_review=True
-                )
-                
+                self._embedding_cache[tag_text] = embedding
+            
+            return embedding
+            
         except Exception as e:
-            self.logger.error(f"Errore durante validazione ALTRO: {e}")
-            return ValidationResult(
-                should_add_new_tag=False,
-                final_tag="altro",
-                confidence=0.1,
-                validation_path="error",
-                needs_human_review=True
-            )
-    
-    def _get_llm_raw_response(self, conversation_text: str, llm_classifier: Any) -> str:
+            self.logger.error(f"❌ Errore calcolo embedding per '{tag_text}': {e}")
+            # Ritorna embedding zero come fallback
+            return np.zeros(768)  # Dimensione tipica embedding
+
+    def _calculate_similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
         """
-        Ottiene la raw response dell'LLM per estrazione del tag suggerito
+        Calcola similarità coseno tra due embedding
+        
+        Scopo della funzione: Calcola similarità semantica tra due embedding
+        Parametri di input: embedding1, embedding2 (array numpy)
+        Parametri di output: Score similarità [0-1]
+        Valori di ritorno: Valore float della similarità coseno
+        Tracciamento aggiornamenti: 2025-08-28 - Creata per logica embedding
         
         Args:
-            conversation_text: Testo da classificare
-            llm_classifier: Classificatore LLM
+            embedding1: Primo embedding normalizzato
+            embedding2: Secondo embedding normalizzato
             
         Returns:
-            Raw response dell'LLM come stringa
-        """
-        try:
-            # Usa il metodo classify_with_motivation per ottenere dettagli
-            result = llm_classifier.classify_with_motivation(conversation_text)
-            
-            # La raw response dovrebbe contenere il JSON originale
-            if hasattr(result, 'raw_response'):
-                return result.raw_response
-            elif hasattr(result, 'motivation'):
-                # Se non c'è raw_response, usa la motivazione
-                return result.motivation
-            else:
-                return f"Predicted: {result.predicted_label}, Confidence: {result.confidence}"
-                
-        except Exception as e:
-            self.logger.error(f"Errore nell'ottenere LLM raw response: {e}")
-            return "Errore nell'ottenere raw response LLM"
-    
-    def _get_bertopic_classification(self, conversation_text: str, bertopic_model: Any) -> str:
-        """
-        Ottiene classificazione da BERTopic
-        
-        Scopo della funzione: Classifica testo usando modello BERTopic
-        Parametri di input: conversation_text (testo), bertopic_model (modello)
-        Parametri di output: str (tag suggerito)
-        Valori di ritorno: Nome topic pulito o "errore_bertopic"/"sconosciuto"
-        Tracciamento aggiornamenti: 2025-08-28 - Aggiunta gestione errori robusta
-        
-        Args:
-            conversation_text: Testo da classificare
-            bertopic_model: Modello BERTopic
-            
-        Returns:
-            Tag suggerito da BERTopic
+            Similarità coseno tra 0 e 1
             
         Autore: Valerio Bignardi
         Data: 2025-08-28
         """
         try:
-            # Controllo validità modello
-            if bertopic_model is None:
-                self.logger.warning("BERTopic model è None")
-                return "errore_bertopic"
+            # Calcola similarità coseno (prodotto scalare per embedding normalizzati)
+            similarity = np.dot(embedding1, embedding2)
             
-            if not hasattr(bertopic_model, 'transform'):
-                self.logger.error("BERTopic model non ha metodo 'transform'")
-                return "errore_bertopic"
+            # Clamp tra 0 e 1 per sicurezza
+            similarity = max(0.0, min(1.0, similarity))
             
-            # Classifica il documento singolo
-            topics, probs = bertopic_model.transform([conversation_text])
-            
-            if len(topics) > 0:
-                topic_id = topics[0]
-                
-                # Ottieni il nome del topic
-                if hasattr(bertopic_model, 'get_topic_info'):
-                    topic_info = bertopic_model.get_topic_info()
-                    
-                    if topic_info is not None and not topic_info.empty:
-                        topic_row = topic_info[topic_info['Topic'] == topic_id]
-                        
-                        if not topic_row.empty:
-                            topic_name = topic_row.iloc[0]['Name']
-                            # Pulisci il nome del topic
-                            cleaned_name = self._clean_bertopic_topic_name(topic_name)
-                            self.logger.debug(f"BERTopic topic_id={topic_id} -> '{cleaned_name}'")
-                            return cleaned_name
-                
-            return "sconosciuto"  # Fallback
+            return float(similarity)
             
         except Exception as e:
-            self.logger.error(f"Errore nella classificazione BERTopic: {e}")
-            return "errore_bertopic"
-    
-    def _clean_bertopic_topic_name(self, topic_name: str) -> str:
-        """
-        Pulisce il nome del topic di BERTopic per renderlo utilizzabile come tag
-        
-        Args:
-            topic_name: Nome grezzo del topic
-            
-        Returns:
-            Nome pulito del topic
-        """
-        if not topic_name:
-            return "sconosciuto"
-        
-        # Rimuovi numeri del topic (es. "0_prenotazione_esame_medico" -> "prenotazione_esame_medico")
-        cleaned = re.sub(r'^\d+_', '', str(topic_name))
-        
-        # Sostituisci spazi e caratteri speciali con underscore
-        cleaned = re.sub(r'[^a-zA-Z0-9_]', '_', cleaned)
-        
-        # Rimuovi underscore doppi
-        cleaned = re.sub(r'_+', '_', cleaned)
-        
-        # Rimuovi underscore iniziali e finali
-        cleaned = cleaned.strip('_').lower()
-        
-        return cleaned if cleaned else "sconosciuto"
-    
-    def _check_agreement(self, llm_raw_response: str, bertopic_suggestion: str) -> bool:
-        """
-        Verifica se LLM e BERTopic concordano sulla classificazione
-        
-        Args:
-            llm_raw_response: Raw response dell'LLM
-            bertopic_suggestion: Suggerimento di BERTopic
-            
-        Returns:
-            True se concordano, False altrimenti
-        """
-        try:
-            # Estrai tag suggerito dall'LLM response
-            llm_suggested_tag = self._extract_tag_from_llm_response(llm_raw_response)
-            
-            if not llm_suggested_tag or llm_suggested_tag == "altro":
-                # Se LLM non suggerisce nulla di specifico, considera discordia
-                return False
-            
-            # Controlla similarità semantica tra i due suggerimenti
-            similarity = self.embedder.calculate_similarity(
-                llm_suggested_tag, 
-                bertopic_suggestion
-            )
-            
-            # Concordano se similarità > 0.7 
-            agreement = similarity > 0.7
-            
-            self.logger.debug(f"Agreement check - LLM: '{llm_suggested_tag}', BERTopic: '{bertopic_suggestion}', Similarity: {similarity:.3f}, Agreement: {agreement}")
-            
-            return agreement
-            
-        except Exception as e:
-            self.logger.error(f"Errore nel check agreement: {e}")
-            return False
-    
-    def _extract_tag_from_llm_response(self, raw_response: str) -> str:
-        """
-        Estrae il tag suggerito dalla raw response dell'LLM
-        
-        Args:
-            raw_response: Risposta grezza dell'LLM
-            
-        Returns:
-            Tag estratto o stringa vuota
-        """
-        try:
-            # Cerca pattern JSON
-            json_match = re.search(r'\{.*\}', raw_response, re.DOTALL)
-            if json_match:
-                json_str = json_match.group()
-                data = json.loads(json_str)
-                
-                # Cerca campi comuni per il tag
-                for field in ['predicted_label', 'label', 'tag', 'classification']:
-                    if field in data and data[field] != 'altro':
-                        return str(data[field]).lower().strip()
-            
-            # Se non trova JSON, cerca pattern testuali
-            patterns = [
-                r'tag:\s*([^,\n]+)',
-                r'etichetta:\s*([^,\n]+)',
-                r'classif[ic]*azione:\s*([^,\n]+)',
-                r'suggerisco:\s*([^,\n]+)',
-            ]
-            
-            for pattern in patterns:
-                match = re.search(pattern, raw_response, re.IGNORECASE)
-                if match:
-                    tag = match.group(1).strip().lower()
-                    if tag and tag != 'altro':
-                        return tag
-            
-            return ""
-            
-        except Exception as e:
-            self.logger.error(f"Errore nell'estrazione tag da LLM response: {e}")
-            return ""
-    
-    def _extract_best_suggestion(self, llm_raw_response: str, bertopic_suggestion: str) -> str:
-        """
-        Estrae il miglior suggerimento combinando LLM e BERTopic
-        
-        Args:
-            llm_raw_response: Raw response LLM
-            bertopic_suggestion: Suggerimento BERTopic
-            
-        Returns:
-            Miglior tag suggerito
-        """
-        llm_tag = self._extract_tag_from_llm_response(llm_raw_response)
-        
-        # Priorità: LLM se disponibile e specifico, altrimenti BERTopic
-        if llm_tag and llm_tag != "altro" and len(llm_tag) > 2:
-            return llm_tag
-        elif bertopic_suggestion and bertopic_suggestion != "sconosciuto":
-            return bertopic_suggestion
-        else:
-            return "nuovo_tag_sconosciuto"
-    
-    def _check_semantic_similarity(self, suggested_tag: str) -> Dict[str, Any]:
-        """
-        Controlla similarità semantica con tag esistenti
-        
-        Args:
-            suggested_tag: Tag suggerito da validare
-            
-        Returns:
-            Dict con risultati della similarità
-        """
-        try:
-            # Ottieni tag esistenti per il tenant
-            existing_tags = self._get_existing_tags()
-            
-            if not existing_tags:
-                self.logger.info("Nessun tag esistente trovato, nuovo tag sarà aggiunto")
-                return {
-                    'max_similarity': 0.0,
-                    'most_similar_tag': None,
-                    'all_similarities': {}
-                }
-            
-            # Calcola similarità con tutti i tag esistenti
-            similarities = {}
-            max_similarity = 0.0
-            most_similar_tag = None
-            
-            for existing_tag in existing_tags:
-                try:
-                    similarity = self.embedder.calculate_similarity(
-                        suggested_tag, 
-                        existing_tag
-                    )
-                    similarities[existing_tag] = similarity
-                    
-                    if similarity > max_similarity:
-                        max_similarity = similarity
-                        most_similar_tag = existing_tag
-                        
-                except Exception as e:
-                    self.logger.warning(f"Errore nel calcolo similarità per tag '{existing_tag}': {e}")
-                    similarities[existing_tag] = 0.0
-            
-            self.logger.info(f"Similarità calcolate per '{suggested_tag}': max={max_similarity:.3f} con '{most_similar_tag}'")
-            
-            return {
-                'max_similarity': max_similarity,
-                'most_similar_tag': most_similar_tag,
-                'all_similarities': similarities
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Errore nel controllo similarità semantica: {e}")
-            return {
-                'max_similarity': 0.0,
-                'most_similar_tag': None,
-                'all_similarities': {}
-            }
-    
+            self.logger.error(f"❌ Errore calcolo similarità: {e}")
+            return 0.0
+
     def _get_existing_tags(self) -> List[str]:
         """
-        Ottiene la lista dei tag esistenti per il tenant (con cache)
+        Ottiene lista tag esistenti con caching
+        
+        Scopo della funzione: Recupera tag esistenti dal database con cache
+        Parametri di input: None
+        Parametri di output: Lista tag esistenti
+        Valori di ritorno: List di stringhe con i tag
+        Tracciamento aggiornamenti: 2025-08-28 - Creata per nuova implementazione
         
         Returns:
             Lista dei tag esistenti
-        """
-        if self._existing_tags_cache is None:
-            try:
-                # Ottieni tag dal TagManager
-                tags_data = self.tag_manager.get_all_tags()
-                self._existing_tags_cache = [tag['tag'] for tag in tags_data if tag['tag'] != 'altro']
-                
-                self.logger.debug(f"Tag esistenti caricati: {len(self._existing_tags_cache)} tag")
-                
-            except Exception as e:
-                self.logger.error(f"Errore nel caricamento tag esistenti: {e}")
-                self._existing_tags_cache = []
-        
-        return self._existing_tags_cache
-    
-    def add_new_tag_immediately(self, new_tag: str, confidence: float = 0.8) -> bool:
-        """
-        Aggiunge immediatamente un nuovo tag al sistema per renderlo disponibile
-        
-        Args:
-            new_tag: Nuovo tag da aggiungere
-            confidence: Confidenza del tag
             
-        Returns:
-            True se aggiunto con successo
+        Autore: Valerio Bignardi
+        Data: 2025-08-28
         """
         try:
-            self.logger.info(f"Aggiungendo nuovo tag '{new_tag}' per tenant {self.tenant_id}")
+            # Verifica cache
+            current_time = datetime.now()
             
-            # Aggiungi tramite TagManager
-            success = self.tag_manager.add_tag(
-                tag=new_tag,
-                source='altro_validation',
-                confidence=confidence,
-                count=1,  # Prima occorrenza
-                avg_confidence=confidence
+            if (self._tags_cache is not None and 
+                self._last_cache_update is not None and 
+                (current_time - self._last_cache_update).seconds < 300):  # Cache 5 minuti
+                return self._tags_cache
+            
+            # Recupera tag dal database
+            tag_objects = self.schema_manager.get_all_tags()
+            
+            # Estrae i nomi dei tag
+            existing_tags = [tag['tag_name'] for tag in tag_objects if tag and tag.get('tag_name')]
+            
+            # Filtra tag validi (non vuoti, non "ALTRO")
+            valid_tags = [
+                tag for tag in existing_tags 
+                if tag and tag.strip() and tag.upper() != "ALTRO"
+            ]
+            
+            # Aggiorna cache
+            self._tags_cache = valid_tags
+            self._last_cache_update = current_time
+            
+            self.logger.info(f"📋 Recuperati {len(valid_tags)} tag esistenti")
+            return valid_tags
+            
+        except Exception as e:
+            self.logger.error(f"❌ Errore recupero tag esistenti: {e}")
+            return []
+
+    def _extract_tag_from_llm_response(self, llm_raw_response: str) -> Optional[str]:
+        """
+        Estrae tag suggerito dalla response LLM raw
+        
+        Scopo della funzione: Parsing della response LLM per estrarre tag proposto
+        Parametri di input: llm_raw_response (response completa LLM)
+        Parametri di output: Tag estratto e pulito
+        Valori di ritorno: String tag o None se non trovato
+        Tracciamento aggiornamenti: 2025-08-28 - Creata per parsing LLM
+        
+        Args:
+            llm_raw_response: Response completa del LLM
+            
+        Returns:
+            Tag suggerito dal LLM o None se non trovato
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-28
+        """
+        if not llm_raw_response or not llm_raw_response.strip():
+            return None
+            
+        try:
+            # Cerca pattern comuni per tag suggeriti
+            patterns = [
+                r'(?:tag|etichetta|categoria|classificazione):\s*["\']?([^"\'\n\r]+)["\']?',
+                r'suggerisco.*["\']([^"\'\n\r]+)["\']',
+                r'propongo.*["\']([^"\'\n\r]+)["\']',
+                r'classificherei.*["\']([^"\'\n\r]+)["\']',
+                r'["\']([^"\']+)["\'].*(?:appropriat|adeguat|corrett)',
+                # Pattern per tag alla fine della risposta
+                r'.*["\']([A-Z_][A-Z0-9_\s]{2,})["\']$'
+            ]
+            
+            response_clean = llm_raw_response.strip()
+            
+            for pattern in patterns:
+                matches = re.finditer(pattern, response_clean, re.IGNORECASE | re.MULTILINE)
+                for match in matches:
+                    candidate_tag = match.group(1).strip()
+                    
+                    # Verifica che sia un tag valido
+                    if (len(candidate_tag) > 2 and 
+                        len(candidate_tag) < 100 and 
+                        candidate_tag.upper() != "ALTRO"):
+                        
+                        # Pulisci e formatta tag
+                        clean_tag = candidate_tag.upper().strip()
+                        clean_tag = re.sub(r'\s+', '_', clean_tag)  # Spazi -> underscore
+                        clean_tag = re.sub(r'[^\w\s]', '', clean_tag)  # Rimuovi punteggiatura
+                        
+                        self.logger.info(f"📝 Tag estratto da LLM: '{clean_tag}'")
+                        return clean_tag
+            
+            # Fallback: cerca ultime parole in maiuscolo
+            words = response_clean.split()
+            for word in reversed(words[-5:]):  # Ultimi 5 parole
+                clean_word = re.sub(r'[^\w]', '', word).upper()
+                if (len(clean_word) > 2 and 
+                    clean_word.isupper() and 
+                    clean_word != "ALTRO"):
+                    self.logger.info(f"📝 Tag fallback da LLM: '{clean_word}'")
+                    return clean_word
+            
+            self.logger.warning(f"⚠️ Nessun tag estratto da: '{response_clean[:100]}...'")
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"❌ Errore estrazione tag da LLM response: {e}")
+            return None
+
+    def validate_altro_classification(
+        self, 
+        conversation_id: str,
+        llm_raw_response: str,
+        conversation_data: Optional[Dict[str, Any]] = None
+    ) -> ValidationResult:
+        """
+        Valida classificazione "ALTRO" usando embedding semantico
+        
+        Scopo della funzione: Pipeline completa validazione ALTRO con embedding
+        Parametri di input: conversation_id, llm_raw_response, conversation_data
+        Parametri di output: ValidationResult con decisione finale
+        Valori di ritorno: Risultato validazione completo
+        Tracciamento aggiornamenti: 2025-08-28 - Riscrittura embedding-based
+        
+        Args:
+            conversation_id: ID conversazione da validare
+            llm_raw_response: Response raw del LLM con tag suggerito
+            conversation_data: Dati conversazione (opzionale)
+            
+        Returns:
+            ValidationResult con decisione finale e dettagli
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-28
+        """
+        self.logger.info(f"🔍 Validazione ALTRO per conversazione {conversation_id}")
+        
+        try:
+            # Step 1: Estrai tag dalla response LLM
+            suggested_tag = self._extract_tag_from_llm_response(llm_raw_response)
+            
+            if not suggested_tag:
+                self.logger.warning(f"⚠️ Nessun tag estratto da LLM - mantiene ALTRO")
+                return ValidationResult(
+                    should_add_new_tag=False,
+                    final_tag="ALTRO",
+                    confidence=0.0,
+                    validation_path="error",
+                    llm_suggested_tag=None
+                )
+            
+            # Step 2: Calcola embedding del tag suggerito
+            suggested_embedding = self._get_tag_embedding(suggested_tag)
+            
+            # Step 3: Ottieni tag esistenti e calcola embedding
+            existing_tags = self._get_existing_tags()
+            
+            if not existing_tags:
+                self.logger.info(f"📝 Nessun tag esistente - crea nuovo: '{suggested_tag}'")
+                return ValidationResult(
+                    should_add_new_tag=True,
+                    final_tag=suggested_tag,
+                    confidence=1.0,
+                    validation_path="new_tag_created",
+                    llm_suggested_tag=suggested_tag
+                )
+            
+            # Step 4: Confronta con tutti i tag esistenti
+            best_similarity = 0.0
+            best_matching_tag = None
+            
+            self.logger.info(f"🔍 Confronto con {len(existing_tags)} tag esistenti...")
+            
+            for existing_tag in existing_tags:
+                existing_embedding = self._get_tag_embedding(existing_tag)
+                similarity = self._calculate_similarity(suggested_embedding, existing_embedding)
+                
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_matching_tag = existing_tag
+            
+            self.logger.info(f"🎯 Migliore match: '{best_matching_tag}' (similarità: {best_similarity:.3f})")
+            
+            # Step 5: Decisione basata su soglia
+            if best_similarity >= self.similarity_threshold:
+                # Usa tag esistente più simile
+                self.logger.info(f"✅ Similarità >= {self.similarity_threshold} - usa tag esistente: '{best_matching_tag}'")
+                
+                return ValidationResult(
+                    should_add_new_tag=False,
+                    final_tag=best_matching_tag,
+                    confidence=best_similarity,
+                    validation_path="similarity_match",
+                    similarity_score=best_similarity,
+                    matched_existing_tag=best_matching_tag,
+                    llm_suggested_tag=suggested_tag
+                )
+            else:
+                # ✅ CORREZIONE CRUCIALE: Crea nuovo tag (NON etichettare come ALTRO)
+                self.logger.info(f"📝 Similarità < {self.similarity_threshold} - crea nuovo tag: '{suggested_tag}'")
+                
+                return ValidationResult(
+                    should_add_new_tag=True,
+                    final_tag=suggested_tag,
+                    confidence=1.0 - best_similarity,  # Confidence = differenza semantica
+                    validation_path="new_tag_created",
+                    similarity_score=best_similarity,
+                    matched_existing_tag=best_matching_tag,
+                    llm_suggested_tag=suggested_tag
+                )
+                
+        except Exception as e:
+            self.logger.error(f"❌ Errore validazione altro: {e}", exc_info=True)
+            
+            return ValidationResult(
+                should_add_new_tag=False,
+                final_tag="ALTRO",
+                confidence=0.0,
+                validation_path="error",
+                needs_human_review=True
+            )
+
+    def add_new_tag_to_database(self, new_tag: str, conversation_id: str) -> bool:
+        """
+        Aggiunge nuovo tag al database
+        
+        Scopo della funzione: Inserisce nuovo tag nel database tag
+        Parametri di input: new_tag (nuovo tag), conversation_id (ID conversazione)
+        Parametri di output: Successo operazione
+        Valori di ritorno: True se successo, False altrimenti
+        Tracciamento aggiornamenti: 2025-08-28 - Creata per gestione nuovi tag
+        
+        Args:
+            new_tag: Tag da aggiungere
+            conversation_id: ID conversazione che ha generato il tag
+            
+        Returns:
+            True se tag aggiunto con successo, False altrimenti
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-28
+        """
+        try:
+            # Verifica che tag non esista già
+            tag_objects = self.schema_manager.get_all_tags()
+            existing_tag_names = [tag['tag_name'] for tag in tag_objects if tag and tag.get('tag_name')]
+            
+            if new_tag in existing_tag_names:
+                self.logger.info(f"ℹ️ Tag '{new_tag}' già esistente")
+                return True
+            
+            # Aggiunge nuovo tag usando schema_manager
+            success = self.schema_manager.add_tag_if_not_exists(
+                tag_name=new_tag,
+                tag_description=f"Tag creato automaticamente da conversazione {conversation_id}",
+                tag_color="#9C27B0"  # Colore viola per tag auto-generati
             )
             
             if success:
-                # Invalida cache per forzare ricaricamento
-                self._existing_tags_cache = None
-                self.logger.info(f"Nuovo tag '{new_tag}' aggiunto con successo")
+                self.logger.info(f"✅ Nuovo tag aggiunto: '{new_tag}'")
+                
+                # Invalida cache
+                self._tags_cache = None
+                self._last_cache_update = None
+                
                 return True
             else:
-                self.logger.error(f"Fallimento nell'aggiunta del tag '{new_tag}'")
+                self.logger.error(f"❌ Fallimento aggiunta tag: '{new_tag}'")
                 return False
                 
         except Exception as e:
-            self.logger.error(f"Errore nell'aggiunta del nuovo tag '{new_tag}': {e}")
+            self.logger.error(f"❌ Errore aggiunta nuovo tag '{new_tag}': {e}")
             return False
-    
-    def invalidate_cache(self):
+
+    def get_validation_stats(self) -> Dict[str, Any]:
         """
-        Invalida la cache dei tag esistenti
+        Ottiene statistiche della validazione
+        
+        Scopo della funzione: Fornisce metriche performance validatore
+        Parametri di input: None
+        Parametri di output: Dict con statistiche
+        Valori di ritorno: Dizionario con metriche correnti
+        Tracciamento aggiornamenti: 2025-08-28 - Creata per monitoraggio
+        
+        Returns:
+            Dizionario con statistiche correnti del validatore
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-28
         """
-        self._existing_tags_cache = None
-        self._existing_embeddings_cache = None
-        self.logger.debug("Cache invalidata")
+        try:
+            stats = {
+                "tenant_id": self.tenant_id,
+                "similarity_threshold": self.similarity_threshold,
+                "embedding_cache_enabled": self.enable_cache,
+                "embedding_cache_size": len(self._embedding_cache) if self._embedding_cache else 0,
+                "max_cache_size": self.max_cache_size,
+                "existing_tags_count": len(self._tags_cache) if self._tags_cache else 0,
+                "last_cache_update": self._last_cache_update.isoformat() if self._last_cache_update else None,
+                "embedder_type": type(self.embedder).__name__
+            }
+            
+            return stats
+            
+        except Exception as e:
+            self.logger.error(f"❌ Errore recupero statistiche: {e}")
+            return {"error": str(e)}
+
+    def clear_caches(self) -> None:
+        """
+        Pulisce tutte le cache
+        
+        Scopo della funzione: Reset completo cache per aggiornamento dati
+        Parametri di input: None
+        Parametri di output: None
+        Valori di ritorno: None
+        Tracciamento aggiornamenti: 2025-08-28 - Creata per gestione cache
+        
+        Autore: Valerio Bignardi
+        Data: 2025-08-28
+        """
+        try:
+            if self._embedding_cache:
+                self._embedding_cache.clear()
+            
+            self._tags_cache = None
+            self._last_cache_update = None
+            
+            self.logger.info("🧹 Cache pulite completamente")
+            
+        except Exception as e:
+            self.logger.error(f"❌ Errore pulizia cache: {e}")

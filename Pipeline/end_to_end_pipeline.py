@@ -655,7 +655,9 @@ class EndToEndPipeline:
             
             print("   🔥 Esecuzione bertopic_provider.fit() su dataset completo...")
             start_bertopic = time.time()
-            bertopic_provider.fit(testi, embeddings=embeddings)
+            # 🆕 NUOVA STRATEGIA: Lascia che BERTopic gestisca embeddings internamente
+            # con l'embedder scelto dall'utente dall'interfaccia
+            bertopic_provider.fit(testi)  # Non passa embeddings - BERTopic li calcola internamente
             fit_time = time.time() - start_bertopic
             print(f"   ✅ BERTopic FIT completato in {fit_time:.2f} secondi")
             
@@ -663,7 +665,7 @@ class EndToEndPipeline:
             start_transform = time.time()
             tr = bertopic_provider.transform(
                 testi,
-                embeddings=embeddings,
+                # Non passa embeddings - BERTopic usa embedder interno personalizzato
                 return_one_hot=self.bertopic_config.get('return_one_hot', False),
                 top_k=self.bertopic_config.get('top_k', None)
             )
@@ -925,9 +927,64 @@ class EndToEndPipeline:
                 # Fallback generico
                 suggested_labels[cluster_id] = f"Cluster {cluster_id}"
         
+        # 🆕 GESTIONE OUTLIER COME CLUSTER SPECIALE
+        # Trova tutte le sessioni outlier (cluster_id = -1)
+        outlier_indices = [i for i, label in enumerate(cluster_labels) if label == -1]
+        n_outliers = len(outlier_indices)
+        
+        if n_outliers > 0:
+            print(f"🔍 Trovati {n_outliers} outlier - creazione cluster speciale per review...")
+            
+            # Crea rappresentanti per gli outlier (massimo 5 per non sovraccaricare il review)
+            max_outlier_reps = min(5, n_outliers)
+            outlier_representatives = []
+            
+            # Selezione intelligente outlier (più diversi possibile)
+            if n_outliers <= max_outlier_reps:
+                selected_outlier_indices = outlier_indices
+            else:
+                # Seleziona outlier più diversi usando distanza embedding
+                outlier_embeddings = embeddings[outlier_indices]
+                from sklearn.metrics.pairwise import cosine_distances
+                outlier_distances = cosine_distances(outlier_embeddings)
+                
+                # Trova gli outlier più distanti tra loro
+                selected_outlier_indices = [outlier_indices[0]]  # Primo outlier
+                
+                for _ in range(max_outlier_reps - 1):
+                    max_min_dist = -1
+                    best_idx = -1
+                    
+                    for idx in outlier_indices:
+                        if idx not in selected_outlier_indices:
+                            min_dist_to_selected = min(
+                                outlier_distances[outlier_indices.index(idx)][outlier_indices.index(sel_idx)]
+                                for sel_idx in selected_outlier_indices
+                            )
+                            if min_dist_to_selected > max_min_dist:
+                                max_min_dist = min_dist_to_selected
+                                best_idx = idx
+                    
+                    if best_idx != -1:
+                        selected_outlier_indices.append(best_idx)
+            
+            # Crea dati rappresentanti per outlier
+            for idx in selected_outlier_indices:
+                session_id = session_ids[idx]
+                session_data = sessioni[session_id].copy()
+                session_data['session_id'] = session_id
+                session_data['classification_confidence'] = 0.3  # Bassa confidenza di default
+                session_data['classification_method'] = 'outlier'
+                outlier_representatives.append(session_data)
+            
+            # Aggiungi outlier ai representatives e suggested_labels
+            representatives[-1] = outlier_representatives  # Usa -1 come cluster_id per outlier
+            suggested_labels[-1] = "Casi Outlier"  # Etichetta descrittiva per outlier
+            
+            print(f"   🎯 Selezionati {len(outlier_representatives)} rappresentanti outlier per review umano")
+        
         # Statistiche clustering avanzate
         n_clusters = len(cluster_info)
-        n_outliers = sum(1 for label in cluster_labels if label == -1)
         
         # Calcola statistiche di confidenza se disponibili
         avg_confidence = 0.0
@@ -998,6 +1055,197 @@ class EndToEndPipeline:
         
         return embeddings, cluster_labels, representatives, suggested_labels
     
+    def _save_representatives_for_review(self, 
+                                       sessioni: Dict[str, Dict], 
+                                       representatives: Dict[int, List[Dict]], 
+                                       suggested_labels: Dict[int, str],
+                                       cluster_labels: np.ndarray) -> bool:
+        """
+        Salva i rappresentanti in MongoDB come "pending review" PRIMA della review umana
+        
+        Scopo della funzione: Popolare la review queue con rappresentanti, outlier e propagati
+        Parametri di input: sessioni, representatives, suggested_labels, cluster_labels
+        Parametri di output: success flag
+        Valori di ritorno: True se salvato con successo
+        Tracciamento aggiornamenti: 2025-08-28 - Fix review queue mancante
+        
+        Args:
+            sessioni: Tutte le sessioni del dataset
+            representatives: Dict {cluster_id: [rappresentanti]}
+            suggested_labels: Dict {cluster_id: etichetta_suggerita}
+            cluster_labels: Array delle etichette cluster per tutte le sessioni
+            
+        Returns:
+            bool: True se salvato con successo
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-28
+        """
+        print(f"\n💾 SALVATAGGIO RAPPRESENTANTI PER REVIEW QUEUE")
+        
+        try:
+            if not hasattr(self, 'mongo_reader') or not self.mongo_reader:
+                print("⚠️ MongoDB reader non disponibile - skip salvataggio review queue")
+                return False
+            
+            saved_count = 0
+            total_to_save = sum(len(reps) for reps in representatives.values())
+            
+            print(f"   📊 Rappresentanti da salvare: {total_to_save}")
+            print(f"   🏷️ Cluster: {list(representatives.keys())}")
+            
+            # Salva rappresentanti per ogni cluster
+            for cluster_id, cluster_reps in representatives.items():
+                suggested_label = suggested_labels.get(cluster_id, f"Cluster {cluster_id}")
+                
+                print(f"\n   🔧 Cluster {cluster_id}: {len(cluster_reps)} rappresentanti")
+                print(f"       Etichetta: '{suggested_label}'")
+                
+                for rep_data in cluster_reps:
+                    session_id = rep_data.get('session_id')
+                    conversation_text = rep_data.get('testo_completo', '')
+                    
+                    # Prepara metadati cluster per distinguere tipi di sessioni
+                    cluster_metadata = {
+                        'cluster_id': cluster_id,
+                        'is_representative': True,  # ✅ È un rappresentante
+                        'cluster_size': len([1 for label in cluster_labels if label == cluster_id]),
+                        'suggested_label': suggested_label,
+                        'selection_reason': 'cluster_representative'
+                    }
+                    
+                    # Metadati speciali per outlier
+                    if cluster_id == -1:
+                        cluster_metadata['selection_reason'] = 'outlier_representative'
+                        cluster_metadata['is_outlier'] = True
+                    
+                    # Prepara decision finale per rappresentanti
+                    final_decision = {
+                        'predicted_label': suggested_label,
+                        'confidence': 0.7,  # Confidenza media per clustering
+                        'method': 'supervised_training_clustering',
+                        'reasoning': f'Rappresentante del cluster {cluster_id} selezionato per review umana'
+                    }
+                    
+                    # Salva in MongoDB come "pending review"
+                    success = self.mongo_reader.save_classification_result(
+                        session_id=session_id,
+                        client_name=self.tenant_slug,
+                        final_decision=final_decision,
+                        conversation_text=conversation_text,
+                        needs_review=True,  # ✅ FONDAMENTALE: marca per review
+                        review_reason='supervised_training_representative',
+                        classified_by='supervised_training_pipeline',
+                        notes=f'Rappresentante cluster {cluster_id} per training supervisionato',
+                        cluster_metadata=cluster_metadata
+                    )
+                    
+                    if success:
+                        saved_count += 1
+                    else:
+                        print(f"       ❌ Errore salvando rappresentante {session_id}")
+            
+            print(f"\n   ✅ Salvati {saved_count}/{total_to_save} rappresentanti")
+            
+            # 🆕 SALVA ANCHE LE SESSIONI PROPAGATE (non rappresentanti)
+            # Questo è importante per permettere all'interfaccia di filtrare correttamente
+            propagated_count = self._save_propagated_sessions_metadata(
+                sessioni, representatives, cluster_labels, suggested_labels
+            )
+            
+            print(f"   📋 Salvate {propagated_count} sessioni propagate con metadati")
+            print(f"   🎯 REVIEW QUEUE POPOLATA: {saved_count} rappresentanti + {propagated_count} propagate")
+            
+            return saved_count > 0
+            
+        except Exception as e:
+            print(f"❌ Errore salvataggio rappresentanti per review: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+            
+    def _save_propagated_sessions_metadata(self, 
+                                         sessioni: Dict[str, Dict],
+                                         representatives: Dict[int, List[Dict]], 
+                                         cluster_labels: np.ndarray,
+                                         suggested_labels: Dict[int, str]) -> int:
+        """
+        Salva metadati per le sessioni non-rappresentanti (propagate)
+        
+        Scopo della funzione: Marcare sessioni propagate per filtri interfaccia
+        Parametri di input: sessioni, representatives, cluster_labels, suggested_labels  
+        Parametri di output: numero sessioni salvate
+        Valori di ritorno: conteggio sessioni processate
+        Tracciamento aggiornamenti: 2025-08-28 - Nuovo per gestione filtri
+        
+        Args:
+            sessioni: Tutte le sessioni
+            representatives: Representatives per cluster
+            cluster_labels: Labels per ogni sessione
+            suggested_labels: Labels suggerite per cluster
+            
+        Returns:
+            int: Numero di sessioni propagate salvate
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-28
+        """
+        print(f"   🔄 Salvando metadati sessioni propagate...")
+        
+        # Crea set di session_id rappresentanti per escluderli
+        representative_session_ids = set()
+        for cluster_reps in representatives.values():
+            for rep in cluster_reps:
+                representative_session_ids.add(rep.get('session_id'))
+        
+        session_ids = list(sessioni.keys())
+        saved_count = 0
+        
+        # Processa tutte le sessioni non-rappresentanti
+        for i, session_id in enumerate(session_ids):
+            if session_id not in representative_session_ids:
+                cluster_id = cluster_labels[i] if i < len(cluster_labels) else -1
+                suggested_label = suggested_labels.get(cluster_id, 'altro')
+                
+                # Prepara metadati per sessione propagata
+                cluster_metadata = {
+                    'cluster_id': cluster_id,
+                    'is_representative': False,  # ✅ NON è rappresentante
+                    'propagated_from': f'cluster_{cluster_id}',
+                    'suggested_label': suggested_label,
+                    'selection_reason': 'cluster_propagated'
+                }
+                
+                # Metadati speciali per outlier propagati
+                if cluster_id == -1:
+                    cluster_metadata['selection_reason'] = 'outlier_propagated'
+                    cluster_metadata['is_outlier'] = True
+                
+                final_decision = {
+                    'predicted_label': suggested_label,
+                    'confidence': 0.6,  # Confidenza più bassa per propagate
+                    'method': 'supervised_training_propagated',
+                    'reasoning': f'Sessione propagata dal cluster {cluster_id} durante training supervisionato'
+                }
+                
+                # Salva come auto_classified (non needs review)
+                success = self.mongo_reader.save_classification_result(
+                    session_id=session_id,
+                    client_name=self.tenant_slug,
+                    final_decision=final_decision,
+                    conversation_text=sessioni[session_id].get('testo_completo', ''),
+                    needs_review=False,  # Non serve review per propagate
+                    review_reason=None,
+                    classified_by='supervised_training_pipeline',
+                    notes=f'Sessione propagata da cluster {cluster_id}',
+                    cluster_metadata=cluster_metadata
+                )
+                
+                if success:
+                    saved_count += 1
+        
+        return saved_count
+    
     def allena_classificatore(self,
                             sessioni: Dict[str, Dict],
                             cluster_labels: np.ndarray,
@@ -1043,11 +1291,31 @@ class EndToEndPipeline:
         if interactive_mode:
             print(f"\n🔍 INIZIO REVIEW INTERATTIVO")
             
-            # Review di ogni cluster
-            for cluster_id in sorted(suggested_labels.keys()):
+            # 🆕 ORDINE PROCESSAMENTO: prima cluster crescenti (0,1,2...), poi outlier (-1)
+            # Separa cluster normali da outlier
+            normal_clusters = [cid for cid in suggested_labels.keys() if cid >= 0]
+            outlier_clusters = [cid for cid in suggested_labels.keys() if cid == -1]
+            
+            # Ordina cluster normali in modo crescente
+            normal_clusters_sorted = sorted(normal_clusters)
+            
+            # Processamento in ordine: cluster normali prima, poi outlier
+            processing_order = normal_clusters_sorted + outlier_clusters
+            
+            print(f"📋 Ordine di processamento:")
+            print(f"   🔢 Cluster normali: {normal_clusters_sorted}")
+            if outlier_clusters:
+                print(f"   🔍 Outlier: {outlier_clusters}")
+            
+            # Review di ogni cluster nell'ordine stabilito
+            for cluster_id in processing_order:
                 if cluster_id in representatives:
                     suggested_label = suggested_labels[cluster_id]
                     cluster_reps = representatives[cluster_id]
+                    
+                    # Messaggio specifico per outlier
+                    if cluster_id == -1:
+                        print(f"\n🔍 PROCESSAMENTO OUTLIER ({len(cluster_reps)} rappresentanti)")
                     
                     # Review umano del cluster
                     final_label, human_confidence = self.interactive_trainer.review_cluster_representatives(
@@ -1069,17 +1337,45 @@ class EndToEndPipeline:
         session_texts = [sessioni[sid]['testo_completo'] for sid in session_ids]
         train_embeddings = self._get_embedder().encode(session_texts, session_ids=session_ids)
         
-        # Crea labels array dai reviewed_labels
+        # 🆕 CREA TRAINING LABELS CON GESTIONE MIGLIORATA OUTLIER
         train_labels = []
+        print(f"\n📋 CREAZIONE TRAINING LABELS")
+        print(f"   📊 Sessioni totali: {len(session_ids)}")
+        print(f"   🏷️  Etichette reviewed: {len(reviewed_labels)}")
+        
         for i, session_id in enumerate(session_ids):
             # Trova il cluster di questa sessione
             cluster_id = cluster_labels[i] if i < len(cluster_labels) else -1
+            
+            # Determina l'etichetta finale con priorità alle reviewed
             if cluster_id in reviewed_labels:
-                train_labels.append(reviewed_labels[cluster_id])
+                final_label = reviewed_labels[cluster_id]
+                label_source = "reviewed"
             else:
-                train_labels.append('altro')  # fallback
+                # Fallback per sessioni senza cluster o cluster non reviewed
+                final_label = 'altro'
+                label_source = "fallback"
+            
+            train_labels.append(final_label)
+            
+            # Log dettagliato per outlier
+            if cluster_id == -1:
+                print(f"🔍 Outlier {session_id}: '{final_label}' ({label_source})")
         
         train_labels = np.array(train_labels)
+        
+        # Statistiche etichette finali
+        unique_train_labels = set(train_labels)
+        print(f"📈 Labels uniche finali: {len(unique_train_labels)}")
+        
+        label_counts = {}
+        for label in train_labels:
+            label_counts[label] = label_counts.get(label, 0) + 1
+        
+        print(f"📋 Distribuzione finale etichette:")
+        for label, count in sorted(label_counts.items()):
+            percentage = (count / len(train_labels)) * 100
+            print(f"   {label}: {count} ({percentage:.1f}%)")
         
         # Verifica che ci siano abbastanza dati per ML training
         unique_train_labels = set(train_labels)
@@ -2383,6 +2679,21 @@ class EndToEndPipeline:
             print(f"  👤 Cluster per review: {len(limited_representatives)}")
             print(f"  📝 Sessioni per review: {selection_stats['total_sessions_for_review']}")
             print(f"  🚫 Cluster esclusi: {selection_stats['excluded_clusters']}")
+            
+            # 🆕 FASE 3.5: SALVATAGGIO RAPPRESENTANTI IN MONGODB PER REVIEW QUEUE
+            print(f"\n💾 FASE 3.5: POPOLAMENTO REVIEW QUEUE")
+            
+            # Salva TUTTI i rappresentanti (non solo quelli limitati) per review queue completa
+            save_success = self._save_representatives_for_review(
+                sessioni, representatives, suggested_labels, cluster_labels
+            )
+            
+            if save_success:
+                print(f"✅ Review queue popolata con successo")
+                print(f"   🔍 L'interfaccia React ora può mostrare rappresentanti, outlier e propagati")
+                print(f"   🎯 Filtri disponibili: rappresentanti, outlier, propagati")
+            else:
+                print(f"⚠️ Warning: Impossibile popolare review queue - continuo con training")
             
             # 4. Training interattivo con rappresentanti selezionati
             print(f"\n📊 FASE 4: TRAINING SUPERVISIONATO")

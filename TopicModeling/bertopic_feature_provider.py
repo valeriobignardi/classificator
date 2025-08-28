@@ -6,7 +6,25 @@ Storia aggiornamenti:
 - 2025-08-07: Aggiunta riduzione dimensionale opzionale (SVD) sulle full probas.
 
 Descrizione:
-Classe BERTopicFeatureProvider per addestrare un modello BERTopic sui testi
+Classe BERTopicFeatureProvider per ad                try:
+                    self.model = BERTopic(
+                        umap_model=reducer,
+                        hdbscan_model=clusterer,
+                        embedding_model=embedding_model,  # Usa wrapper anche nel fallback
+                        calculate_probabilities=False,  # Disabilita probabilities nel fallback
+                        verbose=False,
+                        low_memory=True,
+                        nr_topics=None,
+                        seed_topic_list=None,
+                    )
+                    
+                    if embedding_model is not None:
+                        print("   🔄 Fallback: BERTopic con embedder personalizzato senza probabilities")
+                        self.model.fit(texts)
+                    else:
+                        print("   🔄 Fallback: BERTopic con embedder default senza probabilities")
+                        self.model.fit(texts)
+                    print(f"✅ BERTopic FIT completato con fallback prediction_data")modello BERTopic sui testi
 (con embeddings LaBSE coerenti con il progetto) e generare feature robuste
 per l'ensemble ML: vettori di probabilità dei topic (topic-probas) e opzionale
 one-hot del topic-id principale. Include persistenza (save/load) e metodi di
@@ -220,17 +238,24 @@ class BERTopicFeatureProvider:
             else:
                 print(f"⚠️ Disabilito calculate_probabilities per sicurezza ({n_samples} campioni)")
         
-        # 🔧 CONFIGURAZIONE EMBEDDING MODEL per BERTopic transform
-        # Se abbiamo un embedder configurato, creamo un wrapper compatibile con BERTopic
+        # 🆕 CONFIGURAZIONE EMBEDDING MODEL PERSONALIZZATO per BERTopic
+        # STRATEGIA: Usa wrapper per permettere a BERTopic di gestire embeddings
+        # con il motore scelto dall'utente configurato nel database
         embedding_model = None
+        
         if self.embedder is not None:
-            print(f"   🎯 Configurando embedding model per BERTopic: {type(self.embedder).__name__}")
+            print(f"   🎯 Embedder configurato: {type(self.embedder).__name__}")
+            print(f"   🔧 STRATEGIA: BERTopic userà embedder personalizzato via wrapper")
+            # Crea wrapper compatibile con BERTopic
             embedding_model = self._create_bertopic_embedding_wrapper()
+            print(f"   ✅ Wrapper embedder creato per BERTopic")
+        else:
+            print(f"   📝 Nessun embedder configurato - BERTopic userà default interno")
         
         self.model = BERTopic(
             umap_model=reducer,
             hdbscan_model=clusterer,  # Usa configurazione personalizzata
-            embedding_model=embedding_model,  # ✅ AGGIUNTO: embedding model configurato
+            embedding_model=embedding_model,  # ✅ NUOVO: wrapper embedder personalizzato
             calculate_probabilities=calculate_probs,  # Disabilita per dataset piccoli
             verbose=False,
             low_memory=True,
@@ -239,14 +264,14 @@ class BERTopicFeatureProvider:
         )
         
         try:
-            # 🆕 IMPORTANTE: Non passare embeddings se abbiamo embedding_model personalizzato
-            # Altrimenti BERTopic ignora il nostro embedding_model e usa il backend interno
+            # 🆕 NUOVA STRATEGIA: Lascia che BERTopic gestisca embeddings internamente
+            # usando il nostro wrapper che utilizza l'embedder configurato dall'utente
             if embedding_model is not None:
-                print("   🎯 Usando embedding_model personalizzato, BERTopic genererà embeddings internamente")
-                self.model.fit(texts)  # Lascia che BERTopic usi il nostro embedding_model
+                print("   🔧 BERTopic userà embedder personalizzato interno")
+                self.model.fit(texts)  # BERTopic calcola embeddings internamente
             else:
-                print("   🔧 Usando embeddings pre-computati")
-                self.model.fit(texts, embeddings=embeddings)
+                print("   🔧 BERTopic userà embedder default interno")
+                self.model.fit(texts)  # BERTopic usa embedder default
             print(f"✅ BERTopic FIT completato su {n_samples} campioni")
         except Exception as e:
             error_msg = str(e).lower()
@@ -289,13 +314,20 @@ class BERTopicFeatureProvider:
                 self.model = BERTopic(
                     umap_model=reducer,
                     hdbscan_model=clusterer,
+                    embedding_model=embedding_model,  # Usa wrapper anche nel fallback micro
                     calculate_probabilities=False,  # SEMPRE disabilita per fallback
                     verbose=False,
                     low_memory=True,
                     nr_topics=None,
                     seed_topic_list=None,
                 )
-                self.model.fit(texts, embeddings=embeddings)
+                
+                if embedding_model is not None:
+                    print("   🔄 Fallback micro: BERTopic con embedder personalizzato")
+                    self.model.fit(texts)
+                else:
+                    print("   🔄 Fallback micro: BERTopic con embedder default")  
+                    self.model.fit(texts)
                 print(f"✅ BERTopic FIT completato con parametri fallback")
             else:
                 raise
@@ -306,8 +338,14 @@ class BERTopicFeatureProvider:
                 print("⚠️ SVD non disponibile: installa scikit-learn. Procedo senza.")
             else:
                 try:
-                    # Calcola full probas sul training set
-                    _, P = self.model.transform(texts, embeddings=embeddings)
+                    # Calcola full probas sul training set usando la nuova strategia
+                    if hasattr(self.model, 'embedding_model') and self.model.embedding_model is not None:
+                        print("   🔧 SVD Training: Usando embedder personalizzato interno")
+                        _, P = self.model.transform(texts)
+                    else:
+                        print("   🔧 SVD Training: Usando embeddings esterni o default")
+                        _, P = self.model.transform(texts, embeddings=embeddings)
+                        
                     if P is None or P.size == 0:
                         print("⚠️ Probabilità non disponibili; skip SVD training")
                     else:
@@ -353,7 +391,14 @@ class BERTopicFeatureProvider:
             raise RuntimeError("Modello BERTopic non addestrato.")
 
         try:
-            topic_ids, probs = self.model.transform(texts, embeddings=embeddings)
+            # 🆕 NUOVA STRATEGIA: Lascia che BERTopic gestisca embeddings internamente
+            # Se il modello ha un embedding_model personalizzato, non passa embeddings esterni
+            if hasattr(self.model, 'embedding_model') and self.model.embedding_model is not None:
+                print(f"🔧 Transform: BERTopic userà embedder personalizzato interno")
+                topic_ids, probs = self.model.transform(texts)
+            else:
+                print(f"🔧 Transform: BERTopic userà embedder default o embeddings esterni")
+                topic_ids, probs = self.model.transform(texts, embeddings=embeddings)
         except Exception as e:
             print(f"❌ Errore transform BERTopic: {e}")
             # Se il transform fallisce, ritorna topic vuoti
@@ -576,16 +621,17 @@ class BERTopicFeatureProvider:
     
     def _create_bertopic_embedding_wrapper(self):
         """
-        Crea wrapper embedder compatibile con BERTopic
+        Crea wrapper embedder completamente compatibile con BERTopic
         
-        Scopo della funzione: Crea wrapper per embedder che rispetta interfaccia BERTopic
+        Scopo della funzione: Crea wrapper per embedder che implementa interfaccia 
+        SentenceTransformer completa per BERTopic
         Parametri di input: None (usa self.embedder)
         Parametri di output: Wrapper embedder BERTopic-compatibile
-        Valori di ritorno: Classe wrapper con metodo embed
-        Tracciamento aggiornamenti: 2025-08-28 - Creata per fix BERTopic transform
+        Valori di ritorno: Classe wrapper con tutti i metodi richiesti da BERTopic
+        Tracciamento aggiornamenti: 2025-08-28 - Ricostruito per fix MiniLM-L6 bug
         
         Returns:
-            Wrapper embedder per BERTopic
+            Wrapper embedder per BERTopic con interfaccia SentenceTransformer completa
             
         Autore: Valerio Bignardi
         Data: 2025-08-28
@@ -593,15 +639,84 @@ class BERTopicFeatureProvider:
         embedder = self.embedder
         
         class BERTopicEmbeddingWrapper:
-            """Wrapper per embedder compatibile con BERTopic"""
+            """
+            Wrapper completo per embedder compatibile con BERTopic
+            Implementa l'interfaccia SentenceTransformer che BERTopic si aspetta
+            """
             
             def __init__(self, embedder):
                 self.embedder = embedder
+                # Aggiungi attributi che BERTopic potrebbe cercare
+                if hasattr(embedder, '_model_config'):
+                    self._model_config = embedder._model_config
             
-            def embed(self, texts, verbose=False):
-                """Metodo embed richiesto da BERTopic"""
-                if isinstance(texts, str):
-                    texts = [texts]
-                return self.embedder.encode(texts, show_progress_bar=verbose)
+            def embed(self, documents, verbose=False):
+                """
+                Metodo embed principale richiesto da BERTopic
+                
+                Args:
+                    documents: Lista di testi da processare
+                    verbose: Flag per progress bar
+                
+                Returns:
+                    numpy.ndarray: Embeddings dei documenti
+                """
+                if isinstance(documents, str):
+                    documents = [documents]
+                
+                print(f"🔧 BERTopicWrapper: Processing {len(documents)} documents with {type(self.embedder).__name__}")
+                
+                # Usa il nostro embedder LaBSE
+                return self.embedder.encode(documents, show_progress_bar=verbose)
+            
+            def encode(self, sentences, **kwargs):
+                """
+                Metodo encode alternativo che potrebbe essere chiamato da BERTopic
+                
+                Args:
+                    sentences: Testi da encodificare
+                    **kwargs: Parametri aggiuntivi
+                
+                Returns:
+                    numpy.ndarray: Embeddings
+                """
+                return self.embed(sentences, verbose=kwargs.get('show_progress_bar', False))
+            
+            def __call__(self, documents):
+                """
+                Metodo callable per compatibilità
+                
+                Args:
+                    documents: Documenti da processare
+                
+                Returns:
+                    numpy.ndarray: Embeddings
+                """
+                return self.embed(documents)
+            
+            def get_sentence_embedding_dimension(self):
+                """
+                Restituisce la dimensione degli embeddings
+                
+                Returns:
+                    int: Dimensione embeddings
+                """
+                if hasattr(self.embedder, 'get_embedding_dimension'):
+                    return self.embedder.get_embedding_dimension()
+                
+                # Fallback: testa con un documento dummy
+                test_embedding = self.embedder.encode(["test"])
+                return test_embedding.shape[1] if test_embedding.ndim > 1 else len(test_embedding)
+            
+            @property
+            def device(self):
+                """Proprietà device per compatibilità"""
+                return getattr(self.embedder, 'device', 'cpu')
+            
+            def __str__(self):
+                return f"BERTopicWrapper({type(self.embedder).__name__})"
+            
+            def __repr__(self):
+                return self.__str__()
         
         return BERTopicEmbeddingWrapper(embedder)

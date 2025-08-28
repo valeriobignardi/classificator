@@ -53,6 +53,7 @@ import {
   Compare as CompareIcon,
   TrendingUp as TrendIcon,
   Visibility as ViewIcon,
+  Settings as SettingsIcon,
   ExpandMore as ExpandMoreIcon,
   Close as CloseIcon
 } from '@mui/icons-material';
@@ -136,7 +137,11 @@ interface TrendData {
 /**
  * Componente principale per la gestione versioni clustering
  */
-const ClusteringVersionManager: React.FC = () => {
+interface ClusteringVersionManagerProps {
+  onLoadParameters?: (parameters: any) => void;
+}
+
+const ClusteringVersionManager: React.FC<ClusteringVersionManagerProps> = ({ onLoadParameters }) => {
   const { selectedTenant } = useTenant();
   
   // Stati principali
@@ -329,6 +334,35 @@ const ClusteringVersionManager: React.FC = () => {
   const viewVersion = (versionNumber: number) => {
     loadVersionDetail(versionNumber);
     setViewDialogOpen(true);
+  };
+
+  /**
+   * Carica i parametri di una versione specifica nell'interfaccia principale
+   */
+  const loadParametersFromVersion = async (versionNumber: number) => {
+    if (!selectedTenant?.tenant_id || !onLoadParameters) return;
+
+    try {
+      console.log('🔧 [DEBUG] Caricamento parametri dalla versione:', versionNumber);
+      
+      // Recupera i dettagli della versione per ottenere i parametri
+      const response = await apiService.getClusteringVersion(selectedTenant.tenant_id, versionNumber);
+      
+      if (response.success && response.data?.parameters_data) {
+        console.log('✅ [DEBUG] Parametri versione recuperati:', response.data.parameters_data);
+        
+        // Chiama il callback per aggiornare i parametri nel componente principale
+        onLoadParameters(response.data.parameters_data);
+        
+        // Mostra un feedback all'utente
+        console.log(`✅ Parametri della Versione ${versionNumber} caricati con successo`);
+        
+      } else {
+        console.error('❌ [DEBUG] Errore caricamento parametri:', response.error);
+      }
+    } catch (err: any) {
+      console.error('❌ [DEBUG] Errore caricamento parametri:', err.message);
+    }
   };
 
   /**
@@ -564,11 +598,29 @@ const ClusteringVersionManager: React.FC = () => {
                         </TableCell>
                         <TableCell align="center">{item.execution_time.toFixed(1)}s</TableCell>
                         <TableCell align="center">
-                          <Tooltip title="Visualizza dettagli">
-                            <IconButton onClick={(e) => { e.stopPropagation(); viewVersion(item.version_number); }}>
-                              <ViewIcon />
-                            </IconButton>
-                          </Tooltip>
+                          <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center' }}>
+                            <Tooltip title="Visualizza dettagli">
+                              <IconButton 
+                                onClick={(e) => { e.stopPropagation(); viewVersion(item.version_number); }}
+                                size="small"
+                              >
+                                <ViewIcon />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Carica parametri di questa versione">
+                              <IconButton 
+                                onClick={(e) => { 
+                                  e.stopPropagation(); 
+                                  loadParametersFromVersion(item.version_number); 
+                                }}
+                                size="small"
+                                color="primary"
+                                disabled={!onLoadParameters}
+                              >
+                                <SettingsIcon />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
                         </TableCell>
                       </TableRow>
                     ))}

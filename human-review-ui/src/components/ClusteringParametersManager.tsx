@@ -662,6 +662,33 @@ const ClusteringParametersManager: React.FC = () => {
     }
   }, [success, error]);
 
+  /**
+   * Callback per caricare parametri da una versione specifica
+   */
+  const handleLoadParametersFromVersion = useCallback((versionParameters: any) => {
+    if (!versionParameters) return;
+
+    console.log('🔧 Caricamento parametri da versione:', versionParameters);
+
+    // Crea un nuovo oggetto parametri con i valori caricati
+    const updatedParameters: ClusteringParameters = { ...parameters } as ClusteringParameters;
+
+    // Aggiorna ogni parametro se presente nei dati della versione
+    Object.keys(updatedParameters).forEach(key => {
+      if (versionParameters[key] !== undefined) {
+        updatedParameters[key as keyof ClusteringParameters] = {
+          ...updatedParameters[key as keyof ClusteringParameters],
+          value: versionParameters[key]
+        };
+      }
+    });
+
+    setParameters(updatedParameters);
+    setSuccess('✅ Parametri caricati dalla versione con successo!');
+    setHasChanges(true); // Indica che ci sono modifiche da salvare
+    console.log('✅ Parametri caricati dalla versione con successo');
+  }, [parameters]);
+
   if (!selectedTenant) {
     return (
       <Alert severity="info" sx={{ m: 2 }}>
@@ -1134,7 +1161,7 @@ const ClusteringParametersManager: React.FC = () => {
 
       {/* 🆕 SEZIONE CRONOLOGIA E VERSIONING CLUSTERING */}
       <Box sx={{ mt: 3 }}>
-        <ClusteringVersionManager />
+        <ClusteringVersionManager onLoadParameters={handleLoadParametersFromVersion} />
       </Box>
       
       {/* 🆕 DIALOG RISULTATI TEST CLUSTERING */}

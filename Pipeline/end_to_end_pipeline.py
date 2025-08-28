@@ -1130,7 +1130,7 @@ class EndToEndPipeline:
                     # Salva in MongoDB come "pending review"
                     success = self.mongo_reader.save_classification_result(
                         session_id=session_id,
-                        client_name=self.tenant_slug,
+                        client_name=self.tenant.tenant_id,
                         final_decision=final_decision,
                         conversation_text=conversation_text,
                         needs_review=True,  # ✅ FONDAMENTALE: marca per review
@@ -1163,6 +1163,83 @@ class EndToEndPipeline:
             import traceback
             traceback.print_exc()
             return False
+    
+    def _determine_propagated_status(self, 
+                                   cluster_representatives: List[Dict],
+                                   consensus_threshold: float = 0.7) -> Dict:
+        """
+        Determina lo status dei propagated basandosi sui rappresentanti del cluster
+        
+        Scopo della funzione: Logica intelligente per decidere se propagated vanno in review
+        Parametri di input: cluster_representatives, consensus_threshold
+        Parametri di output: Dict con status e label da propagare
+        Valori di ritorno: needs_review, propagated_label, reason
+        Tracciamento aggiornamenti: 2025-08-28 - Nuovo per logica consenso 70%
+        
+        Args:
+            cluster_representatives: Lista rappresentanti del cluster
+            consensus_threshold: Soglia di consenso (default 70%)
+        
+        Returns:
+            Dict con status e label da propagare
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-28
+        """
+        
+        # 1. Conta rappresentanti reviewed vs non-reviewed
+        reviewed_reps = [r for r in cluster_representatives 
+                        if r.get('human_reviewed', False)]
+        
+        # 2. Se nessuno è stato reviewed → TUTTI in review
+        if len(reviewed_reps) == 0:
+            return {
+                'needs_review': True,
+                'propagated_label': None,
+                'reason': 'no_reviewed_representatives'
+            }
+        
+        # 3. Analizza le classificazioni dei reviewed
+        reviewed_labels = [r.get('classification') for r in reviewed_reps]
+        label_counts = {}
+        for label in reviewed_labels:
+            if label:  # Esclude None e valori vuoti
+                label_counts[label] = label_counts.get(label, 0) + 1
+        
+        if not label_counts:
+            # Nessuna label valida nei reviewed
+            return {
+                'needs_review': True,
+                'propagated_label': None,
+                'reason': 'no_valid_labels'
+            }
+        
+        # 4. Trova la label più votata
+        most_voted_label = max(label_counts.keys(), key=lambda k: label_counts[k])
+        consensus_ratio = label_counts[most_voted_label] / len(reviewed_labels)
+        
+        # 5. Decisione basata su consenso (soglia 0.7 = 70%)
+        if consensus_ratio >= consensus_threshold:
+            # CONSENSO FORTE → Auto-classifica propagated
+            return {
+                'needs_review': False,
+                'propagated_label': most_voted_label,
+                'reason': f'consensus_{int(consensus_ratio*100)}%'
+            }
+        elif consensus_ratio == 0.5 and len(reviewed_labels) == 2:
+            # CASO 50-50 → Review obbligatoria come richiesto
+            return {
+                'needs_review': True,  
+                'propagated_label': most_voted_label,  # Label provvisoria
+                'reason': 'disagreement_50_50_mandatory_review'
+            }
+        else:
+            # DISACCORDO → Propagated vanno in review
+            return {
+                'needs_review': True,  
+                'propagated_label': most_voted_label,  # Label provvisoria
+                'reason': f'disagreement_{int(consensus_ratio*100)}%'
+            }
             
     def _save_propagated_sessions_metadata(self, 
                                          sessioni: Dict[str, Dict],
@@ -1228,14 +1305,14 @@ class EndToEndPipeline:
                     'reasoning': f'Sessione propagata dal cluster {cluster_id} durante training supervisionato'
                 }
                 
-                # Salva come auto_classified (non needs review)
+                # Salva come pending review (TUTTE le sessioni propagate devono essere reviewabili)
                 success = self.mongo_reader.save_classification_result(
                     session_id=session_id,
-                    client_name=self.tenant_slug,
+                    client_name=self.tenant.tenant_id,
                     final_decision=final_decision,
                     conversation_text=sessioni[session_id].get('testo_completo', ''),
-                    needs_review=False,  # Non serve review per propagate
-                    review_reason=None,
+                    needs_review=True,  # ✅ ANCHE LE PROPAGATE devono essere pending per filtri
+                    review_reason='supervised_training_propagated',
                     classified_by='supervised_training_pipeline',
                     notes=f'Sessione propagata da cluster {cluster_id}',
                     cluster_metadata=cluster_metadata
@@ -1246,6 +1323,70 @@ class EndToEndPipeline:
         
         return saved_count
     
+    def update_propagated_after_review(self, cluster_id: int):
+        """
+        Aggiorna status propagated dopo review umana di un rappresentante
+        
+        Scopo della funzione: Trigger automatico dopo review umana rappresentanti
+        Parametri di input: cluster_id del cluster reviewato
+        Parametri di output: numero sessioni propagate aggiornate
+        Valori di ritorno: conteggio aggiornamenti effettuati
+        Tracciamento aggiornamenti: 2025-08-28 - Nuovo per logica dinamica
+        
+        Args:
+            cluster_id: ID del cluster i cui rappresentanti sono stati reviewed
+            
+        Returns:
+            int: Numero di sessioni propagate aggiornate
+            
+        Nota: Chiamato automaticamente ogni volta che un rappresentante viene reviewed
+        
+        Autore: Valerio Bignardi  
+        Data: 2025-08-28
+        """
+        
+        try:
+            from mongo_classification_reader import MongoClassificationReader
+            mongo_reader = MongoClassificationReader()
+            mongo_reader.connect()  # Stabilisce connessione database
+            
+            # 1. Ottieni tutti i rappresentanti del cluster
+            representatives = mongo_reader.get_cluster_representatives(
+                self.tenant.tenant_slug, cluster_id
+            )
+            
+            if not representatives:
+                print(f"⚠️ Nessun rappresentante trovato per cluster {cluster_id}")
+                return 0
+            
+            # 2. Determina status propagated usando logica intelligente
+            propagated_status = self._determine_propagated_status(representatives)
+            
+            print(f"🔄 Cluster {cluster_id}: {propagated_status['reason']}")
+            
+            # 3. Se c'è consenso, aggiorna tutti i propagated del cluster
+            if not propagated_status['needs_review']:
+                updated_count = mongo_reader.update_cluster_propagated(
+                    client_name=self.tenant.tenant_slug,
+                    cluster_id=cluster_id,
+                    final_label=propagated_status['propagated_label'],
+                    review_status='auto_classified',
+                    classified_by='consensus_' + propagated_status['reason'],
+                    notes=f"Auto-classificati per consenso: {propagated_status['reason']}"
+                )
+                
+                print(f"✅ {updated_count} sessioni propagate auto-classificate per consenso")
+                return updated_count
+            else:
+                print(f"👤 Sessioni propagate rimangono in review: {propagated_status['reason']}")
+                return 0
+                
+        except Exception as e:
+            print(f"❌ Errore aggiornamento propagated per cluster {cluster_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return 0
+
     def allena_classificatore(self,
                             sessioni: Dict[str, Dict],
                             cluster_labels: np.ndarray,
@@ -3719,7 +3860,7 @@ class EndToEndPipeline:
                     
                     success = mongo_reader.save_classification_result(
                         session_id=session_id,
-                        client_name=self.tenant_slug,
+                        client_name=self.tenant.tenant_id,  # 🔧 FIX: usa tenant_id non tenant_slug
                         # 🆕 SIMULA ml_result e llm_result per training supervisionado
                         ml_result=None,  # Non disponibile durante training supervisionado
                         llm_result={
@@ -3774,7 +3915,7 @@ class EndToEndPipeline:
                     # Usa il metodo corretto save_classification_result
                     success = mongo_reader.save_classification_result(
                         session_id=session_id,
-                        client_name=self.tenant_slug,
+                        client_name=self.tenant.tenant_id,  # 🔧 FIX: usa tenant_id non tenant_slug
                         # 🆕 SIMULA ml_result e llm_result per training supervisionado
                         ml_result=None,  # Non disponibile durante training supervisionado  
                         llm_result={

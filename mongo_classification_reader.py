@@ -2052,6 +2052,137 @@ class MongoClassificationReader:
                 'error': error_msg,
                 'deleted_count': 0
             }
+    
+    def get_cluster_representatives(self, client_name: str, cluster_id: int) -> List[Dict]:
+        """
+        Recupera tutti i rappresentanti di un cluster specifico
+        
+        Scopo della funzione: Ottenere rappresentanti reviewed per logica consenso
+        Parametri di input: client_name, cluster_id
+        Parametri di output: Lista rappresentanti con metadata
+        Valori di ritorno: Lista dizionari sessioni rappresentanti
+        Tracciamento aggiornamenti: 2025-08-28 - Nuovo per logica propagated
+        
+        Args:
+            client_name: Nome/UUID del tenant
+            cluster_id: ID del cluster
+            
+        Returns:
+            Lista di rappresentanti del cluster con info review
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-28
+        """
+        
+        try:
+            # Determina nome collection
+            collection_name = self.generate_collection_name(client_name)
+            if not collection_name:
+                print(f"❌ Collection non trovata per client: {client_name}")
+                return []
+            
+            collection = self.db[collection_name]
+            
+            # Query per rappresentanti del cluster specifico
+            query = {
+                "cluster_metadata.cluster_id": cluster_id,
+                "cluster_metadata.is_representative": True
+            }
+            
+            # Recupera rappresentanti con proiezione dei campi necessari
+            representatives = list(collection.find(
+                query,
+                {
+                    "session_id": 1,
+                    "classification": 1,
+                    "human_reviewed": 1,
+                    "review_status": 1,
+                    "confidence": 1,
+                    "cluster_metadata": 1,
+                    "_id": 0
+                }
+            ))
+            
+            print(f"🔍 Trovati {len(representatives)} rappresentanti per cluster {cluster_id}")
+            return representatives
+            
+        except Exception as e:
+            print(f"❌ Errore recupero rappresentanti cluster {cluster_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+    
+    def update_cluster_propagated(self, 
+                                client_name: str,
+                                cluster_id: int,
+                                final_label: str,
+                                review_status: str = 'auto_classified',
+                                classified_by: str = 'consensus',
+                                notes: str = '') -> int:
+        """
+        Aggiorna tutte le sessioni propagate di un cluster con label consenso
+        
+        Scopo della funzione: Auto-classificazione propagated per consenso rappresentanti
+        Parametri di input: client_name, cluster_id, final_label, metadata
+        Parametri di output: numero sessioni aggiornate
+        Valori di ritorno: conteggio aggiornamenti MongoDB
+        Tracciamento aggiornamenti: 2025-08-28 - Nuovo per consenso automatico
+        
+        Args:
+            client_name: Nome/UUID del tenant
+            cluster_id: ID del cluster
+            final_label: Label finale da assegnare
+            review_status: Status review (default: auto_classified)
+            classified_by: Chi ha classificato (default: consensus)
+            notes: Note aggiuntive
+            
+        Returns:
+            Numero di sessioni propagate aggiornate
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-28
+        """
+        
+        try:
+            # Determina nome collection
+            collection_name = self.generate_collection_name(client_name)
+            if not collection_name:
+                print(f"❌ Collection non trovata per client: {client_name}")
+                return 0
+            
+            collection = self.db[collection_name]
+            
+            # Query per sessioni propagate del cluster (non-rappresentanti)
+            query = {
+                "cluster_metadata.cluster_id": cluster_id,
+                "cluster_metadata.is_representative": False,  # Solo propagated
+                "review_status": "pending"  # Solo quelle ancora in review
+            }
+            
+            # Update data con timestamp
+            update_data = {
+                "$set": {
+                    "classification": final_label,
+                    "review_status": review_status,
+                    "classified_by": classified_by,
+                    "human_reviewed": False,  # Auto-classificate, non umane
+                    "updated_at": datetime.now().isoformat(),
+                    "notes": notes,
+                    "classification_method": "consensus_propagation"
+                }
+            }
+            
+            # Esegui aggiornamento bulk
+            result = collection.update_many(query, update_data)
+            
+            print(f"✅ Aggiornate {result.modified_count} sessioni propagate cluster {cluster_id} con label '{final_label}'")
+            return result.modified_count
+            
+        except Exception as e:
+            print(f"❌ Errore aggiornamento propagated cluster {cluster_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return 0
 
 
 def main():

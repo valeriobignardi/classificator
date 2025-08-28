@@ -1085,6 +1085,8 @@ class ApiService {
         n_clusters: number;
         n_outliers: number;
         silhouette_score: number;
+        davies_bouldin_score?: number;
+        calinski_harabasz_score?: number;
         execution_time: number;
         clustering_ratio: number;
         n_conversations: number;

@@ -68,6 +68,8 @@ interface ClusteringHistoryItem {
   n_clusters: number;
   n_outliers: number;
   silhouette_score: number;
+  davies_bouldin_score?: number;
+  calinski_harabasz_score?: number;
   execution_time: number;
   parameters_summary: string;
 }
@@ -82,6 +84,8 @@ interface ClusteringVersionDetail {
   n_clusters: number;
   n_outliers: number;
   silhouette_score: number;
+  davies_bouldin_score?: number;
+  calinski_harabasz_score?: number;
   execution_time: number;
 }
 
@@ -93,6 +97,8 @@ interface ClusteringComparison {
       n_clusters: number;
       n_outliers: number;
       silhouette_score: number;
+      davies_bouldin_score: number;
+      calinski_harabasz_score: number;
       execution_time: number;
     };
     parameters_diff: Array<{
@@ -238,6 +244,8 @@ const ClusteringVersionManager: React.FC = () => {
             n_clusters: response.version1.data.statistics?.n_clusters || 0,
             n_outliers: response.version1.data.statistics?.n_outliers || 0,
             silhouette_score: response.version1.data.quality_metrics?.silhouette_score || 0,
+            davies_bouldin_score: response.version1.data.quality_metrics?.davies_bouldin_score,
+            calinski_harabasz_score: response.version1.data.quality_metrics?.calinski_harabasz_score,
             execution_time: response.version1.metadata.execution_time
           },
           version2: {
@@ -250,6 +258,8 @@ const ClusteringVersionManager: React.FC = () => {
             n_clusters: response.version2.data.statistics?.n_clusters || 0,
             n_outliers: response.version2.data.statistics?.n_outliers || 0,
             silhouette_score: response.version2.data.quality_metrics?.silhouette_score || 0,
+            davies_bouldin_score: response.version2.data.quality_metrics?.davies_bouldin_score,
+            calinski_harabasz_score: response.version2.data.quality_metrics?.calinski_harabasz_score,
             execution_time: response.version2.metadata.execution_time
           },
           comparison: {
@@ -257,6 +267,8 @@ const ClusteringVersionManager: React.FC = () => {
               n_clusters: response.comparison_metrics.clusters_diff,
               n_outliers: response.comparison_metrics.outliers_diff,
               silhouette_score: response.comparison_metrics.silhouette_diff,
+              davies_bouldin_score: (response.version2.data.quality_metrics?.davies_bouldin_score || 0) - (response.version1.data.quality_metrics?.davies_bouldin_score || 0),
+              calinski_harabasz_score: (response.version2.data.quality_metrics?.calinski_harabasz_score || 0) - (response.version1.data.quality_metrics?.calinski_harabasz_score || 0),
               execution_time: response.comparison_metrics.execution_time_diff
             },
             parameters_diff: [], // TODO: Implementare se necessario
@@ -332,6 +344,26 @@ const ClusteringVersionManager: React.FC = () => {
   const getSilhouetteColor = (score: number): 'success' | 'warning' | 'error' => {
     if (score >= 0.5) return 'success';
     if (score >= 0.2) return 'warning';
+    return 'error';
+  };
+
+  /**
+   * Ottiene il colore per il chip del Davies-Bouldin Index
+   * Più basso = migliore (0 = perfetto, <1 = buono, >2 = problematico)
+   */
+  const getDaviesBouldinColor = (score: number): 'success' | 'warning' | 'error' => {
+    if (score <= 1.0) return 'success';
+    if (score <= 2.0) return 'warning';
+    return 'error';
+  };
+
+  /**
+   * Ottiene il colore per il chip del Calinski-Harabasz Index
+   * Più alto = migliore (>300 = ottimo, >100 = buono, <100 = problematico)
+   */
+  const getCalinskiHarabaszColor = (score: number): 'success' | 'warning' | 'error' => {
+    if (score >= 300) return 'success';
+    if (score >= 100) return 'warning';
     return 'error';
   };
 
@@ -476,7 +508,21 @@ const ClusteringVersionManager: React.FC = () => {
                       <TableCell>Data</TableCell>
                       <TableCell align="center">Cluster</TableCell>
                       <TableCell align="center">Outliers</TableCell>
-                      <TableCell align="center">Silhouette</TableCell>
+                      <TableCell align="center">
+                        <Tooltip title="Coerenza interna cluster (-1 a 1, più alto = migliore)">
+                          <span>Silhouette</span>
+                        </Tooltip>
+                      </TableCell>
+                      <TableCell align="center">
+                        <Tooltip title="Separazione cluster (0+, più basso = migliore)">
+                          <span>Davies-Bouldin</span>
+                        </Tooltip>
+                      </TableCell>
+                      <TableCell align="center">
+                        <Tooltip title="Densità e separazione (0+, più alto = migliore)">
+                          <span>Calinski-Harabasz</span>
+                        </Tooltip>
+                      </TableCell>
                       <TableCell align="center">Tempo</TableCell>
                       <TableCell align="center">Azioni</TableCell>
                     </TableRow>
@@ -499,6 +545,20 @@ const ClusteringVersionManager: React.FC = () => {
                           <Chip
                             label={item.silhouette_score.toFixed(3)}
                             color={getSilhouetteColor(item.silhouette_score)}
+                            size="small"
+                          />
+                        </TableCell>
+                        <TableCell align="center">
+                          <Chip
+                            label={item.davies_bouldin_score?.toFixed(3) || 'N/A'}
+                            color={item.davies_bouldin_score ? getDaviesBouldinColor(item.davies_bouldin_score) : 'default'}
+                            size="small"
+                          />
+                        </TableCell>
+                        <TableCell align="center">
+                          <Chip
+                            label={item.calinski_harabasz_score?.toFixed(1) || 'N/A'}
+                            color={item.calinski_harabasz_score ? getCalinskiHarabaszColor(item.calinski_harabasz_score) : 'default'}
                             size="small"
                           />
                         </TableCell>
@@ -609,6 +669,34 @@ const ClusteringVersionManager: React.FC = () => {
                             {comparison.comparison.metrics_delta.silhouette_score.toFixed(3)}
                           </Typography>
                           <Typography variant="body2">Silhouette</Typography>
+                        </CardContent>
+                      </Card>
+                    </Box>
+                    <Box sx={{ flex: '1 1 200px', minWidth: '200px' }}>
+                      <Card>
+                        <CardContent sx={{ textAlign: 'center' }}>
+                          <Typography 
+                            variant="h6" 
+                            color={comparison.comparison.metrics_delta.davies_bouldin_score < 0 ? "success.main" : comparison.comparison.metrics_delta.davies_bouldin_score > 0 ? "error.main" : "text.primary"}
+                          >
+                            {comparison.comparison.metrics_delta.davies_bouldin_score > 0 ? '+' : ''}
+                            {comparison.comparison.metrics_delta.davies_bouldin_score.toFixed(3)}
+                          </Typography>
+                          <Typography variant="body2">Davies-Bouldin</Typography>
+                        </CardContent>
+                      </Card>
+                    </Box>
+                    <Box sx={{ flex: '1 1 200px', minWidth: '200px' }}>
+                      <Card>
+                        <CardContent sx={{ textAlign: 'center' }}>
+                          <Typography 
+                            variant="h6" 
+                            color={comparison.comparison.metrics_delta.calinski_harabasz_score > 0 ? "success.main" : comparison.comparison.metrics_delta.calinski_harabasz_score < 0 ? "error.main" : "text.primary"}
+                          >
+                            {comparison.comparison.metrics_delta.calinski_harabasz_score > 0 ? '+' : ''}
+                            {comparison.comparison.metrics_delta.calinski_harabasz_score.toFixed(1)}
+                          </Typography>
+                          <Typography variant="body2">Calinski-Harabasz</Typography>
                         </CardContent>
                       </Card>
                     </Box>
@@ -750,49 +838,125 @@ const ClusteringVersionManager: React.FC = () => {
                   </Box>
 
                   {/* Grafici trend */}
-                  <Box sx={{ height: 400, mb: 2 }}>
+                  <Box sx={{ mb: 2 }}>
                     <Typography variant="h6" gutterBottom>
                       📈 Evoluzione Metriche nel Tempo
                     </Typography>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={trendData.trend_data}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis 
-                          dataKey="version_number" 
-                          label={{ value: 'Versione', position: 'insideBottom', offset: -5 }}
-                        />
-                        <YAxis yAxisId="left" />
-                        <YAxis yAxisId="right" orientation="right" />
-                        <RechartsTooltip 
-                          labelFormatter={(value: string | number) => `Versione ${value}`}
-                        />
-                        <Legend />
-                        <Line
-                          yAxisId="left"
-                          type="monotone"
-                          dataKey="n_clusters"
-                          stroke="#1976d2"
-                          strokeWidth={2}
-                          name="N. Cluster"
-                        />
-                        <Line
-                          yAxisId="left"
-                          type="monotone"
-                          dataKey="n_outliers"
-                          stroke="#d32f2f"
-                          strokeWidth={2}
-                          name="N. Outliers"
-                        />
-                        <Line
-                          yAxisId="right"
-                          type="monotone"
-                          dataKey="silhouette_score"
-                          stroke="#2e7d32"
-                          strokeWidth={2}
-                          name="Silhouette Score"
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
+                    
+                    {/* Grafico principale: Cluster e Outliers */}
+                    <Box sx={{ height: 300, mb: 3 }}>
+                      <Typography variant="subtitle1" sx={{ mb: 1 }}>
+                        Cluster e Outliers
+                      </Typography>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={trendData.trend_data}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis 
+                            dataKey="version_number" 
+                            label={{ value: 'Versione', position: 'insideBottom', offset: -5 }}
+                          />
+                          <YAxis />
+                          <RechartsTooltip 
+                            labelFormatter={(value: string | number) => `Versione ${value}`}
+                          />
+                          <Legend />
+                          <Line
+                            type="monotone"
+                            dataKey="n_clusters"
+                            stroke="#1976d2"
+                            strokeWidth={2}
+                            name="N. Cluster"
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="n_outliers"
+                            stroke="#d32f2f"
+                            strokeWidth={2}
+                            name="N. Outliers"
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </Box>
+
+                    {/* Grafico Metriche di Qualità */}
+                    <Box sx={{ height: 350, mb: 3 }}>
+                      <Typography variant="subtitle1" sx={{ mb: 1 }}>
+                        Metriche di Qualità Clustering
+                      </Typography>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={trendData.trend_data}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis 
+                            dataKey="version_number" 
+                            label={{ value: 'Versione', position: 'insideBottom', offset: -5 }}
+                          />
+                          <YAxis yAxisId="silhouette" domain={[0, 1]} />
+                          <YAxis yAxisId="davies" orientation="right" domain={[0, 'dataMax']} />
+                          <RechartsTooltip 
+                            labelFormatter={(value: string | number) => `Versione ${value}`}
+                            formatter={(value: any, name: string) => {
+                              if (name === 'Silhouette Score') return [value?.toFixed(3) || 'N/A', name];
+                              if (name === 'Davies-Bouldin Index') return [value?.toFixed(3) || 'N/A', name];
+                              return [value, name];
+                            }}
+                          />
+                          <Legend />
+                          <Line
+                            yAxisId="silhouette"
+                            type="monotone"
+                            dataKey="silhouette_score"
+                            stroke="#2e7d32"
+                            strokeWidth={3}
+                            name="Silhouette Score (più alto = migliore)"
+                            connectNulls={false}
+                            dot={{ fill: '#2e7d32', strokeWidth: 2, r: 4 }}
+                          />
+                          <Line
+                            yAxisId="davies"
+                            type="monotone"
+                            dataKey="davies_bouldin_score"
+                            stroke="#ff9800"
+                            strokeWidth={3}
+                            name="Davies-Bouldin Index (più basso = migliore)"
+                            connectNulls={false}
+                            dot={{ fill: '#ff9800', strokeWidth: 2, r: 4 }}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </Box>
+
+                    {/* Grafico Calinski-Harabasz separato */}
+                    <Box sx={{ height: 300 }}>
+                      <Typography variant="subtitle1" sx={{ mb: 1 }}>
+                        Calinski-Harabasz Index (più alto = migliore)
+                      </Typography>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={trendData.trend_data}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis 
+                            dataKey="version_number" 
+                            label={{ value: 'Versione', position: 'insideBottom', offset: -5 }}
+                          />
+                          <YAxis domain={[0, 'dataMax']} />
+                          <RechartsTooltip 
+                            labelFormatter={(value: string | number) => `Versione ${value}`}
+                            formatter={(value: any, name: string) => {
+                              return [value?.toFixed(1) || 'N/A', name];
+                            }}
+                          />
+                          <Legend />
+                          <Line
+                            type="monotone"
+                            dataKey="calinski_harabasz_score"
+                            stroke="#9c27b0"
+                            strokeWidth={3}
+                            name="Calinski-Harabasz Index"
+                            connectNulls={false}
+                            dot={{ fill: '#9c27b0', strokeWidth: 2, r: 4 }}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </Box>
                   </Box>
                 </Box>
               )}

@@ -140,8 +140,9 @@ class ClusteringResultsDB:
                     tenant_id, version_number, execution_time,
                     results_json, parameters_json,
                     n_clusters, n_outliers, n_conversations,
-                    clustering_ratio, silhouette_score
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    clustering_ratio, silhouette_score,
+                    davies_bouldin_score, calinski_harabasz_score
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             
             cursor.execute(insert_query, (
@@ -154,7 +155,9 @@ class ClusteringResultsDB:
                 stats.get('n_outliers'),
                 stats.get('total_conversations'),
                 stats.get('clustering_ratio'),
-                quality.get('silhouette_score')
+                quality.get('silhouette_score'),
+                quality.get('davies_bouldin_score'),
+                quality.get('calinski_harabasz_score')
             ))
             
             record_id = cursor.lastrowid
@@ -193,7 +196,8 @@ class ClusteringResultsDB:
             cursor.execute("""
                 SELECT id, version_number, created_at, execution_time,
                        n_clusters, n_outliers, n_conversations,
-                       clustering_ratio, silhouette_score
+                       clustering_ratio, silhouette_score,
+                       davies_bouldin_score, calinski_harabasz_score
                 FROM clustering_test_results
                 WHERE tenant_id = %s
                 ORDER BY version_number DESC
@@ -236,7 +240,8 @@ class ClusteringResultsDB:
                 SELECT id, version_number, created_at, execution_time,
                        results_json, parameters_json,
                        n_clusters, n_outliers, n_conversations,
-                       clustering_ratio, silhouette_score
+                       clustering_ratio, silhouette_score,
+                       davies_bouldin_score, calinski_harabasz_score
                 FROM clustering_test_results
                 WHERE tenant_id = %s AND version_number = %s
             """, (tenant_id, version_number))
@@ -322,6 +327,7 @@ class ClusteringResultsDB:
                 SELECT version_number, created_at,
                        n_clusters, n_outliers, n_conversations,
                        clustering_ratio, silhouette_score,
+                       davies_bouldin_score, calinski_harabasz_score,
                        execution_time
                 FROM clustering_test_results
                 WHERE tenant_id = %s

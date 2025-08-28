@@ -98,29 +98,10 @@ class ApiService {
 
   // Metodo per recuperare l'elenco dei tenant dal server
   async getTenants(): Promise<Tenant[]> {
-    console.log('🔍 [DEBUG] ApiService.getTenants() - Avvio richiesta');
-    console.log('🔍 [DEBUG] URL chiamata:', `${API_BASE_URL}/tenants`);
-    
-    try {
-      console.log('🔍 [DEBUG] Eseguo axios.get...');
-      const axiosResponse = await axios.get(`${API_BASE_URL}/tenants`);
-      console.log('✅ [DEBUG] Risposta axios ricevuta:', axiosResponse.status);
-      console.log('✅ [DEBUG] Dati risposta:', axiosResponse.data);
-      
-      console.log('🔍 [DEBUG] Chiamo handleRequest...');
-      const response = await this.handleRequest<{ tenants: Tenant[] }>(
-        Promise.resolve(axiosResponse)
-      );
-      console.log('✅ [DEBUG] HandleRequest completato:', response);
-      console.log('✅ [DEBUG] Restituisco tenant:', response.tenants.length, 'elementi');
-      return response.tenants;
-      
-    } catch (error) {
-      console.error('❌ [DEBUG] Errore in getTenants():', error);
-      console.error('❌ [DEBUG] Tipo errore:', typeof error);
-      console.error('❌ [DEBUG] Stack:', error instanceof Error ? error.stack : 'No stack');
-      throw error;
-    }
+    const response = await this.handleRequest<{ tenants: Tenant[] }>(
+      axios.get(`${API_BASE_URL}/tenants`)
+    );
+    return response.tenants;
   }
 
   async getLabelStatistics(tenant: string): Promise<any> {
@@ -293,36 +274,16 @@ class ApiService {
     }>;
     missingCount: number;
   }> {
-    console.log('🔍 [DEBUG] ApiService.checkPromptStatus() - Avvio richiesta');
-    console.log('🔍 [DEBUG] Tenant:', tenant);
-    console.log('🔍 [DEBUG] URL chiamata:', `${API_BASE_URL}/prompts/${tenant}/status`);
-    
-    try {
-      console.log('🔍 [DEBUG] Eseguo axios.get per prompt status...');
-      const axiosResponse = await axios.get(`${API_BASE_URL}/prompts/${tenant}/status`);
-      console.log('✅ [DEBUG] Risposta axios per prompt status:', axiosResponse.status);
-      console.log('✅ [DEBUG] Dati prompt status:', axiosResponse.data);
-      
-      console.log('🔍 [DEBUG] Chiamo handleRequest per prompt status...');
-      const result = await this.handleRequest<{
-        canOperate: boolean;
-        requiredPrompts: Array<{
-          name: string;
-          type: string;
-          description: string;
-          exists: boolean;
-        }>;
-        missingCount: number;
-      }>(Promise.resolve(axiosResponse));
-      console.log('✅ [DEBUG] HandleRequest per prompt status completato:', result);
-      return result;
-      
-    } catch (error) {
-      console.error('❌ [DEBUG] Errore in checkPromptStatus():', error);
-      console.error('❌ [DEBUG] Tipo errore:', typeof error);
-      console.error('❌ [DEBUG] Stack:', error instanceof Error ? error.stack : 'No stack');
-      throw error;
-    }
+    return await this.handleRequest<{
+      canOperate: boolean;
+      requiredPrompts: Array<{
+        name: string;
+        type: string;
+        description: string;
+        exists: boolean;
+      }>;
+      missingCount: number;
+    }>(axios.get(`${API_BASE_URL}/prompts/${tenant}/status`));
   }
 
   async createPromptFromTemplate(
@@ -994,12 +955,8 @@ class ApiService {
     total_versions: number;
     error?: string;
   }> {
-    console.log('🔍 [DEBUG] ApiService.getClusteringHistory() - tenantId:', tenantId, 'limit:', limit);
-    const url = `${API_BASE_URL}/clustering/${tenantId}/history`;
-    console.log('🔍 [DEBUG] URL chiamata:', url);
-    
     return this.handleRequest(
-      axios.get(url, {
+      axios.get(`${API_BASE_URL}/clustering/${tenantId}/history`, {
         params: { limit }
       })
     );
@@ -1028,12 +985,8 @@ class ApiService {
     };
     error?: string;
   }> {
-    console.log('🔍 [DEBUG] ApiService.getClusteringVersion() - tenantId:', tenantId, 'version:', versionNumber);
-    const url = `${API_BASE_URL}/clustering/${tenantId}/version/${versionNumber}`;
-    console.log('🔍 [DEBUG] URL chiamata:', url);
-    
     return this.handleRequest(
-      axios.get(url)
+      axios.get(`${API_BASE_URL}/clustering/${tenantId}/version/${versionNumber}`)
     );
   }
 
@@ -1074,33 +1027,36 @@ class ApiService {
    */
   async compareClusteringVersions(tenantId: string, version1: number, version2: number): Promise<{
     success: boolean;
-    data: {
-      version1: any;
-      version2: any;
-      comparison: {
-        metrics_delta: {
-          n_clusters: number;
-          n_outliers: number;
-          silhouette_score: number;
-          execution_time: number;
-        };
-        parameters_diff: Array<{
-          parameter: string;
-          value1: any;
-          value2: any;
-          changed: boolean;
-        }>;
-        quality_assessment: string;
+    tenant_id: string;
+    version1: {
+      number: number;
+      data: any;
+      parameters: any;
+      metadata: {
+        created_at: string;
+        execution_time: number;
       };
+    };
+    version2: {
+      number: number;
+      data: any;
+      parameters: any;
+      metadata: {
+        created_at: string;
+        execution_time: number;
+      };
+    };
+    comparison_metrics: {
+      clusters_diff: number;
+      outliers_diff: number;
+      ratio_diff: number;
+      silhouette_diff: number;
+      execution_time_diff: number;
     };
     error?: string;
   }> {
-    console.log('🔍 [DEBUG] ApiService.compareClusteringVersions() - tenantId:', tenantId, 'version1:', version1, 'version2:', version2);
-    const url = `${API_BASE_URL}/clustering/${tenantId}/compare/${version1}/${version2}`;
-    console.log('🔍 [DEBUG] URL chiamata:', url);
-    
     return this.handleRequest(
-      axios.get(url)
+      axios.get(`${API_BASE_URL}/clustering/${tenantId}/compare/${version1}/${version2}`)
     );
   }
 

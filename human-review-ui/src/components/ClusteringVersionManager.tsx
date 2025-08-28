@@ -159,26 +159,21 @@ const ClusteringVersionManager: React.FC = () => {
    * Carica la cronologia dei risultati clustering
    */
   const loadHistory = useCallback(async () => {
-    console.log('🔍 [DEBUG] ClusteringVersionManager.loadHistory() - selectedTenant:', selectedTenant);
     if (!selectedTenant?.tenant_id) {
-      console.log('🚫 [DEBUG] Nessun tenant_id disponibile');
       return;
     }
 
-    console.log('🔍 [DEBUG] Caricamento cronologia per tenant_id:', selectedTenant.tenant_id);
     setLoading(true);
     setError(null);
 
     try {
       const response = await apiService.getClusteringHistory(selectedTenant.tenant_id, 100);
-      console.log('✅ [DEBUG] Risposta getClusteringHistory:', response);
       if (response.success && response.data) {
         setHistory(response.data);
         
         // Seleziona automaticamente la versione più recente se non ne è selezionata una
         if (response.data.length > 0 && !selectedVersionId) {
           setSelectedVersionId(response.data[0].version_number);  // Usa version_number invece di id
-          console.log('🔍 [DEBUG] Auto-selezione versione più recente:', response.data[0].version_number);
         }
       } else {
         setError(response.error || 'Errore caricamento cronologia clustering');
@@ -200,11 +195,9 @@ const ClusteringVersionManager: React.FC = () => {
     setError(null);
 
     try {
-      console.log('🔍 [DEBUG] Caricamento dettagli versione:', versionNumber, 'per tenant:', selectedTenant.tenant_id);
       const response = await apiService.getClusteringVersion(selectedTenant.tenant_id, versionNumber);
       if (response.success && response.data) {
         setSelectedVersionDetail(response.data);
-        console.log('✅ [DEBUG] Dettagli versione caricati:', response.data);
       } else {
         setError(response.error || 'Errore caricamento dettagli versione');
       }
@@ -225,19 +218,60 @@ const ClusteringVersionManager: React.FC = () => {
     setError(null);
 
     try {
-      console.log('🔍 [DEBUG] Avvio confronto versioni:', compareVersion1, 'vs', compareVersion2, 'per tenant:', selectedTenant?.tenant_id);
       const response = await apiService.compareClusteringVersions(
         selectedTenant?.tenant_id || '', 
         compareVersion1, 
         compareVersion2
       );
-      if (response.success && response.data) {
-        setComparison(response.data);
+      
+      if (response.success) {
+        // Mappiamo la risposta del backend alla struttura attesa dal componente
+        const comparisonData: ClusteringComparison = {
+          version1: {
+            id: response.version1.number,
+            version_number: response.version1.number,
+            tenant_id: response.tenant_id,
+            created_at: response.version1.metadata.created_at,
+            results_data: response.version1.data,
+            parameters_data: response.version1.parameters,
+            n_clusters: response.version1.data.statistics?.n_clusters || 0,
+            n_outliers: response.version1.data.statistics?.n_outliers || 0,
+            silhouette_score: response.version1.data.quality_metrics?.silhouette_score || 0,
+            execution_time: response.version1.metadata.execution_time
+          },
+          version2: {
+            id: response.version2.number,
+            version_number: response.version2.number,
+            tenant_id: response.tenant_id,
+            created_at: response.version2.metadata.created_at,
+            results_data: response.version2.data,
+            parameters_data: response.version2.parameters,
+            n_clusters: response.version2.data.statistics?.n_clusters || 0,
+            n_outliers: response.version2.data.statistics?.n_outliers || 0,
+            silhouette_score: response.version2.data.quality_metrics?.silhouette_score || 0,
+            execution_time: response.version2.metadata.execution_time
+          },
+          comparison: {
+            metrics_delta: {
+              n_clusters: response.comparison_metrics.clusters_diff,
+              n_outliers: response.comparison_metrics.outliers_diff,
+              silhouette_score: response.comparison_metrics.silhouette_diff,
+              execution_time: response.comparison_metrics.execution_time_diff
+            },
+            parameters_diff: [], // TODO: Implementare se necessario
+            quality_assessment: response.comparison_metrics.silhouette_diff > 0 
+              ? "✅ Miglioramento qualità clustering" 
+              : response.comparison_metrics.silhouette_diff < 0 
+              ? "⚠️ Peggioramento qualità clustering"
+              : "➡️ Qualità clustering stabile"
+          }
+        };
+        setComparison(comparisonData);
       } else {
         setError(response.error || 'Errore confronto versioni');
       }
     } catch (err: any) {
-      console.error('❌ [ERROR] Errore confronto versioni:', err);
+      console.error('❌ Errore confronto versioni:', err);
       setError(`Errore: ${err.message}`);
     } finally {
       setCompareLoading(false);
@@ -294,21 +328,21 @@ const ClusteringVersionManager: React.FC = () => {
   // Effect per caricare la cronologia quando cambia il tenant
   useEffect(() => {
     loadHistory();
-  }, [loadHistory]);
+  }, [selectedTenant]); // ✅ Dipende solo dal tenant
 
   // Effect per caricare i dettagli quando cambia la versione selezionata
   useEffect(() => {
     if (selectedVersionId) {
       loadVersionDetail(selectedVersionId);
     }
-  }, [selectedVersionId, loadVersionDetail]);
+  }, [selectedVersionId, selectedTenant]); // ✅ Dipende da versione e tenant
 
   // Effect per caricare il trend quando cambia tab o giorni
   useEffect(() => {
     if (activeTab === 2) {
       loadTrendData();
     }
-  }, [activeTab, loadTrendData]);
+  }, [activeTab, selectedTenant]); // ✅ Dipende da tab e tenant
 
   if (!selectedTenant) {
     return (

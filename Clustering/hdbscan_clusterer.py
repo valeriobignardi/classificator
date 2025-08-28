@@ -205,17 +205,19 @@ class HDBSCANClusterer:
             print("📝 Uso parametri predefiniti")
             return {}
     
-    def _apply_umap_reduction(self, embeddings: np.ndarray) -> Tuple[np.ndarray, Dict]:
+    def _apply_umap_reduction(self, embeddings: np.ndarray, fit_new: bool = True) -> Tuple[np.ndarray, Dict]:
         """
         Applica riduzione dimensionale con UMAP prima del clustering HDBSCAN
         
         Args:
             embeddings: Array di embeddings originali (n_samples, orig_dim)
+            fit_new: Se True, fit nuovo reducer. Se False, usa reducer esistente (per predizioni incrementali)
             
         Returns:
             Tuple[embeddings ridotti (n_samples, umap_n_components), info UMAP]
             
         Data creazione: 27 Agosto 2025
+        Ultimo aggiornamento: 28 Agosto 2025 - Aggiunto supporto predizioni incrementali
         """
         print(f"🔍 [DEBUG UMAP] Controllo condizioni applicazione UMAP...")
         print(f"   ✅ self.use_umap = {self.use_umap}")
@@ -256,21 +258,38 @@ class HDBSCANClusterer:
         try:
             print(f"🔧 [DEBUG UMAP] Inizializzazione riduttore UMAP...")
             
-            # Inizializza UMAP
-            reducer = umap.UMAP(
-                n_neighbors=self.umap_n_neighbors,
-                min_dist=self.umap_min_dist,
-                n_components=self.umap_n_components,
-                metric=self.umap_metric,
-                random_state=self.umap_random_state,
-                verbose=True
-            )
-            
-            print(f"✅ [DEBUG UMAP] Riduttore UMAP inizializzato con successo")
-            print(f"⏳ [DEBUG UMAP] Applicazione fit_transform agli embeddings...")
-            
-            # Applica riduzione dimensionale
-            embeddings_reduced = reducer.fit_transform(embeddings)
+            if fit_new:
+                # TRAINING: Inizializza e salva nuovo reducer
+                print(f"🆕 [DEBUG UMAP] Modalità TRAINING - fit nuovo reducer")
+                
+                # Inizializza UMAP
+                self.umap_reducer = umap.UMAP(
+                    n_neighbors=self.umap_n_neighbors,
+                    min_dist=self.umap_min_dist,
+                    n_components=self.umap_n_components,
+                    metric=self.umap_metric,
+                    random_state=self.umap_random_state,
+                    verbose=True
+                )
+                
+                print(f"✅ [DEBUG UMAP] Riduttore UMAP inizializzato con successo")
+                print(f"⏳ [DEBUG UMAP] Applicazione fit_transform agli embeddings...")
+                
+                # Applica riduzione dimensionale
+                embeddings_reduced = self.umap_reducer.fit_transform(embeddings)
+                
+            else:
+                # PREDIZIONE: Usa reducer esistente
+                print(f"🔮 [DEBUG UMAP] Modalità PREDIZIONE - usa reducer esistente")
+                
+                if not hasattr(self, 'umap_reducer') or self.umap_reducer is None:
+                    print(f"❌ [DEBUG UMAP] ERRORE: Nessun reducer UMAP disponibile per predizione!")
+                    return embeddings, {'applied': False, 'reason': 'No UMAP reducer available for prediction'}
+                
+                print(f"⏳ [DEBUG UMAP] Applicazione transform agli embeddings...")
+                
+                # Applica riduzione con reducer esistente
+                embeddings_reduced = self.umap_reducer.transform(embeddings)
             
             reduction_time = time.time() - start_time
             
@@ -446,6 +465,9 @@ class HDBSCANClusterer:
         # Salva risultati
         self.cluster_labels = cluster_labels
         
+        # 🆕 Salva forma embeddings per compatibilità predizioni future
+        self.last_embeddings_shape = embeddings.shape
+        
         # Statistiche clustering
         n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
         n_outliers = list(cluster_labels).count(-1)
@@ -607,7 +629,8 @@ class HDBSCANClusterer:
             allow_single_cluster=self.allow_single_cluster,
             alpha=self.alpha,  # Controllo noise - NUOVO
             max_cluster_size=self.max_cluster_size if (self.max_cluster_size and self.max_cluster_size > 0) else None,  # CORRETTO
-            leaf_size=self.leaf_size  # NUOVO
+            leaf_size=self.leaf_size,  # NUOVO
+            prediction_data=True  # 🆕 ABILITATO per predizioni incrementali
         )
         
         cluster_labels = self.clusterer.fit_predict(embeddings_norm)
@@ -619,6 +642,244 @@ class HDBSCANClusterer:
         
         return cluster_labels
     
+    def predict_new_points(self, new_embeddings: np.ndarray, fit_umap: bool = False) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Scopo: Predice cluster per nuovi punti usando modello HDBSCAN esistente
+        
+        Parametri input:
+            - new_embeddings: Nuovi embeddings da classificare (n_samples, n_features)
+            - fit_umap: Se True, applica UMAP ai nuovi embeddings (deve essere False per predizione incrementale)
+            
+        Output:
+            - Tuple (labels, strengths): etichette cluster predette e confidenze
+            
+        Ultimo aggiornamento: 2025-08-28
+        """
+        if self.clusterer is None:
+            raise ValueError("Nessun modello HDBSCAN trained disponibile. Eseguire prima fit_predict().")
+        
+        if not hasattr(self.clusterer, 'prediction_data_'):
+            raise ValueError("Modello HDBSCAN non ha prediction_data. Abilitare prediction_data=True durante il training.")
+        
+        print(f"🎯 PREDIZIONE INCREMENTALE - {len(new_embeddings)} nuovi punti...")
+        print(f"   📏 Shape embeddings: {new_embeddings.shape}")
+        print(f"   📊 Range embeddings: [{new_embeddings.min():.4f}, {new_embeddings.max():.4f}]")
+        
+        try:
+            # STEP 1: Applica UMAP se necessario (con reducer esistente)
+            embeddings_for_prediction = new_embeddings
+            if self.use_umap and hasattr(self, 'umap_reducer') and self.umap_reducer is not None:
+                if fit_umap:
+                    # ATTENZIONE: questo dovrebbe essere usato solo in casi speciali
+                    print(f"⚠️ ATTENZIONE: fit_umap=True può causare inconsistenze!")
+                    embeddings_for_prediction, _ = self._apply_umap_reduction(new_embeddings, fit_new=True)
+                else:
+                    # Usa reducer esistente (modalità corretta per predizione incrementale)
+                    print(f"🗂️ Applicazione UMAP con reducer esistente...")
+                    embeddings_for_prediction = self.umap_reducer.transform(new_embeddings)
+                    print(f"   📏 Shape post-UMAP: {embeddings_for_prediction.shape}")
+            
+            # STEP 2: Normalizzazione coerente con training
+            embeddings_norm = embeddings_for_prediction
+            metric_for_prediction = self.metric
+            
+            if self.metric == 'cosine':
+                # Normalizza per metrica cosine (come nel training)
+                embeddings_norm = embeddings_for_prediction / np.linalg.norm(embeddings_for_prediction, axis=1, keepdims=True)
+                metric_for_prediction = 'euclidean'
+                print(f"   🎯 Normalizzazione cosine applicata")
+            
+            # STEP 3: Predizione usando HDBSCAN approximate_predict
+            print(f"🔮 Avvio predizione incrementale...")
+            
+            # Import della funzione prediction da hdbscan
+            import hdbscan.prediction
+            
+            # Usa approximate_predict per assegnare nuovi punti ai cluster esistenti
+            predicted_labels, prediction_strengths = hdbscan.prediction.approximate_predict(
+                self.clusterer, embeddings_norm
+            )
+            
+            print(f"✅ Predizione completata!")
+            print(f"   🎯 Labels predette: {len(set(predicted_labels))} cluster unici")
+            print(f"   📊 Outlier: {sum(1 for l in predicted_labels if l == -1)} punti")
+            print(f"   💪 Strength media: {prediction_strengths.mean():.3f}")
+            
+            return predicted_labels, prediction_strengths
+            
+        except Exception as e:
+            error_msg = f"Errore durante predizione incrementale: {str(e)}"
+            print(f"❌ {error_msg}")
+            raise RuntimeError(error_msg)
+    
+    def save_model_for_incremental_prediction(self, model_path: str, tenant_id: str) -> bool:
+        """
+        Scopo: Salva modello HDBSCAN trained per riuso futuro nelle predizioni incrementali
+        
+        Parametri input:
+            - model_path: Percorso dove salvare il modello
+            - tenant_id: ID del tenant per identificazione modello
+            
+        Output:
+            - True se salvato con successo, False altrimenti
+            
+        Ultimo aggiornamento: 2025-08-28
+        """
+        try:
+            import pickle
+            from datetime import datetime
+            import os
+            
+            if self.clusterer is None:
+                print("❌ Nessun modello da salvare")
+                return False
+            
+            # Crea directory se non esistente
+            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+            
+            # Dati del modello da salvare
+            model_data = {
+                'clusterer': self.clusterer,  # HDBSCAN con prediction_data
+                'umap_reducer': getattr(self, 'umap_reducer', None),  # Reducer UMAP se disponibile
+                'parameters': {
+                    'hdbscan': {
+                        'min_cluster_size': self.min_cluster_size,
+                        'min_samples': self.min_samples,
+                        'metric': self.metric,
+                        'cluster_selection_method': self.cluster_selection_method,
+                        'alpha': self.alpha,
+                        'cluster_selection_epsilon': self.cluster_selection_epsilon,
+                        'allow_single_cluster': self.allow_single_cluster,
+                        'max_cluster_size': self.max_cluster_size
+                    },
+                    'umap': {
+                        'use_umap': self.use_umap,
+                        'n_neighbors': self.umap_n_neighbors,
+                        'min_dist': self.umap_min_dist,
+                        'n_components': self.umap_n_components,
+                        'metric': self.umap_metric,
+                        'random_state': self.umap_random_state
+                    } if self.use_umap else None
+                },
+                'embeddings_shape': getattr(self, 'last_embeddings_shape', None),
+                'tenant_id': tenant_id,
+                'timestamp': datetime.now().isoformat(),
+                'gpu_used': getattr(self, 'gpu_used', False)
+            }
+            
+            # Salva con pickle
+            with open(model_path, 'wb') as f:
+                pickle.dump(model_data, f)
+            
+            print(f"✅ Modello HDBSCAN salvato: {model_path}")
+            print(f"   🏷️ Tenant: {tenant_id}")
+            print(f"   📅 Timestamp: {model_data['timestamp']}")
+            print(f"   🗂️ UMAP incluso: {self.use_umap}")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Errore salvataggio modello: {str(e)}")
+            return False
+    
+    def load_model_for_incremental_prediction(self, model_path: str) -> bool:
+        """
+        Scopo: Carica modello HDBSCAN esistente per predizioni incrementali
+        
+        Parametri input:
+            - model_path: Percorso del modello salvato
+            
+        Output:
+            - True se caricato con successo, False altrimenti
+            
+        Ultimo aggiornamento: 2025-08-28
+        """
+        try:
+            import pickle
+            import os
+            
+            if not os.path.exists(model_path):
+                print(f"❌ File modello non trovato: {model_path}")
+                return False
+            
+            # Carica modello
+            with open(model_path, 'rb') as f:
+                model_data = pickle.load(f)
+            
+            # Ripristina clusterer
+            self.clusterer = model_data['clusterer']
+            
+            # Ripristina reducer UMAP se disponibile
+            if model_data.get('umap_reducer'):
+                self.umap_reducer = model_data['umap_reducer']
+            
+            # Verifica compatibilità parametri
+            saved_params = model_data['parameters']
+            if not self._verify_parameter_compatibility(saved_params):
+                print("⚠️ Parametri non compatibili, necessario retraining")
+                return False
+            
+            print(f"✅ Modello HDBSCAN caricato: {model_path}")
+            print(f"   🏷️ Tenant: {model_data.get('tenant_id', 'Unknown')}")
+            print(f"   📅 Salvato: {model_data.get('timestamp', 'Unknown')}")
+            print(f"   🗂️ UMAP: {bool(model_data.get('umap_reducer'))}")
+            print(f"   🎯 GPU utilizzato: {model_data.get('gpu_used', False)}")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Errore caricamento modello: {str(e)}")
+            return False
+    
+    def _verify_parameter_compatibility(self, saved_params: Dict) -> bool:
+        """
+        Scopo: Verifica se parametri attuali sono compatibili con modello salvato
+        
+        Parametri input:
+            - saved_params: Parametri salvati nel modello
+            
+        Output:
+            - True se compatibili, False se necessario retraining
+            
+        Ultimo aggiornamento: 2025-08-28
+        """
+        try:
+            # Parametri HDBSCAN critici che richiedono retraining se cambiati
+            critical_hdbscan_params = [
+                'min_cluster_size', 'min_samples', 'metric', 
+                'cluster_selection_method', 'alpha', 'cluster_selection_epsilon'
+            ]
+            
+            saved_hdbscan = saved_params.get('hdbscan', {})
+            
+            for param in critical_hdbscan_params:
+                current_value = getattr(self, param, None)
+                saved_value = saved_hdbscan.get(param, None)
+                
+                if current_value != saved_value:
+                    print(f"⚠️ Parametro HDBSCAN '{param}' cambiato: {saved_value} → {current_value}")
+                    return False
+            
+            # Verifica parametri UMAP se utilizzato
+            if self.use_umap and saved_params.get('umap'):
+                critical_umap_params = ['n_neighbors', 'min_dist', 'n_components', 'metric']
+                saved_umap = saved_params['umap']
+                
+                for param in critical_umap_params:
+                    current_value = getattr(self, f'umap_{param}', None)
+                    saved_value = saved_umap.get(param, None)
+                    
+                    if current_value != saved_value:
+                        print(f"⚠️ Parametro UMAP '{param}' cambiato: {saved_value} → {current_value}")
+                        return False
+            
+            print("✅ Parametri compatibili con modello salvato")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Errore verifica compatibilità: {str(e)}")
+            return False
+
     def _calculate_silhouette_score(self, embeddings: np.ndarray) -> float:
         """Calcola il silhouette score per valutare la qualità del clustering"""
         try:

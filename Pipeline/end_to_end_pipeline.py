@@ -684,7 +684,40 @@ class EndToEndPipeline:
             print(f"   🔍 Traceback: {traceback.format_exc()}")
             return None
 
-    def esegui_clustering(self, sessioni: Dict[str, Dict]) -> tuple:
+    def esegui_clustering(self, sessioni: Dict[str, Dict], force_reprocess: bool = False) -> tuple:
+        """
+        Esegue il clustering delle sessioni con approccio intelligente multi-livello:
+        
+        NUOVO: Supporta clustering incrementale vs completo
+        - force_reprocess=False: Usa clustering incrementale se modello disponibile
+        - force_reprocess=True: Clustering completo da zero
+        
+        1. BERTopic training anticipato su dataset completo (NUOVO)
+        2. LLM per comprensione linguaggio naturale (primario)
+        3. Pattern regex per fallback veloce (secondario)  
+        4. Validazione umana per casi ambigui (terziario)
+        
+        Args:
+            sessioni: Dizionario con le sessioni
+            force_reprocess: Se True, forza clustering completo
+            
+        Returns:
+            Tuple (embeddings, cluster_labels, representatives, suggested_labels)
+        """
+        print(f"🧩 CLUSTERING INTELLIGENTE - {len(sessioni)} sessioni (force_reprocess={force_reprocess})...")
+        
+        # Assicurati che la directory dei modelli esista
+        import os
+        os.makedirs("models", exist_ok=True)
+        
+        if force_reprocess:
+            print(f"🔄 MODALITÀ CLUSTERING COMPLETO (force_reprocess=True)")
+            return self._esegui_clustering_completo(sessioni)
+        else:
+            print(f"🎯 MODALITÀ CLUSTERING INTELLIGENTE (incrementale se possibile)")
+            return self._esegui_clustering_incrementale(sessioni)
+    
+    def _esegui_clustering_completo(self, sessioni: Dict[str, Dict]) -> tuple:
         """
         Esegue il clustering delle sessioni con approccio intelligente multi-livello:
         1. BERTopic training anticipato su dataset completo (NUOVO)
@@ -953,6 +986,15 @@ class EndToEndPipeline:
             print("⚠️ Sistema visualizzazione non disponibile - installare plotly")
         except Exception as e:
             print(f"⚠️ Errore nella visualizzazione cluster: {e}")
+        
+        # 🆕 SALVA MODELLO PER PREDIZIONI FUTURE
+        model_path = f"models/hdbscan_{self.tenant_id}.pkl"
+        if hasattr(self.clusterer, 'save_model_for_incremental_prediction'):
+            saved = self.clusterer.save_model_for_incremental_prediction(model_path, self.tenant_id)
+            if saved:
+                print(f"💾 Modello HDBSCAN salvato per predizioni incrementali: {model_path}")
+            else:
+                print(f"⚠️ Impossibile salvare modello HDBSCAN")
         
         return embeddings, cluster_labels, representatives, suggested_labels
     
@@ -3531,6 +3573,129 @@ class EndToEndPipeline:
                 'error': f'Errore info LLM: {str(e)}',
                 'tenant_slug': self.tenant_slug
             }
-        return stats
+    
+    def _esegui_clustering_incrementale(self, sessioni: Dict[str, Dict]) -> tuple:
+        """
+        Esegue clustering incrementale usando modello esistente se disponibile
+        
+        Args:
+            sessioni: Dizionario con le sessioni (solo nuove sessioni)
+            
+        Returns:
+            Tuple (embeddings, cluster_labels, representatives, suggested_labels)
+        """
+        print(f"🎯 CLUSTERING INCREMENTALE - {len(sessioni)} nuove sessioni...")
+        
+        # Controlla se esiste modello HDBSCAN salvato
+        model_path = f"models/hdbscan_{self.tenant_id}.pkl"
+        
+        if self._ha_modello_hdbscan_salvato(model_path):
+            print(f"📂 Modello HDBSCAN esistente trovato: {model_path}")
+            
+            # Carica modello esistente
+            if hasattr(self.clusterer, 'load_model_for_incremental_prediction'):
+                loaded = self.clusterer.load_model_for_incremental_prediction(model_path)
+                
+                if loaded:
+                    print(f"✅ Modello HDBSCAN caricato con successo")
+                    
+                    # Controlla se vale la pena usare predizione incrementale
+                    if self._dovrebbe_usare_clustering_incrementale(len(sessioni)):
+                        try:
+                            # Genera embeddings solo per nuove sessioni
+                            print(f"🔍 Encoding {len(sessioni)} nuovi testi...")
+                            testi = [dati['testo_completo'] for dati in sessioni.values()]
+                            session_ids = list(sessioni.keys())
+                            
+                            embeddings = self._get_embedder().encode(testi, show_progress_bar=True, session_ids=session_ids)
+                            print(f"✅ Nuovi embedding generati: shape {embeddings.shape}")
+                            
+                            # Predizione incrementale
+                            print(f"🔮 Predizione incrementale sui nuovi punti...")
+                            new_labels, prediction_strengths = self.clusterer.predict_new_points(
+                                embeddings, fit_umap=False
+                            )
+                            
+                            # Genera rappresentanti e etichette per i nuovi cluster
+                            representatives = self._generate_cluster_representatives(embeddings, new_labels, sessioni)
+                            suggested_labels = self._generate_suggested_labels(representatives, new_labels)
+                            
+                            print(f"✅ CLUSTERING INCREMENTALE COMPLETATO")
+                            print(f"   🎯 Nuovi punti assegnati a cluster esistenti")
+                            print(f"   💪 Strength predizione media: {prediction_strengths.mean():.3f}")
+                            
+                            return embeddings, new_labels, representatives, suggested_labels
+                            
+                        except Exception as e:
+                            print(f"❌ Errore durante predizione incrementale: {str(e)}")
+                            print(f"🔄 Fallback a clustering completo...")
+                    else:
+                        print(f"🔄 Troppi nuovi punti, fallback a clustering completo...")
+                else:
+                    print(f"❌ Impossibile caricare modello, fallback a clustering completo...")
+        else:
+            print(f"📂 Nessun modello HDBSCAN esistente trovato")
+        
+        # Fallback: clustering completo
+        print(f"🔄 Esecuzione clustering completo come fallback...")
+        return self._esegui_clustering_completo(sessioni)
+    
+    def _ha_modello_hdbscan_salvato(self, model_path: str) -> bool:
+        """
+        Controlla se esiste un modello HDBSCAN salvato
+        """
+        import os
+        return os.path.exists(model_path)
+    
+    def _dovrebbe_usare_clustering_incrementale(self, nuove_sessioni: int) -> bool:
+        """
+        Decide se usare clustering incrementale o completo
+        
+        Criteri:
+        - Troppe nuove sessioni (>20% rispetto al training) → completo
+        - Modello troppo vecchio (>7 giorni) → completo
+        - Altrimenti → incrementale
+        """
+        import os
+        from datetime import datetime, timedelta
+        
+        # Controllo numero sessioni (se troppe → clustering completo)
+        MAX_RATIO_INCREMENTALE = 0.2  # 20% massimo nuove sessioni
+        
+        # Stima sessioni totali dal modello (se disponibile)
+        model_path = f"models/hdbscan_{self.tenant_id}.pkl"
+        try:
+            if os.path.exists(model_path):
+                import pickle
+                with open(model_path, 'rb') as f:
+                    model_data = pickle.load(f)
+                
+                # Controlla età del modello
+                timestamp_str = model_data.get('timestamp')
+                if timestamp_str:
+                    model_timestamp = datetime.fromisoformat(timestamp_str)
+                    age_days = (datetime.now() - model_timestamp).days
+                    
+                    if age_days > 7:  # Modello più vecchio di 7 giorni
+                        print(f"⏰ Modello troppo vecchio ({age_days} giorni), necessario retraining")
+                        return False
+                
+                # Stima dimensioni dataset originale
+                embeddings_shape = model_data.get('embeddings_shape')
+                if embeddings_shape:
+                    original_sessions = embeddings_shape[0]
+                    ratio = nuove_sessioni / max(original_sessions, 1)
+                    
+                    if ratio > MAX_RATIO_INCREMENTALE:
+                        print(f"📊 Troppe nuove sessioni ({ratio:.1%} del dataset), necessario retraining")
+                        return False
+                
+                print(f"✅ Clustering incrementale appropriato")
+                return True
+        
+        except Exception as e:
+            print(f"⚠️ Errore valutazione clustering incrementale: {str(e)}")
+        
+        return False
 
 

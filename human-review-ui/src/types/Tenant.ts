@@ -25,4 +25,5 @@ export interface TenantContextType {
   error: string | null;
   promptStatus: PromptStatus | null;
   refreshPromptStatus: () => Promise<void>;
+  refreshTenants: () => Promise<void>;
 }

@@ -106,15 +106,10 @@ const ClusteringStatisticsManager: React.FC = () => {
     setError(null);
 
     try {
-      console.log('📊 [STATISTICS] Caricamento statistiche per tenant:', selectedTenant.tenant_id);
-      console.log('📊 [STATISTICS] Time range:', timeRange);
-
       const response = await apiService.getClusteringStatistics(
         selectedTenant.tenant_id,
         timeRange || undefined
       );
-
-      console.log('✅ [STATISTICS] Risposta ricevuta:', response);
 
       if (response.success && response.visualization_data) {
         setStatisticsData(response);
@@ -286,21 +281,20 @@ const ClusteringStatisticsManager: React.FC = () => {
     </Paper>
   );
 
-  // Carica dati al mount e quando cambiano tenant/timeRange
+  // Carica dati al mount e quando cambia tenant
   useEffect(() => {
     if (selectedTenant?.tenant_id) {
-      // Imposta range default
+      // Imposta range default solo al primo caricamento
       updatePredefinedRange('last_30_days');
     }
   }, [selectedTenant?.tenant_id]);
 
+  // Carica statistiche quando cambia timeRange (ma non al primo mount)
   useEffect(() => {
-    if (timeRange !== null) {  // null significa "all_time"
-      loadStatistics();
-    } else if (predefinedRange === 'all_time') {
+    if (selectedTenant?.tenant_id && (timeRange !== null || predefinedRange === 'all_time')) {
       loadStatistics();
     }
-  }, [timeRange, loadStatistics, predefinedRange]);
+  }, [selectedTenant?.tenant_id, timeRange, predefinedRange, loadStatistics]);
 
   // Auto-clear success/error messages
   useEffect(() => {

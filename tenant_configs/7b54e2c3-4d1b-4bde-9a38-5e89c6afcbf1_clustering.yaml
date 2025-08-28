@@ -1,0 +1,20 @@
+clustering_parameters:
+  allow_single_cluster: false
+  alpha: 0.4
+  cluster_selection_epsilon: 0.13
+  cluster_selection_method: leaf
+  max_cluster_size: 0
+  metric: euclidean
+  min_cluster_size: 18
+  min_samples: 9
+  only_user: false
+  umap_metric: cosine
+  umap_min_dist: 0.1
+  umap_n_components: 50
+  umap_n_neighbors: 15
+  umap_random_state: 42
+  use_umap: true
+last_updated: '2025-08-27T20:24:45.690603'
+previous_config_backup: {}
+tenant_id: 7b54e2c3-4d1b-4bde-9a38-5e89c6afcbf1
+updated_by: web_interface

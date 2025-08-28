@@ -2245,6 +2245,42 @@ def get_tenants():
             'error': str(e)
         }), 500
 
+@app.route('/api/tenants/sync', methods=['POST'])
+def sync_tenants_from_remote():
+    """
+    Sincronizza tenant dal database remoto al database locale
+    Importa in locale MySQL i tenant che non sono già presenti
+    
+    Autore: Valerio Bignardi
+    Data creazione: 2025-08-27
+    Ultimo aggiornamento: 2025-08-27
+    """
+    try:
+        print("🔄 [API] Richiesta sincronizzazione tenant dal remoto")
+        
+        # Usa MongoClassificationReader per la sincronizzazione
+        mongo_reader = MongoClassificationReader()
+        result = mongo_reader.sync_tenants_from_remote()
+        
+        if result['success']:
+            print(f"✅ [API] Sincronizzazione completata: {result['imported_count']} tenant importati")
+            return jsonify(result), 200
+        else:
+            print(f"❌ [API] Sincronizzazione fallita: {result['error']}")
+            return jsonify(result), 500
+            
+    except Exception as e:
+        print(f"💥 [API] Errore endpoint sync tenant: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'imported_count': 0,
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
 @app.route('/api/stats/tenants', methods=['GET'])
 def get_available_tenants():
     """

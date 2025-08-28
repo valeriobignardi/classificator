@@ -115,22 +115,23 @@ const ClusteringTestResults: React.FC<ClusteringTestResultsProps> = ({
   result,
   isLoading
 }) => {
-  console.log('🔍 [CLUSTERING DIALOG] Props ricevute:', { open, result, isLoading });
-  console.log('🔍 [CLUSTERING DIALOG] Result details:', result ? JSON.stringify(result, null, 2) : 'NULL');
-  
   const [activeTab, setActiveTab] = React.useState(0);
   
-  if (!result) {
-    console.log('❌ [CLUSTERING DIALOG] Result è null, non mostro nulla');
+  // Hook sempre chiamati in modo consistente
+  React.useEffect(() => {
+    if (open && result) {
+      console.log('🔍 [CLUSTERING DIALOG] Dialog opened with result');
+    }
+  }, [open, result]);
+  
+  // Early return DOPO tutti gli hook
+  if (!open || !result) {
     return null;
   }
 
   const renderSuccessResult = () => {
-    console.log('🔍 [CLUSTERING DIALOG] renderSuccessResult chiamato');
-    console.log('🔍 [CLUSTERING DIALOG] result.statistics:', result.statistics);
-    
+    // Verifica se abbiamo le statistiche
     if (!result.statistics) {
-      console.log('❌ [CLUSTERING DIALOG] result.statistics è undefined/null');
       return <Alert severity="warning">Nessuna statistica disponibile</Alert>;
     }
 
@@ -237,8 +238,6 @@ const ClusteringTestResults: React.FC<ClusteringTestResultsProps> = ({
       </Box>
     );
   };
-
-  console.log('🔍 [CLUSTERING DIALOG] Rendering dialog, open:', open);
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>

@@ -922,6 +922,54 @@ class ApiService {
     }
   }
 
+  /**
+   * Sincronizza tenant dal database remoto al database locale
+   * Importa in locale MySQL i tenant che non sono già presenti
+   * 
+   * @returns Risultato della sincronizzazione con statistiche
+   * 
+   * Autore: Valerio Bignardi
+   * Data: 2025-08-27
+   * Descrizione: Sincronizzazione automatica tenant remoti in locale
+   */
+  async syncTenants(): Promise<{
+    success: boolean;
+    imported_count: number;
+    total_remote: number;
+    total_local_before: number;
+    total_local_after: number;
+    errors: string[];
+    timestamp: string;
+    error?: string;
+  }> {
+    console.log('🔄 [DEBUG] ApiService.syncTenants() - Avvio sincronizzazione');
+    
+    try {
+      const response = await axios.post(`${API_BASE_URL}/tenants/sync`, {});
+      console.log('✅ [DEBUG] Sincronizzazione tenant completata:', response.data);
+      
+      return response.data;
+      
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore sincronizzazione tenant:', error);
+      
+      if (axios.isAxiosError(error)) {
+        const errorData = error.response?.data;
+        return {
+          success: false,
+          error: errorData?.error || error.message,
+          imported_count: 0,
+          total_remote: 0,
+          total_local_before: 0,
+          total_local_after: 0,
+          errors: [errorData?.error || error.message],
+          timestamp: new Date().toISOString()
+        };
+      }
+      throw error;
+    }
+  }
+
   // 🆕 CLUSTERING VERSIONING ENDPOINTS
 
   /**
@@ -1048,11 +1096,11 @@ class ApiService {
     error?: string;
   }> {
     console.log('🔍 [DEBUG] ApiService.compareClusteringVersions() - tenantId:', tenantId, 'version1:', version1, 'version2:', version2);
-    const url = `/clustering/${tenantId}/compare/${version1}/${version2}`;
+    const url = `${API_BASE_URL}/clustering/${tenantId}/compare/${version1}/${version2}`;
     console.log('🔍 [DEBUG] URL chiamata:', url);
     
     return this.handleRequest(
-      axios.get(`${API_BASE_URL}${url}`)
+      axios.get(url)
     );
   }
 

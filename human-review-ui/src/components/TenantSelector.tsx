@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Drawer,
   Typography,
@@ -11,13 +11,17 @@ import {
   MenuItem,
   SelectChangeEvent,
   IconButton,
-  Divider
+  Divider,
+  Button,
+  Snackbar
 } from '@mui/material';
 import {
   BusinessOutlined,
-  ChevronLeft
+  ChevronLeft,
+  Sync as SyncIcon
 } from '@mui/icons-material';
 import { useTenant } from '../contexts/TenantContext';
+import { apiService } from '../services/apiService';
 
 interface TenantSelectorProps {
   open: boolean;
@@ -30,7 +34,14 @@ const TenantSelector: React.FC<TenantSelectorProps> = ({
   onToggle,
   drawerWidth = 280
 }) => {
-  const { selectedTenant, availableTenants, setSelectedTenant, loading, error } = useTenant();
+  const { selectedTenant, availableTenants, setSelectedTenant, loading, error, refreshTenants } = useTenant();
+  
+  // Stati per sincronizzazione
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
 
   const handleSelectChange = (event: SelectChangeEvent<string>) => {
     const tenantId = event.target.value;
@@ -38,6 +49,61 @@ const TenantSelector: React.FC<TenantSelectorProps> = ({
     if (tenant) {
       setSelectedTenant(tenant);
     }
+  };
+
+  /**
+   * Gestisce la sincronizzazione dei tenant dal server remoto
+   * 
+   * Autore: Valerio Bignardi
+   * Data: 2025-08-27
+   * Descrizione: Sincronizza tenant remoti e aggiorna la lista locale
+   */
+  const handleSyncTenants = async () => {
+    setSyncing(true);
+    setSyncResult(null);
+    
+    try {
+      console.log('🔄 [SYNC] Avvio sincronizzazione tenant...');
+      
+      const result = await apiService.syncTenants();
+      
+      if (result.success) {
+        console.log('✅ [SYNC] Sincronizzazione completata:', result);
+        
+        setSyncResult({
+          type: 'success',
+          message: `✅ Sincronizzazione completata! ${result.imported_count} nuovi tenant importati.`
+        });
+        
+        // Aggiorna la lista dei tenant nel context
+        if (refreshTenants) {
+          await refreshTenants();
+        }
+        
+      } else {
+        console.error('❌ [SYNC] Sincronizzazione fallita:', result.error);
+        
+        setSyncResult({
+          type: 'error',
+          message: `❌ Errore sincronizzazione: ${result.error}`
+        });
+      }
+      
+    } catch (error) {
+      console.error('💥 [SYNC] Errore durante sincronizzazione:', error);
+      
+      setSyncResult({
+        type: 'error',
+        message: `💥 Errore durante sincronizzazione: ${error instanceof Error ? error.message : String(error)}`
+      });
+      
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleCloseSyncResult = () => {
+    setSyncResult(null);
   };
 
   return (
@@ -97,6 +163,34 @@ const TenantSelector: React.FC<TenantSelectorProps> = ({
             </Box>
           ) : (
             <>
+              {/* NUOVO: Pulsante sincronizzazione tenant */}
+              <Box sx={{ mb: 3 }}>
+                <Button
+                  variant="outlined"
+                  color="primary"
+                  fullWidth
+                  startIcon={syncing ? <CircularProgress size={16} /> : <SyncIcon />}
+                  onClick={handleSyncTenants}
+                  disabled={syncing}
+                  sx={{
+                    py: 1.5,
+                    borderRadius: 2,
+                    textTransform: 'none',
+                    fontWeight: 600,
+                    '&:hover': {
+                      backgroundColor: 'primary.lighter',
+                    },
+                  }}
+                >
+                  {syncing ? 'Sincronizzazione...' : '🔄 Sincronizza Nuovi Tenant'}
+                </Button>
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block', textAlign: 'center' }}>
+                  Importa tenant dal server remoto
+                </Typography>
+              </Box>
+
+              <Divider sx={{ mb: 2 }} />
+
               {/* Menu a tendina principale */}
               <Box sx={{ mb: 3 }}>
                 <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
@@ -228,6 +322,22 @@ const TenantSelector: React.FC<TenantSelectorProps> = ({
           </Typography>
         </Box>
       </Box>
+
+      {/* Snackbar per feedback sincronizzazione */}
+      <Snackbar
+        open={!!syncResult}
+        autoHideDuration={6000}
+        onClose={handleCloseSyncResult}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+      >
+        <Alert 
+          onClose={handleCloseSyncResult} 
+          severity={syncResult?.type} 
+          sx={{ width: '100%' }}
+        >
+          {syncResult?.message}
+        </Alert>
+      </Snackbar>
     </Drawer>
   );
 };

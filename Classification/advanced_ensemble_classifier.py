@@ -167,6 +167,9 @@ class AdvancedEnsembleClassifier:
             'ml_ensemble': 0.4  # Peso iniziale ML ensemble
         }
         
+        # Carica configurazione disaccordi da config.yaml
+        self.disagreement_config = self._load_disagreement_config()
+        
         # Tracking delle performance
         self.performance_history = []
         self.prediction_cache = {}
@@ -583,12 +586,16 @@ class AdvancedEnsembleClassifier:
     
     def _combine_predictions(self, llm_pred: Dict, ml_pred: Dict, text: str = "") -> Dict[str, Any]:
         """
-        Combina le predizioni LLM e ML usando voting intelligente con supervisione umana
+        Combina le predizioni LLM e ML usando strategia intelligente basata su:
+        1. Confidence < 0.7 → Tag "ALTRO"
+        2. Testo lungo (>500 char) → Favorisce LLM
+        3. Molti esempi training simili → Favorisce ML
+        4. Default → Favorisce LLM
         
         Args:
             llm_pred: Predizione LLM
             ml_pred: Predizione ML
-            text: Testo originale per supervisione umana
+            text: Testo originale per analisi caratteristiche
             
         Returns:
             Predizione combinata
@@ -598,58 +605,111 @@ class AdvancedEnsembleClassifier:
         ml_label = ml_pred['predicted_label']
         ml_conf = ml_pred['confidence']
         
-        # Calcola pesi adattivi basati su confidenza
-        llm_weight = self.weights['llm']
-        ml_weight = self.weights['ml_ensemble']
+        # STEP 1: Verifica confidence - se troppo bassa usa "ALTRO"
+        max_confidence = max(llm_conf, ml_conf)
         
-        # Bonus per alta confidenza
-        if llm_conf > 0.9:
-            llm_weight *= 1.2
-        if ml_conf > 0.9:
-            ml_weight *= 1.2
+        # Carica parametri da config.yaml
+        disagreement_config = getattr(self, 'disagreement_config', {
+            'low_confidence_threshold': 0.7,
+            'long_text_threshold': 500,
+            'min_training_examples_for_ml': 20,
+            'disagreement_penalty': 0.8,
+            'low_confidence_tag': 'ALTRO'
+        })
         
-        # Normalizza pesi
-        total_weight = llm_weight + ml_weight
-        llm_weight /= total_weight
-        ml_weight /= total_weight
+        if max_confidence < disagreement_config['low_confidence_threshold']:
+            # Confidence troppo bassa → Tag ALTRO
+            return {
+                'predicted_label': convert_numpy_types(disagreement_config['low_confidence_tag']),
+                'ensemble_confidence': convert_numpy_types(max_confidence * 0.6),  # Penalità maggiore
+                'agreement': False,
+                'human_intervention': False,
+                'combination_method': 'LOW_CONFIDENCE_ALTRO',
+                'llm_weight_used': 0.0,
+                'ml_weight_used': 0.0,
+                'decision_reason': f'Confidence massima {max_confidence:.2f} < soglia {disagreement_config["low_confidence_threshold"]}'
+            }
         
-        # Decisione finale
+        # STEP 2: Accordo → usa confidenza ponderata
         if llm_label == ml_label:
-            # Accordo - usa confidenza ponderata
-            final_label = llm_label
+            # Calcola pesi standard
+            llm_weight = self.weights['llm']
+            ml_weight = self.weights['ml_ensemble']
+            
+            # Bonus per alta confidenza
+            if llm_conf > 0.9:
+                llm_weight *= 1.2
+            if ml_conf > 0.9:
+                ml_weight *= 1.2
+            
+            # Normalizza pesi
+            total_weight = llm_weight + ml_weight
+            llm_weight /= total_weight
+            ml_weight /= total_weight
+            
             final_confidence = (llm_conf * llm_weight + ml_conf * ml_weight)
-            agreement = True
-            human_intervention = False
-            method = 'weighted_voting'
-        else:
-            # Disaccordo - usa weighted voting automatico
-            # I disaccordi saranno gestiti da QualityGateEngine per review asincrona
-            agreement = False
             
-            # Calcola pesi aggiustati per confidence
-            adjusted_llm_weight = llm_weight * llm_conf
-            adjusted_ml_weight = ml_weight * ml_conf
-            
-            if adjusted_llm_weight > adjusted_ml_weight:
-                final_label = llm_label
-                final_confidence = llm_conf * 0.8  # Penalizza per disaccordo
-                method = 'LLM_DISAGREEMENT'
-            else:
-                final_label = ml_label
-                final_confidence = ml_conf * 0.8  # Penalizza per disaccordo
-                method = 'ML_DISAGREEMENT'
-            
-            human_intervention = False
+            return {
+                'predicted_label': convert_numpy_types(llm_label),
+                'ensemble_confidence': convert_numpy_types(final_confidence),
+                'agreement': True,
+                'human_intervention': False,
+                'combination_method': 'AGREEMENT_WEIGHTED',
+                'llm_weight_used': convert_numpy_types(llm_weight),
+                'ml_weight_used': convert_numpy_types(ml_weight),
+                'decision_reason': 'LLM e ML concordano'
+            }
         
-        # Prepara risultato per debug
+        # STEP 3: Disaccordo → Strategia intelligente
+        agreement = False
+        
+        # Analizza caratteristiche del testo
+        text_length = len(text) if text else 0
+        is_long_text = text_length > disagreement_config['long_text_threshold']
+        
+        # Stima esempi training (simulazione - da sostituire con query reale al DB)
+        estimated_training_examples = self._estimate_training_examples(ml_label, llm_label)
+        has_many_ml_examples = estimated_training_examples >= disagreement_config['min_training_examples_for_ml']
+        
+        # LOGICA DI DECISIONE
+        decision_reason = ""
+        
+        if is_long_text:
+            # Testo lungo → Favorisce LLM
+            final_label = llm_label
+            final_confidence = llm_conf * disagreement_config['disagreement_penalty']
+            method = 'LLM_LONG_TEXT'
+            decision_reason = f'Testo lungo ({text_length} caratteri) → LLM preferito'
+            
+        elif has_many_ml_examples:
+            # Molti esempi training → Favorisce ML
+            final_label = ml_label
+            final_confidence = ml_conf * disagreement_config['disagreement_penalty']
+            method = 'ML_FREQUENT_PATTERN'
+            decision_reason = f'Molti esempi training ({estimated_training_examples}) → ML preferito'
+            
+        else:
+            # Default → Favorisce LLM
+            final_label = llm_label
+            final_confidence = llm_conf * disagreement_config['disagreement_penalty']
+            method = 'LLM_DEFAULT'
+            decision_reason = 'Default: LLM preferito per casi nuovi/complessi'
+        
+        # Prepara risultato
         voting_result = {
             'predicted_label': convert_numpy_types(final_label),
             'ensemble_confidence': convert_numpy_types(final_confidence),
             'agreement': agreement,
-            'human_intervention': human_intervention,
-            'llm_weight_used': convert_numpy_types(llm_weight),
-            'ml_weight_used': convert_numpy_types(ml_weight),
-            'combination_method': method
+            'human_intervention': False,
+            'combination_method': method,
+            'llm_weight_used': 1.0 if 'LLM' in method else 0.0,
+            'ml_weight_used': 1.0 if 'ML' in method else 0.0,
+            'decision_reason': decision_reason,
+            'text_analysis': {
+                'length': text_length,
+                'is_long_text': is_long_text,
+                'estimated_training_examples': estimated_training_examples
+            }
         }
         
         # DEBUG: Log processo di voting
@@ -658,8 +718,13 @@ class AdvancedEnsembleClassifier:
             voting_process = {
                 'agreement': agreement,
                 'combination_method': method,
-                'weights_used': {'llm': llm_weight, 'ml': ml_weight},
-                'confidence_adjustment': 0.8 if not agreement else 1.0
+                'decision_factors': {
+                    'text_length': text_length,
+                    'is_long_text': is_long_text,
+                    'training_examples': estimated_training_examples,
+                    'max_confidence': max_confidence
+                },
+                'confidence_adjustment': disagreement_config['disagreement_penalty']
             }
             self.ml_debugger.debug_ensemble_voting(
                 session_id=session_id,
@@ -667,10 +732,40 @@ class AdvancedEnsembleClassifier:
                 llm_pred=llm_pred,
                 voting_process=voting_process,
                 final_result=voting_result,
-                processing_time=0.001  # Voting è veloce
+                processing_time=0.001
             )
         
         return voting_result
+    
+    def _estimate_training_examples(self, ml_label: str, llm_label: str) -> int:
+        """
+        Stima il numero di esempi di training disponibili per le etichette in disaccordo
+        
+        Args:
+            ml_label: Etichetta predetta da ML
+            llm_label: Etichetta predetta da LLM
+            
+        Returns:
+            Stima del numero di esempi di training
+        """
+        # TODO: Implementare query reale al database per contare esempi training
+        # Per ora usiamo una simulazione basata su etichette comuni
+        
+        common_labels = ['assistenza_tecnica', 'supporto', 'informazioni_prodotto', 'vendite']
+        
+        # Simula esempi basati su frequenza etichette
+        if ml_label in common_labels:
+            ml_examples = 50  # Etichette comuni hanno molti esempi
+        else:
+            ml_examples = 10  # Etichette rare hanno pochi esempi
+            
+        if llm_label in common_labels:
+            llm_examples = 50
+        else:
+            llm_examples = 10
+        
+        # Ritorna la media (approssimazione ragionevole)
+        return (ml_examples + llm_examples) // 2
     
     def update_adaptive_weights(self, feedback_data: List[Dict]) -> None:
         """
@@ -1010,6 +1105,59 @@ class AdvancedEnsembleClassifier:
                 'error': f'Errore reload: {str(e)}',
                 'tenant_id': effective_tenant
             }
+    
+    def _load_disagreement_config(self) -> Dict[str, Any]:
+        """
+        Carica configurazione per risoluzione disaccordi da config.yaml
+        
+        Returns:
+            Configurazione disaccordi o valori di default
+        """
+        try:
+            import yaml
+            
+            config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
+            
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                    
+                # Estrai configurazione disaccordi
+                disagreement_config = config.get('ensemble_disagreement', {})
+                
+                return {
+                    'low_confidence_threshold': disagreement_config.get('low_confidence_threshold', 0.7),
+                    'long_text_threshold': disagreement_config.get('long_text_threshold', 500),
+                    'min_training_examples_for_ml': disagreement_config.get('min_training_examples_for_ml', 20),
+                    'disagreement_penalty': disagreement_config.get('disagreement_penalty', 0.8),
+                    'low_confidence_tag': disagreement_config.get('low_confidence_tag', 'ALTRO'),
+                    'strategy': disagreement_config.get('strategy', {
+                        'use_altro_for_low_confidence': True,
+                        'favor_llm_for_long_text': True,
+                        'favor_ml_for_frequent_patterns': True,
+                        'default_preference': 'llm'
+                    })
+                }
+            else:
+                print(f"⚠️ Config file non trovato: {config_path}, uso valori default")
+                
+        except Exception as e:
+            print(f"⚠️ Errore caricamento config disaccordi: {e}, uso valori default")
+        
+        # Valori di default
+        return {
+            'low_confidence_threshold': 0.7,
+            'long_text_threshold': 500,
+            'min_training_examples_for_ml': 20,
+            'disagreement_penalty': 0.8,
+            'low_confidence_tag': 'ALTRO',
+            'strategy': {
+                'use_altro_for_low_confidence': True,
+                'favor_llm_for_long_text': True,
+                'favor_ml_for_frequent_patterns': True,
+                'default_preference': 'llm'
+            }
+        }
     
     def get_current_llm_info(self) -> Dict[str, Any]:
         """

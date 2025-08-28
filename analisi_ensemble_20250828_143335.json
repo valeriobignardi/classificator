@@ -1,0 +1,67 @@
+{
+  "timestamp": "2025-08-28T14:33:35.121669",
+  "current_weights": {
+    "llm": 0.6,
+    "ml": 0.4
+  },
+  "optimal_weights": {
+    "llm": 0.5089820359281437,
+    "ml": 0.4910179640718563
+  },
+  "performance_by_category": {
+    "assistenza_tecnica": {
+      "ml_accuracy": 0.89,
+      "llm_accuracy": 0.83,
+      "ml_better": true,
+      "difference": 0.06000000000000005
+    },
+    "informazioni_prodotto": {
+      "ml_accuracy": 0.82,
+      "llm_accuracy": 0.84,
+      "ml_better": false,
+      "difference": 0.020000000000000018
+    },
+    "reclami": {
+      "ml_accuracy": 0.75,
+      "llm_accuracy": 0.88,
+      "ml_better": false,
+      "difference": 0.13
+    },
+    "vendite": {
+      "ml_accuracy": 0.82,
+      "llm_accuracy": 0.84,
+      "ml_better": false,
+      "difference": 0.020000000000000018
+    },
+    "supporto": {
+      "ml_accuracy": 0.89,
+      "llm_accuracy": 0.83,
+      "ml_better": true,
+      "difference": 0.06000000000000005
+    },
+    "altro": {
+      "ml_accuracy": 0.75,
+      "llm_accuracy": 0.88,
+      "ml_better": false,
+      "difference": 0.13
+    }
+  },
+  "disagreement_analysis": {
+    "percentage_disagreements": 0.15,
+    "avg_confidence_when_disagree": 0.72,
+    "most_problematic_categories": [
+      "altro",
+      "informazioni_prodotto"
+    ]
+  },
+  "raccomandazioni": [
+    "💡 Aumenta peso ML a 0.49 (attualmente 0.40)",
+    "🎯 Implementa pesi adattivi per categoria (ML meglio su pattern ricorrenti)"
+  ],
+  "next_steps": [
+    "1. Implementa pesi adattivi per categoria",
+    "2. Usa soglia confidence 0.7 per etichetta ALTRO",
+    "3. Monitora performance dopo modifiche",
+    "4. Considera active learning per casi dubbi"
+  ]
+}

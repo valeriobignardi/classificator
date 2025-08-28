@@ -1994,6 +1994,65 @@ class MongoClassificationReader:
                 'error_type': 'generic_error'
             }
 
+    def clear_tenant_collection(self, client_name: str) -> Dict[str, Any]:
+        """
+        Scopo: Cancella completamente la collection MongoDB di un tenant
+        ATTENZIONE: Operazione irreversibile!
+        
+        Parametri input:
+            - client_name: Nome del tenant
+            
+        Output:
+            - Dizionario con risultato dell'operazione
+            
+        Ultimo aggiornamento: 2025-08-28
+        """
+        try:
+            if not self.ensure_connection():
+                return {
+                    'success': False,
+                    'error': 'Impossibile connettersi a MongoDB',
+                    'deleted_count': 0
+                }
+            
+            # Ottieni nome collection per il tenant
+            collection_name = self.get_collection_name(client_name)
+            collection = self.db[collection_name]
+            
+            # Conta documenti prima della cancellazione
+            count_before = collection.count_documents({})
+            
+            if count_before == 0:
+                return {
+                    'success': True,
+                    'message': f'Collection {collection_name} già vuota',
+                    'deleted_count': 0,
+                    'collection_name': collection_name
+                }
+            
+            # Cancella tutti i documenti della collection
+            result = collection.delete_many({})
+            deleted_count = result.deleted_count
+            
+            print(f"🗑️ Cancellati {deleted_count} documenti dalla collection {collection_name}")
+            
+            return {
+                'success': True,
+                'message': f'Collection {collection_name} cancellata con successo',
+                'deleted_count': deleted_count,
+                'collection_name': collection_name,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            error_msg = f'Errore durante cancellazione collection per {client_name}: {str(e)}'
+            print(f"❌ {error_msg}")
+            return {
+                'success': False,
+                'error': error_msg,
+                'deleted_count': 0
+            }
+
 
 def main():
     """

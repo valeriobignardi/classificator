@@ -336,7 +336,7 @@ class ClassificationService:
     
     def clear_all_classifications(self, client_name: str) -> Dict[str, Any]:
         """
-        Cancella tutte le classificazioni esistenti per un cliente
+        Cancella tutte le classificazioni esistenti per un cliente da MongoDB
         ATTENZIONE: Operazione irreversibile!
         
         Args:
@@ -346,43 +346,35 @@ class ClassificationService:
             Risultato dell'operazione
         """
         try:
-            print(f"🗑️ CANCELLAZIONE CLASSIFICAZIONI per cliente: {client_name}")
-            self.tag_db.connetti()
+            print(f"🗑️ CANCELLAZIONE CLASSIFICAZIONI MONGODB per cliente: {client_name}")
             
-            # Conta le classificazioni esistenti prima di cancellare
-            count_query = """
-            SELECT COUNT(*) 
-            FROM session_classifications 
-            WHERE tenant_name = %s
-            """
-            count_result = self.tag_db.esegui_query(count_query, (client_name,))
-            existing_count = count_result[0][0] if count_result else 0
+            # Usa il mongo_reader per cancellare la collection del tenant
+            result = self.mongo_reader.clear_tenant_collection(client_name)
             
-            if existing_count == 0:
-                self.tag_db.disconnetti()
+            if result['success']:
+                print(f"✅ {result['message']}")
                 return {
                     'success': True,
-                    'message': f'Nessuna classificazione trovata per {client_name}',
-                    'deleted_count': 0,
-                    'timestamp': datetime.now().isoformat()
+                    'message': result['message'],
+                    'deleted_count': result['deleted_count'],
+                    'collection_name': result.get('collection_name', ''),
+                    'timestamp': result.get('timestamp', datetime.now().isoformat())
+                }
+            else:
+                print(f"❌ Errore: {result['error']}")
+                return {
+                    'success': False,
+                    'error': result['error'],
+                    'deleted_count': 0
                 }
             
-            # Cancella tutte le classificazioni per il cliente
-            delete_query = """
-            DELETE FROM session_classifications 
-            WHERE tenant_name = %s
-            """
-            
-            affected_rows = self.tag_db.esegui_comando(delete_query, (client_name,))
-            self.tag_db.disconnetti()
-            
-            print(f"✅ Cancellate {affected_rows} classificazioni per {client_name}")
-            
+        except Exception as e:
+            error_msg = f"Errore durante cancellazione classificazioni MongoDB: {str(e)}"
+            print(f"❌ {error_msg}")
             return {
-                'success': True,
-                'message': f'Cancellate {affected_rows} classificazioni per {client_name}',
-                'deleted_count': affected_rows,
-                'timestamp': datetime.now().isoformat()
+                'success': False,
+                'error': error_msg,
+                'deleted_count': 0
             }
             
         except Exception as e:
@@ -656,9 +648,9 @@ class ClassificationService:
         
         Args:
             client_name: Nome del cliente
-            force_reprocess: Se True, riprocessa anche le sessioni già classificate
+            force_reprocess: Se True, cancella la collection MongoDB e riprocessa tutto da capo (clustering + classificazione)
             force_review: Se True, forza l'aggiunta di tutti i casi alla coda di revisione
-            force_reprocess_all: Se True, cancella TUTTE le classificazioni esistenti e riprocessa tutto dall'inizio
+            force_reprocess_all: Se True, cancella TUTTE le classificazioni esistenti e riprocessa tutto dall'inizio (legacy)
             
         Returns:
             Risultati della classificazione
@@ -667,7 +659,19 @@ class ClassificationService:
             print(f"🚀 CLASSIFICAZIONE COMPLETA - Cliente: {client_name}")
             start_time = datetime.now()
             
-            # Se richiesto, cancella tutte le classificazioni esistenti
+            # Se force_reprocess=True, cancella PRIMA la collection MongoDB
+            if force_reprocess:
+                print(f"🔄 FORCE REPROCESS: Cancellazione collection MongoDB per {client_name}")
+                clear_result = self.clear_all_classifications(client_name)
+                if not clear_result['success']:
+                    return {
+                        'success': False,
+                        'error': f"Errore nella cancellazione collection MongoDB: {clear_result['error']}",
+                        'client': client_name
+                    }
+                print(f"✅ Cancellata collection MongoDB: {clear_result['deleted_count']} documenti rimossi")
+            
+            # Se richiesto, cancella tutte le classificazioni esistenti (legacy force_reprocess_all)
             if force_reprocess_all:
                 print(f"🔄 RICLASSIFICAZIONE COMPLETA: Cancellazione classificazioni esistenti per {client_name}")
                 clear_result = self.clear_all_classifications(client_name)
@@ -1018,7 +1022,7 @@ def classify_all_sessions(client_name: str):
         client_name: Nome del cliente (es. 'humanitas')
     
     Parametri POST (opzionali):
-        force_reprocess: boolean - Se True, riprocessa anche sessioni già classificate
+        force_reprocess: boolean - Se True, cancella la collection MongoDB e rifà tutto da capo (clustering + classificazione)
         force_review: boolean - Se True, forza l'aggiunta di tutti i casi alla coda di revisione
     
     Esempio:

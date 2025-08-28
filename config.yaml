@@ -374,3 +374,34 @@ ui_config:
     auto_refresh: false
     default_limit: null
     refresh_interval: 30
+
+# Strategia di risoluzione disaccordi ML vs LLM
+ensemble_disagreement:
+  # Soglia di confidence per etichettare come "ALTRO"
+  low_confidence_threshold: 0.7
+  
+  # Soglia caratteri per favorire LLM su testi lunghi
+  long_text_threshold: 500
+  
+  # Soglia numero esempi training per favorire ML
+  min_training_examples_for_ml: 20
+  
+  # Strategia di selezione
+  strategy:
+    # 1. Se confidence < 0.7 → ALTRO
+    use_altro_for_low_confidence: true
+    
+    # 2. Se testo > 500 caratteri → LLM
+    favor_llm_for_long_text: true
+    
+    # 3. Se molti esempi training simili → ML, altrimenti LLM
+    favor_ml_for_frequent_patterns: true
+    
+    # 4. Default: LLM
+    default_preference: "llm"
+  
+  # Penalità confidence per disaccordi
+  disagreement_penalty: 0.8
+  
+  # Tag da usare per confidence bassa
+  low_confidence_tag: "ALTRO"

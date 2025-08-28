@@ -1474,24 +1474,36 @@ class MongoClassificationReader:
                 # Log per debug
                 print(f"🏷️  Salvati metadati cluster per sessione {session_id}: cluster_id={cluster_metadata.get('cluster_id', 'N/A')}, is_representative={cluster_metadata.get('is_representative', False)}")
             else:
-                # 🔧 FIX CRITICO: Se non ci sono cluster_metadata, la sessione è un OUTLIER
-                # SEMPRE salvare i metadati, anche se vuoti/null, per tracciabilità!
+                # 🔧 FIX CRITICO: cluster_metadata None può significare:
+                # 1. Classificazione normale (senza clustering) - NON è outlier
+                # 2. Classificazione ottimizzata ma fallback - potrebbe essere outlier
+                # 
+                # STRATEGIA: Controlla se il metodo di classificazione indica clustering
                 if "metadata" not in doc:
                     doc["metadata"] = {}
                 
-                # Genera cluster_id progressivo per outlier
-                outlier_counter = self._get_next_outlier_counter()
-                outlier_cluster_id = f"outlier_{outlier_counter}"
+                # Determina se si tratta di classificazione con clustering basandosi sul classified_by
+                classified_by = classified_by or "unknown"
+                is_cluster_based = any(keyword in classified_by.lower() for keyword in [
+                    'cluster', 'optimized', 'ens_pipe', 'ensemble'
+                ])
                 
-                doc["metadata"]["cluster_id"] = outlier_cluster_id
-                doc["metadata"]["is_representative"] = False  # Gli outlier non sono mai rappresentanti
-                doc["metadata"]["outlier_score"] = 1.0  # Score massimo per outlier
-                doc["metadata"]["method"] = "auto_outlier_assignment"
-                
-                # Determina il session_type per l'UI
-                doc["session_type"] = "outlier"
-                
-                print(f"🔍 OUTLIER ASSIGNMENT: Sessione {session_id} assegnata a cluster {outlier_cluster_id}")
+                if is_cluster_based:
+                    # Classificazione cluster-based senza metadata = outlier
+                    outlier_counter = self._get_next_outlier_counter()
+                    outlier_cluster_id = f"outlier_{outlier_counter}"
+                    
+                    doc["metadata"]["cluster_id"] = outlier_cluster_id
+                    doc["metadata"]["is_representative"] = False
+                    doc["metadata"]["outlier_score"] = 1.0
+                    doc["metadata"]["method"] = "auto_outlier_assignment"
+                    doc["session_type"] = "outlier"
+                    
+                    print(f"🔍 OUTLIER ASSIGNMENT: Sessione {session_id} assegnata a cluster {outlier_cluster_id}")
+                else:
+                    # Classificazione normale senza clustering - non assegnare cluster metadata
+                    print(f"� NORMAL CLASSIFICATION: Sessione {session_id} classificata senza clustering")
+                    # Non aggiungere cluster_id per classificazioni normali
             
             # 🆕 AGGIUNGI SEMPRE session_type basato sui metadata per consistenza UI
             if "session_type" not in doc:
@@ -1499,8 +1511,12 @@ class MongoClassificationReader:
                     doc["session_type"] = "representative"
                 elif doc.get("metadata", {}).get("propagated_from"):
                     doc["session_type"] = "propagated"
-                else:
+                elif doc.get("metadata", {}).get("cluster_id"):
+                    # Ha cluster_id = è parte di un sistema di clustering
                     doc["session_type"] = "outlier"
+                else:
+                    # Nessun cluster metadata = classificazione normale
+                    doc["session_type"] = "normal"
             
             # Prepara il filtro per upsert usando tenant_id come chiave univoca
             filter_dict = {"session_id": session_id}

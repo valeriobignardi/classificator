@@ -28,13 +28,14 @@ class ApiService {
     }
   }
 
-  async getReviewCases(tenant: string, limit: number = 20, includePropagated: boolean = false, includeOutliers: boolean = false): Promise<{ cases: ReviewCase[]; total: number }> {
+  async getReviewCases(tenant: string, limit: number = 20, includePropagated: boolean = false, includeOutliers: boolean = false, includeRepresentatives: boolean = true): Promise<{ cases: ReviewCase[]; total: number }> {
     return this.handleRequest(
       axios.get(`${API_BASE_URL}/review/${tenant}/cases`, {
         params: { 
           limit,
           include_propagated: includePropagated,
-          include_outliers: includeOutliers
+          include_outliers: includeOutliers,
+          include_representatives: includeRepresentatives
         }
       })
     );

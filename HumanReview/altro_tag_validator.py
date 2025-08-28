@@ -30,8 +30,15 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'TagDat
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from tag_manager import TagDatabaseManager
-from labse_embedder import LaBSEEmbedder
 from mongo_classification_reader import MongoClassificationReader
+
+# Import per embedding dinamico
+try:
+    from EmbeddingEngine.simple_embedding_manager import simple_embedding_manager
+    EMBEDDING_MANAGER_AVAILABLE = True
+except ImportError:
+    from EmbeddingEngine.labse_embedder import LaBSEEmbedder
+    EMBEDDING_MANAGER_AVAILABLE = False
 
 @dataclass
 class ValidationResult:
@@ -57,9 +64,18 @@ class AltroTagValidator:
         """
         Inizializza il validatore
         
+        Scopo della funzione: Inizializza validatore ALTRO con embedder configurato per tenant
+        Parametri di input: tenant_id (ID tenant), similarity_threshold (soglia similarità)
+        Parametri di output: Istanza AltroTagValidator configurata
+        Valori di ritorno: None (costruttore)
+        Tracciamento aggiornamenti: 2025-08-28 - Aggiunto supporto embedding dinamico per tenant
+        
         Args:
             tenant_id: ID del tenant
             similarity_threshold: Soglia di similarità per considerare tag equivalenti (default 0.9)
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-28
         """
         self.tenant_id = tenant_id
         self.similarity_threshold = similarity_threshold
@@ -67,12 +83,101 @@ class AltroTagValidator:
         
         # Inizializza i componenti necessari
         self.tag_manager = TagDatabaseManager()
-        self.embedder = LaBSEEmbedder()
         self.db_connector = MongoClassificationReader()
+        
+        # ✅ CORREZIONE: Usa embedder dinamico configurato per il tenant
+        self.embedder = self._get_dynamic_embedder()
         
         # Cache per i tag esistenti e loro embeddings
         self._existing_tags_cache = None
         self._existing_embeddings_cache = None
+    
+    def _get_dynamic_embedder(self):
+        """
+        Ottiene embedder dinamico configurato per il tenant dal database
+        
+        Scopo della funzione: Carica embedder rispettando configurazione tenant
+        Parametri di input: None (usa self.tenant_id)
+        Parametri di output: Istanza embedder configurata
+        Valori di ritorno: BaseEmbedder configurato per tenant
+        Tracciamento aggiornamenti: 2025-08-28 - Creata per supporto configurazione dinamica
+        
+        Returns:
+            Embedder configurato per il tenant
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-28
+        """
+        try:
+            if EMBEDDING_MANAGER_AVAILABLE:
+                self.logger.info(f"🔧 Caricamento embedder dinamico per tenant {self.tenant_id}")
+                embedder = simple_embedding_manager.get_embedder_for_tenant(self.tenant_id)
+                
+                # Verifica che l'embedder abbia il metodo calculate_similarity
+                if not hasattr(embedder, 'calculate_similarity'):
+                    self.logger.warning(f"⚠️ Embedder {type(embedder).__name__} non ha calculate_similarity, aggiungo wrapper")
+                    return self._wrap_embedder_with_similarity(embedder)
+                
+                self.logger.info(f"✅ Embedder dinamico caricato: {type(embedder).__name__}")
+                return embedder
+            else:
+                self.logger.warning("⚠️ EmbeddingManager non disponibile, fallback a LaBSE")
+                return self._get_fallback_embedder()
+                
+        except Exception as e:
+            self.logger.error(f"❌ Errore caricamento embedder dinamico: {e}")
+            return self._get_fallback_embedder()
+    
+    def _get_fallback_embedder(self):
+        """
+        Embedder di fallback quando il sistema dinamico non è disponibile
+        
+        Scopo della funzione: Fornisce embedder di backup in caso di errori
+        Parametri di input: None
+        Parametri di output: LaBSEEmbedder di fallback
+        Valori di ritorno: Istanza LaBSEEmbedder
+        Tracciamento aggiornamenti: 2025-08-28 - Creata per gestione fallback
+        
+        Returns:
+            LaBSEEmbedder di fallback
+            
+        Autore: Valerio Bignardi  
+        Data: 2025-08-28
+        """
+        from EmbeddingEngine.labse_embedder import LaBSEEmbedder
+        return LaBSEEmbedder()
+    
+    def _wrap_embedder_with_similarity(self, embedder):
+        """
+        Aggiunge metodo calculate_similarity a embedder che non lo hanno
+        
+        Scopo della funzione: Compatibilità con embedder legacy senza calculate_similarity
+        Parametri di input: embedder (istanza BaseEmbedder)
+        Parametri di output: embedder con metodo aggiunto
+        Valori di ritorno: Embedder wrappato
+        Tracciamento aggiornamenti: 2025-08-28 - Creata per retrocompatibilità
+        
+        Args:
+            embedder: Embedder da wrappare
+            
+        Returns:
+            Embedder con calculate_similarity aggiunto
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-28
+        """
+        def calculate_similarity(text1: str, text2: str) -> float:
+            try:
+                emb1 = embedder.encode([text1])[0]
+                emb2 = embedder.encode([text2])[0]
+                return max(0.0, float(embedder.cosine_similarity(emb1, emb2)))
+            except Exception as e:
+                self.logger.warning(f"Errore calcolo similarità wrapper: {e}")
+                return 0.0
+        
+        # Aggiungi il metodo dinamicamente
+        embedder.calculate_similarity = calculate_similarity
+        return embedder
         
     def validate_altro_classification(self, 
                                     conversation_text: str,
@@ -203,30 +308,51 @@ class AltroTagValidator:
         """
         Ottiene classificazione da BERTopic
         
+        Scopo della funzione: Classifica testo usando modello BERTopic
+        Parametri di input: conversation_text (testo), bertopic_model (modello)
+        Parametri di output: str (tag suggerito)
+        Valori di ritorno: Nome topic pulito o "errore_bertopic"/"sconosciuto"
+        Tracciamento aggiornamenti: 2025-08-28 - Aggiunta gestione errori robusta
+        
         Args:
             conversation_text: Testo da classificare
             bertopic_model: Modello BERTopic
             
         Returns:
             Tag suggerito da BERTopic
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-28
         """
         try:
-            if hasattr(bertopic_model, 'transform'):
-                # Classifica il documento singolo
-                topics, probs = bertopic_model.transform([conversation_text])
+            # Controllo validità modello
+            if bertopic_model is None:
+                self.logger.warning("BERTopic model è None")
+                return "errore_bertopic"
+            
+            if not hasattr(bertopic_model, 'transform'):
+                self.logger.error("BERTopic model non ha metodo 'transform'")
+                return "errore_bertopic"
+            
+            # Classifica il documento singolo
+            topics, probs = bertopic_model.transform([conversation_text])
+            
+            if len(topics) > 0:
+                topic_id = topics[0]
                 
-                if len(topics) > 0:
-                    topic_id = topics[0]
+                # Ottieni il nome del topic
+                if hasattr(bertopic_model, 'get_topic_info'):
+                    topic_info = bertopic_model.get_topic_info()
                     
-                    # Ottieni il nome del topic
-                    if hasattr(bertopic_model, 'get_topic_info'):
-                        topic_info = bertopic_model.get_topic_info()
+                    if topic_info is not None and not topic_info.empty:
                         topic_row = topic_info[topic_info['Topic'] == topic_id]
                         
                         if not topic_row.empty:
                             topic_name = topic_row.iloc[0]['Name']
                             # Pulisci il nome del topic
-                            return self._clean_bertopic_topic_name(topic_name)
+                            cleaned_name = self._clean_bertopic_topic_name(topic_name)
+                            self.logger.debug(f"BERTopic topic_id={topic_id} -> '{cleaned_name}'")
+                            return cleaned_name
                 
             return "sconosciuto"  # Fallback
             

@@ -769,7 +769,10 @@ class ClusteringTestService:
             
             # Filtra outliers per metriche (non tutte supportano -1)
             mask = labels != -1
-            if np.sum(mask) < 2:  # Serve almeno 2 punti non-outlier
+            outliers_count = np.sum(labels == -1)
+            valid_points = np.sum(mask)
+            
+            if valid_points < 2:  # Serve almeno 2 punti non-outlier
                 return {
                     'silhouette_score': 0.0,
                     'calinski_harabasz_score': 0.0,
@@ -779,24 +782,28 @@ class ClusteringTestService:
             
             filtered_embeddings = embeddings[mask]
             filtered_labels = labels[mask]
+            unique_clusters = np.unique(filtered_labels)
             
             metrics = {}
             
             # Silhouette Score (più alto = meglio, range [-1, 1])
-            if len(np.unique(filtered_labels)) > 1:
-                metrics['silhouette_score'] = float(silhouette_score(filtered_embeddings, filtered_labels))
+            if len(unique_clusters) > 1:
+                silhouette = float(silhouette_score(filtered_embeddings, filtered_labels))
+                metrics['silhouette_score'] = silhouette
             else:
                 metrics['silhouette_score'] = 0.0
                 
             # Calinski-Harabasz Index (più alto = meglio)
-            if len(np.unique(filtered_labels)) > 1:
-                metrics['calinski_harabasz_score'] = float(calinski_harabasz_score(filtered_embeddings, filtered_labels))
+            if len(unique_clusters) > 1:
+                calinski = float(calinski_harabasz_score(filtered_embeddings, filtered_labels))
+                metrics['calinski_harabasz_score'] = calinski
             else:
                 metrics['calinski_harabasz_score'] = 0.0
                 
             # Davies-Bouldin Index (più basso = meglio)
-            if len(np.unique(filtered_labels)) > 1:
-                metrics['davies_bouldin_score'] = float(davies_bouldin_score(filtered_embeddings, filtered_labels))
+            if len(unique_clusters) > 1:
+                davies = float(davies_bouldin_score(filtered_embeddings, filtered_labels))
+                metrics['davies_bouldin_score'] = davies
             else:
                 metrics['davies_bouldin_score'] = 0.0
             

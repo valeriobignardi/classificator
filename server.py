@@ -1698,6 +1698,7 @@ def api_get_review_cases(client_name: str):
         show_representatives: Se 'true', mostra solo rappresentanti di cluster (pending)
         include_propagated: Se 'true', include conversazioni propagate dai cluster (default: 'false')
         include_outliers: Se 'true', include sessioni outlier (default: 'true')
+        include_representatives: Se 'true', include rappresentanti di cluster (default: 'true')
         
     Returns:
         {
@@ -1715,22 +1716,26 @@ def api_get_review_cases(client_name: str):
         
         # 🆕 NUOVI PARAMETRI per Review Queue a 3 livelli
         show_representatives = request.args.get('show_representatives', 'false').lower() == 'true'
-        # 🔧 FIX: Uso include_propagated per coerenza con frontend e endpoint /clusters
+        # 🔧 FIX: Uso include_* per coerenza con frontend
         show_propagated = request.args.get('include_propagated', 'false').lower() == 'true'
-        # 🆕 NUOVO: include_outliers per coerenza con altri parametri include_*
         show_outliers = request.args.get('include_outliers', 'false').lower() == 'true'
+        show_representatives_new = request.args.get('include_representatives', 'true').lower() == 'true'
         
-        # 🔧 FIX LOGICA: Se nessun parametro è specificato (tutti default), mostra tutto
-        # Se i parametri sono specificati esplicitamente, rispettali anche se False
+        # 🔧 FIX LOGICA REVIEW QUEUE: Nuova logica - di base vedi tutto "da rivedere"
+        # Se nessun parametro è specificato esplicitamente, mostra tutto per retrocompatibilità
         has_explicit_filters = (
             'show_representatives' in request.args or 
             'include_propagated' in request.args or 
-            'include_outliers' in request.args
+            'include_outliers' in request.args or
+            'include_representatives' in request.args
         )
         
         if not has_explicit_filters:
-            # Comportamento default: mostra tutto
-            show_representatives = show_propagated = show_outliers = True
+            # Comportamento default: mostra tutto quello che richiede review umana
+            show_representatives = show_propagated = show_outliers = show_representatives_new = True
+        else:
+            # Usa il nuovo parametro se specificato, altrimenti fallback al vecchio
+            show_representatives = show_representatives_new or show_representatives
         
         # Ottieni reader MongoDB tenant-aware - AGGIORNATO
         mongo_reader = classification_service.get_mongo_reader(client_name)

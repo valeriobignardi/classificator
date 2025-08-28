@@ -1603,11 +1603,13 @@ class EndToEndPipeline:
                             'confidence': confidence,
                             'method': method
                         }
-                    elif method == 'CLUSTER_PROPAGATED':
+                    elif 'CLUSTER_PROPAGATED' in method or method == 'CLUSTER_PROPAGATED':
+                        # 🔧 FIX: usa 'in' invece di '==' e prendi il vero source_representative
+                        source_rep = prediction.get('source_representative', 'cluster_propagation')
                         cluster_metadata = {
                             'cluster_id': cluster_id,
                             'is_representative': False,
-                            'propagated_from': prediction.get('source_representative'),
+                            'propagated_from': source_rep,  # Usa il vero session_id del rappresentante
                             'propagation_confidence': confidence,
                             'method': method
                         }
@@ -1618,6 +1620,12 @@ class EndToEndPipeline:
                             'outlier_score': 1.0 - confidence,  # Outlier score inversamente correlato alla confidenza
                             'method': method
                         }
+                else:
+                    # 🆕 FIX: Se optimize_clusters=False o prediction senza cluster info,
+                    # NON costruire cluster_metadata per evitare auto-assegnazione a outlier_X
+                    # Il sistema di salvataggio gestirà correttamente i casi senza cluster info
+                    print(f"   ⚠️ Sessione {session_id}: nessun cluster metadata (optimize_clusters={optimize_clusters})")
+                    cluster_metadata = None
                 
                 success = mongo_reader.save_classification_result(
                     session_id=session_id,

@@ -395,3 +395,41 @@ class LaBSEEmbedder(BaseEmbedder):
         except Exception as e:
             print(f"❌ Test modello fallito: {e}")
             return False
+    
+    def calculate_similarity(self, text1: str, text2: str) -> float:
+        """
+        Calcola similarità semantica tra due testi usando embedding
+        
+        Scopo della funzione: Fornisce interfaccia per calcolo similarità semantica
+        Parametri di input: text1, text2 (stringhe da confrontare)
+        Parametri di output: float (similarità coseno tra -1 e 1)
+        Valori di ritorno: Valore di similarità, 0.0 in caso di errore
+        Tracciamento aggiornamenti: 2025-08-28 - Aggiunto per compatibilità AltroTagValidator
+        
+        Args:
+            text1: Primo testo da confrontare
+            text2: Secondo testo da confrontare
+            
+        Returns:
+            Similarità coseno tra i due testi (0.0-1.0)
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-28
+        """
+        try:
+            if not text1 or not text2:
+                return 0.0
+                
+            # Genera embedding per entrambi i testi
+            emb1 = self.encode([text1])[0]
+            emb2 = self.encode([text2])[0] 
+            
+            # Calcola similarità coseno usando il metodo della classe base
+            similarity = self.cosine_similarity(emb1, emb2)
+            
+            # Normalizza a range [0, 1] per compatibilità 
+            return max(0.0, float(similarity))
+            
+        except Exception as e:
+            print(f"⚠️ Errore calcolo similarità tra '{text1[:50]}...' e '{text2[:50]}...': {e}")
+            return 0.0

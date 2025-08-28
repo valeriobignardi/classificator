@@ -179,8 +179,16 @@ const ClusteringTestResults: React.FC<ClusteringTestResultsProps> = ({
               <Box sx={{ mb: 2, p: 2, border: '1px solid #e0e0e0', borderRadius: 1 }}>
                 <Box display="flex" alignItems="center" gap={1} mb={1}>
                   <Chip 
-                    label={`Silhouette: ${result.quality_metrics.silhouette_score?.toFixed(3) || 'N/A'}`} 
-                    color={result.quality_metrics.silhouette_score > 0.5 ? 'success' : result.quality_metrics.silhouette_score > 0.25 ? 'warning' : 'error'}
+                    label={`Silhouette: ${
+                      result.quality_metrics.silhouette_score !== undefined && result.quality_metrics.silhouette_score !== null 
+                        ? result.quality_metrics.silhouette_score.toFixed(3) 
+                        : 'N/A'
+                    }`} 
+                    color={
+                      result.quality_metrics.silhouette_score !== undefined && result.quality_metrics.silhouette_score !== null
+                        ? (result.quality_metrics.silhouette_score > 0.5 ? 'success' : result.quality_metrics.silhouette_score > 0.25 ? 'warning' : 'error')
+                        : 'default'
+                    }
                     size="medium" 
                   />
                 </Box>
@@ -194,8 +202,16 @@ const ClusteringTestResults: React.FC<ClusteringTestResultsProps> = ({
               <Box sx={{ mb: 2, p: 2, border: '1px solid #e0e0e0', borderRadius: 1 }}>
                 <Box display="flex" alignItems="center" gap={1} mb={1}>
                   <Chip 
-                    label={`Davies-Bouldin: ${result.quality_metrics.davies_bouldin_score?.toFixed(3) || 'N/A'}`} 
-                    color={result.quality_metrics.davies_bouldin_score < 1 ? 'success' : result.quality_metrics.davies_bouldin_score < 2 ? 'warning' : 'error'}
+                    label={`Davies-Bouldin: ${
+                      result.quality_metrics.davies_bouldin_score !== undefined && result.quality_metrics.davies_bouldin_score !== null 
+                        ? result.quality_metrics.davies_bouldin_score.toFixed(3) 
+                        : 'N/A'
+                    }`} 
+                    color={
+                      result.quality_metrics.davies_bouldin_score !== undefined && result.quality_metrics.davies_bouldin_score !== null
+                        ? (result.quality_metrics.davies_bouldin_score < 1 ? 'success' : result.quality_metrics.davies_bouldin_score < 2 ? 'warning' : 'error')
+                        : 'default'
+                    }
                     size="medium" 
                   />
                 </Box>
@@ -209,8 +225,16 @@ const ClusteringTestResults: React.FC<ClusteringTestResultsProps> = ({
               <Box sx={{ mb: 2, p: 2, border: '1px solid #e0e0e0', borderRadius: 1 }}>
                 <Box display="flex" alignItems="center" gap={1} mb={1}>
                   <Chip 
-                    label={`Calinski-Harabasz: ${result.quality_metrics.calinski_harabasz_score?.toFixed(1) || 'N/A'}`} 
-                    color={result.quality_metrics.calinski_harabasz_score > 100 ? 'success' : result.quality_metrics.calinski_harabasz_score > 50 ? 'warning' : 'error'}
+                    label={`Calinski-Harabasz: ${
+                      result.quality_metrics.calinski_harabasz_score !== undefined && result.quality_metrics.calinski_harabasz_score !== null
+                        ? result.quality_metrics.calinski_harabasz_score.toFixed(1) 
+                        : 'N/A'
+                    }`} 
+                    color={
+                      result.quality_metrics.calinski_harabasz_score !== undefined && result.quality_metrics.calinski_harabasz_score !== null
+                        ? (result.quality_metrics.calinski_harabasz_score > 100 ? 'success' : result.quality_metrics.calinski_harabasz_score > 50 ? 'warning' : 'error')
+                        : 'default'
+                    }
                     size="medium" 
                   />
                 </Box>

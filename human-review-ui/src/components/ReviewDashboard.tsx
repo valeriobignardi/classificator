@@ -63,8 +63,10 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
   // 🆕 Nuovo stato per cluster view
   const [clusters, setClusters] = useState<ClusterCase[]>([]);
   const [showClusterView, setShowClusterView] = useState(false); // Default: mostra vista tradizionale
-  const [includePropagated, setIncludePropagated] = useState(false);
-  const [includeOutliers, setIncludeOutliers] = useState(false);  // 🆕 NUOVO: flag per includere outliers nella review queue
+  // 🆕 NUOVA LOGICA FILTRI: Di base vedi tutto, flag per nascondere categorie specifiche
+  const [hideOutliers, setHideOutliers] = useState(false);        // Flag per nascondere outliers
+  const [hidePropagated, setHidePropagated] = useState(false);    // Flag per nascondere casi propagati
+  const [hideRepresentatives, setHideRepresentatives] = useState(false); // Flag per nascondere rappresentanti
   const [expandedClusters, setExpandedClusters] = useState<Set<string>>(new Set());
   
   const [dashboardLoading, setDashboardLoading] = useState(false);
@@ -149,14 +151,20 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
     try {
       const effectiveLimit = limit || currentLimit;
       
+      // 🆕 NUOVA LOGICA: Converti i flag "hide" in parametri "include" per l'API
+      // Di base includiamo tutto, poi escludiamo le categorie specifiche
+      const includeOutliers = !hideOutliers;
+      const includePropagated = !hidePropagated; 
+      const includeRepresentatives = !hideRepresentatives;
+      
       if (showClusterView) {
-        // 🆕 Nuova logica: carica cluster con rappresentanti e gestisce includePropagated e includeOutliers
+        // Vista cluster: usa l'endpoint clusters
         const response = await apiService.getClusterCases(tenant, effectiveLimit, includePropagated, includeOutliers);
         setClusters(response.clusters || []);
         setCases([]); // Reset cases quando in cluster view
       } else {
-        // Logica esistente: carica tutti i casi
-        const response = await apiService.getReviewCases(tenant, effectiveLimit, includePropagated, includeOutliers);
+        // Vista lista: usa l'endpoint review cases con logica di filtraggio modificata
+        const response = await apiService.getReviewCases(tenant, effectiveLimit, includePropagated, includeOutliers, includeRepresentatives);
         setCases(response.cases);
         setClusters([]); // Reset clusters quando in traditional view
       }
@@ -166,7 +174,7 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
     } finally {
       setDashboardLoading(false);
     }
-  }, [tenant, currentLimit, showClusterView, includePropagated, includeOutliers]);
+  }, [tenant, currentLimit, showClusterView, hideOutliers, hidePropagated, hideRepresentatives]);
 
   // 🆕 Funzione per espandere/contrarre cluster
   const toggleCluster = (clusterId: string) => {
@@ -186,14 +194,17 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
     setExpandedClusters(new Set());
   };
 
-  // 🆕 Funzione per gestire il toggle "include propagated" 
-  const handleIncludePropagatedToggle = () => {
-    setIncludePropagated(!includePropagated);
+  // 🆕 Gestori per i nuovi flag di esclusione
+  const handleHideOutliersToggle = () => {
+    setHideOutliers(!hideOutliers);
   };
 
-  // 🆕 Funzione per gestire il toggle "include outliers"
-  const handleIncludeOutliersToggle = () => {
-    setIncludeOutliers(!includeOutliers);
+  const handleHidePropagatedToggle = () => {
+    setHidePropagated(!hidePropagated);
+  };
+
+  const handleHideRepresentativesToggle = () => {
+    setHideRepresentatives(!hideRepresentatives);
   };
 
   const handleRefreshCases = useCallback(() => {
@@ -486,14 +497,14 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
         // Review Queue Content (existing content)
         <div>
 
-          {/* 🆕 Controlli Vista Cluster */}
+          {/* 🆕 Controlli Vista Cluster e Filtri Review Queue */}
           <Card sx={{ mb: 3, backgroundColor: '#f0f8ff', borderLeft: '4px solid #1976d2' }}>
             <CardContent>
               <Box display="flex" justifyContent="space-between" alignItems="center">
                 <Box display="flex" alignItems="center" gap={2}>
                   <GroupIcon color="primary" />
                   <Typography variant="h6" color="primary">
-                    {showClusterView ? "👑 Vista per Cluster - Solo Rappresentanti" : "📋 Vista Tradizionale - Tutti i Casi"}
+                    {showClusterView ? "👑 Vista per Cluster - Solo Rappresentanti" : "📋 Review Queue - Tutti i Casi da Rivedere"}
                   </Typography>
                 </Box>
                 <Box display="flex" alignItems="center" gap={2}>
@@ -507,40 +518,58 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
                     }
                     label={showClusterView ? "Cluster View" : "Lista Completa"}
                   />
-                  {!showClusterView && (
-                    <>
-                      <FormControlLabel
-                        control={
-                          <Switch
-                            checked={includePropagated}
-                            onChange={handleIncludePropagatedToggle}
-                            disabled={dashboardLoading}
-                            size="small"
-                          />
-                        }
-                        label="Include Propagated"
-                        sx={{ fontSize: '0.75rem' }}
-                      />
-                      <FormControlLabel
-                        control={
-                          <Switch
-                            checked={includeOutliers}
-                            onChange={handleIncludeOutliersToggle}
-                            disabled={dashboardLoading}
-                            size="small"
-                          />
-                        }
-                        label="Include Outliers"
-                        sx={{ fontSize: '0.75rem' }}
-                      />
-                    </>
-                  )}
                 </Box>
               </Box>
+
+              {/* 🆕 FILTRI GRANULARI: Sempre visibili, applicabili in entrambe le viste */}
+              <Box sx={{ mt: 2, p: 2, bgcolor: 'rgba(25, 118, 210, 0.05)', borderRadius: 1 }}>
+                <Typography variant="subtitle2" gutterBottom color="primary">
+                  🎛️ Filtri di Esclusione (di base vedi tutti i casi da rivedere):
+                </Typography>
+                <Box display="flex" alignItems="center" gap={3} flexWrap="wrap">
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={hideOutliers}
+                        onChange={handleHideOutliersToggle}
+                        disabled={dashboardLoading}
+                        size="small"
+                        color="warning"
+                      />
+                    }
+                    label={<Typography variant="body2">🚫 Nascondi Outliers</Typography>}
+                  />
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={hidePropagated}
+                        onChange={handleHidePropagatedToggle}
+                        disabled={dashboardLoading}
+                        size="small"
+                        color="info"
+                      />
+                    }
+                    label={<Typography variant="body2">🚫 Nascondi Propagati</Typography>}
+                  />
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={hideRepresentatives}
+                        onChange={handleHideRepresentativesToggle}
+                        disabled={dashboardLoading}
+                        size="small"
+                        color="success"
+                      />
+                    }
+                    label={<Typography variant="body2">🚫 Nascondi Rappresentanti</Typography>}
+                  />
+                </Box>
+              </Box>
+
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
                 {showClusterView 
-                  ? "📊 Mostra solo i rappresentanti di ogni cluster con opzione per espandere e vedere le sessioni ereditate"
-                  : "📋 Mostra tutti i casi in review queue con la logica tradizionale"
+                  ? "📊 Vista cluster: Raggruppa per cluster con rappresentanti espandibili. Applica i filtri per personalizzare cosa vedere."
+                  : "📋 Vista lista: Mostra tutti i casi da rivedere in ordine cronologico. Usa i filtri per nascondere categorie specifiche."
                 }
               </Typography>
             </CardContent>

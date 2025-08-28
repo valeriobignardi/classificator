@@ -1142,8 +1142,8 @@ class MongoClassificationReader:
             
             cursor = connection.cursor()
             
-            # Query per recuperare i tenant dalla tabella tenants
-            query = "SELECT tenant_id, tenant_name FROM tenants WHERE is_active = 1 ORDER BY tenant_name"
+            # Query per recuperare i tenant dalla tabella tenants (inclusi inattivi per debug)
+            query = "SELECT tenant_id, tenant_name, is_active FROM tenants ORDER BY tenant_name"
             cursor.execute(query)
             risultati = cursor.fetchall()
             
@@ -1152,10 +1152,10 @@ class MongoClassificationReader:
             
             tenants = []
             if risultati:
-                for tenant_id, tenant_name in risultati:
+                for tenant_id, tenant_name, is_active in risultati:
                     tenants.append({
                         "tenant_id": str(tenant_id),
-                        "nome": tenant_name
+                        "nome": tenant_name + (" (inattivo)" if is_active == 0 else "")
                     })
             
             print(f"Recuperati {len(tenants)} tenant dalla tabella TAG.tenants")
@@ -1820,6 +1820,163 @@ class MongoClassificationReader:
             import traceback
             traceback.print_exc()
             return []
+
+
+    def sync_tenants_from_remote(self) -> Dict[str, Any]:
+        """
+        Scopo: Sincronizza i tenant dal database remoto alla tabella locale TAG.tenants
+        
+        Input: Nessun parametro
+        Output: Dizionario con risultato dell'operazione
+        
+        - Legge i tenant dal database remoto (solo lettura)
+        - Scrive/aggiorna i tenant nella tabella locale TAG.tenants
+        - Mantiene sincronizzazione tra remoto e locale
+        
+        Autore: Valerio Bignardi
+        Data creazione: 2025-08-28
+        Ultima modifica: 2025-08-28 - Implementazione iniziale
+        """
+        try:
+            import yaml
+            import mysql.connector
+            from mysql.connector import Error
+            import os
+            
+            # Carica configurazione
+            config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+            with open(config_path, 'r') as file:
+                config = yaml.safe_load(file)
+            
+            remote_db_config = config.get('database', {})  # Database remoto (solo lettura)
+            local_db_config = config.get('tag_database', {})  # Database locale TAG (scrittura)
+            
+            # ✅ STEP 1: Leggi tenant dal database remoto
+            print("🔍 [SYNC] Connessione al database remoto per lettura tenant...")
+            remote_connection = mysql.connector.connect(
+                host=remote_db_config['host'],
+                port=remote_db_config['port'],
+                user=remote_db_config['user'],
+                password=remote_db_config['password'],
+                database=remote_db_config['database']
+            )
+            
+            remote_cursor = remote_connection.cursor()
+            
+            # Query per leggere tenant dal remoto (compatibile con struttura reale)
+            remote_query = """
+                SELECT tenant_id, tenant_name, tenant_database, tenant_status, created_at
+                FROM tenants 
+                ORDER BY tenant_name
+            """
+            remote_cursor.execute(remote_query)
+            remote_tenants = remote_cursor.fetchall()
+            
+            remote_cursor.close()
+            remote_connection.close()
+            
+            print(f"✅ [SYNC] Recuperati {len(remote_tenants)} tenant dal database remoto")
+            
+            # ✅ STEP 2: Connetti al database locale TAG per scrittura
+            print("🔍 [SYNC] Connessione al database locale TAG per sincronizzazione...")
+            local_connection = mysql.connector.connect(
+                host=local_db_config['host'],
+                port=local_db_config['port'],
+                user=local_db_config['user'],
+                password=local_db_config['password'],
+                database=local_db_config['database']
+            )
+            
+            local_cursor = local_connection.cursor()
+            
+            # ✅ STEP 3: Sincronizzazione (INSERT o UPDATE)
+            sync_count = 0
+            updated_count = 0
+            inserted_count = 0
+            
+            for tenant_data in remote_tenants:
+                tenant_id, tenant_name, tenant_database, tenant_status, created_at = tenant_data
+                
+                # Mapping dei campi: tenant_status (1=active, 0=inactive) -> is_active
+                is_active = 1 if tenant_status == 1 else 0
+                
+                # Usa tenant_database dal remoto come tenant_slug (già formattato correttamente)
+                tenant_slug = tenant_database
+                
+                # Verifica se il tenant esiste già localmente (per UUID - CORRETTO!)
+                check_query = "SELECT tenant_id, updated_at FROM tenants WHERE tenant_id = %s"
+                local_cursor.execute(check_query, (tenant_id,))
+                existing_tenant = local_cursor.fetchone()
+                
+                if existing_tenant:
+                    # UPDATE: tenant esiste, aggiorna nome, slug e status
+                    update_query = """
+                        UPDATE tenants 
+                        SET tenant_name = %s, tenant_slug = %s, is_active = %s, updated_at = CURRENT_TIMESTAMP
+                        WHERE tenant_id = %s
+                    """
+                    local_cursor.execute(update_query, (tenant_name, tenant_slug, is_active, tenant_id))
+                    updated_count += 1
+                    print(f"🔄 [SYNC] Aggiornato tenant: {tenant_name} ({tenant_id})")
+                else:
+                    # INSERT: nuovo tenant - evita conflitto con tenant_slug
+                    try:
+                        insert_query = """
+                            INSERT INTO tenants (tenant_id, tenant_name, tenant_slug, is_active, created_at, updated_at)
+                            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                        """
+                        local_cursor.execute(insert_query, (tenant_id, tenant_name, tenant_slug, is_active, created_at))
+                        inserted_count += 1
+                        print(f"➕ [SYNC] Inserito nuovo tenant: {tenant_name} ({tenant_id})")
+                    except mysql.connector.IntegrityError as ie:
+                        # Conflitto tenant_slug, usa tenant_id come slug alternativo
+                        if "Duplicate entry" in str(ie) and "tenant_slug" in str(ie):
+                            tenant_slug_alt = tenant_id  # Usa direttamente il tenant_id come slug univoco
+                            print(f"⚠️ [SYNC] Conflitto slug per {tenant_name}, uso tenant_id: {tenant_slug_alt}")
+                            local_cursor.execute(insert_query, (tenant_id, tenant_name, tenant_slug_alt, is_active, created_at))
+                            inserted_count += 1
+                        else:
+                            raise ie
+                
+                sync_count += 1
+            
+            # Commit delle modifiche
+            local_connection.commit()
+            
+            local_cursor.close()
+            local_connection.close()
+            
+            result = {
+                'success': True,
+                'message': f'Sincronizzazione completata con successo',
+                'stats': {
+                    'total_remote_tenants': len(remote_tenants),
+                    'processed': sync_count,
+                    'inserted': inserted_count,
+                    'updated': updated_count
+                }
+            }
+            
+            print(f"✅ [SYNC] Sincronizzazione completata: {inserted_count} inseriti, {updated_count} aggiornati")
+            return result
+            
+        except mysql.connector.Error as db_error:
+            error_msg = f'Errore database durante sincronizzazione tenant: {str(db_error)}'
+            print(f"❌ [SYNC] {error_msg}")
+            return {
+                'success': False,
+                'error': error_msg,
+                'error_type': 'database_error'
+            }
+            
+        except Exception as e:
+            error_msg = f'Errore generico durante sincronizzazione tenant: {str(e)}'
+            print(f"❌ [SYNC] {error_msg}")
+            return {
+                'success': False,
+                'error': error_msg,
+                'error_type': 'generic_error'
+            }
 
 
 def main():

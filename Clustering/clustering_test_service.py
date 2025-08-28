@@ -242,40 +242,41 @@ class ClusteringTestService:
 
     def _resolve_uuid_from_slug(self, tenant_slug: str) -> str:
         """
-        Risolve tenant slug in UUID usando database
+        Risolve tenant slug in UUID usando database TAG LOCALE
         
         Args:
-            tenant_slug: Slug del tenant (es: 'wopta')
+            tenant_slug: Slug del tenant (es: 'golvalerio')
             
         Returns:
-            UUID del tenant o slug se non trovato
+            UUID del tenant o errore se non trovato
         """
         try:
-            import sys
-            import os
-            sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'MySql'))
-            from connettore import MySqlConnettore
+            from TagDatabase.tag_database_connector import TagDatabaseConnector
             
-            # Connessione al database remoto per recuperare il tenant_id dal slug
-            remote = MySqlConnettore()
+            tag_connector = TagDatabaseConnector()
+            tag_connector.connetti()
             
             query = """
             SELECT tenant_id, tenant_name 
-            FROM common.tenants 
-            WHERE tenant_database = %s AND tenant_status = 1
+            FROM tenants 
+            WHERE tenant_slug = %s AND is_active = 1
             """
             
-            result = remote.esegui_query(query, (tenant_slug,))
-            remote.disconnetti()
+            result = tag_connector.esegui_query(query, (tenant_slug,))
+            tag_connector.disconnetti()
             
             if result and len(result) > 0:
                 tenant_uuid, tenant_name = result[0]
+                print(f"✅ UUID risolto da slug (DB TAG locale): {tenant_name} ({tenant_slug}) -> {tenant_uuid}")
                 return tenant_uuid
             else:
-                raise ValueError(f"Tenant slug '{tenant_slug}' non trovato nel database")
+                error_msg = f"❌ ERRORE: Tenant slug '{tenant_slug}' non trovato nel database TAG locale"
+                print(error_msg)
+                raise ValueError(error_msg)
                 
         except Exception as e:
-            print(f"❌ ERRORE risoluzione UUID per slug '{tenant_slug}': {e}")
+            error_msg = f"❌ ERRORE risoluzione UUID per slug '{tenant_slug}': {e}"
+            print(error_msg)
             raise RuntimeError(f"Impossibile risolvere tenant slug '{tenant_slug}': {e}")
     
     def load_tenant_clustering_config(self, tenant_id: str) -> Dict[str, Any]:

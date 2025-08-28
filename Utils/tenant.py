@@ -46,7 +46,7 @@ class Tenant:
     @classmethod
     def from_uuid(cls, tenant_uuid: str) -> 'Tenant':
         """
-        Crea un oggetto Tenant dal UUID risolvendo TUTTE le info dal database.
+        Crea un oggetto Tenant dal UUID risolvendo TUTTE le info dal database TAG LOCALE.
         
         Args:
             tenant_uuid: UUID del tenant
@@ -63,89 +63,97 @@ class Tenant:
             
         try:
             # Import dinamico per evitare circular imports
-            sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'MySql'))
-            from connettore import MySqlConnettore
+            sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'TagDatabase'))
+            from tag_database_connector import TagDatabaseConnector
             
-            remote = MySqlConnettore()
+            tag_connector = TagDatabaseConnector()
+            tag_connector.connetti()
             
             query = """
-            SELECT tenant_id, tenant_name, tenant_database, tenant_status
-            FROM common.tenants 
-            WHERE tenant_id = %s AND tenant_status = 1
+            SELECT tenant_id, tenant_name, tenant_slug, is_active
+            FROM tenants 
+            WHERE tenant_id = %s AND is_active = 1
             """
             
-            result = remote.esegui_query(query, (tenant_uuid,))
-            remote.disconnetti()
+            result = tag_connector.esegui_query(query, (tenant_uuid,))
+            tag_connector.disconnetti()
             
             if not result or len(result) == 0:
-                raise ValueError(f"Tenant UUID '{tenant_uuid}' non trovato nel database")
+                error_msg = f"❌ ERRORE: Tenant UUID '{tenant_uuid}' non trovato nel database TAG locale"
+                print(error_msg)
+                raise ValueError(error_msg)
                 
-            tenant_id, tenant_name, tenant_slug, tenant_status = result[0]
+            tenant_id, tenant_name, tenant_slug, is_active = result[0]
             
-            # Genera database name completo
-            tenant_database = f"{tenant_slug}_{tenant_id.replace('-', '_')}"
+            # Il tenant_database corrisponde al tenant_slug per golvalerio
+            tenant_database = tenant_slug
             
-            print(f"🎯 Tenant risolto: {tenant_name} ({tenant_slug}) UUID={tenant_id}")
+            print(f"✅ Tenant risolto (DB TAG locale): {tenant_name} ({tenant_slug}) UUID={tenant_id}")
             
             return cls(
                 tenant_id=tenant_id,
                 tenant_name=tenant_name, 
                 tenant_slug=tenant_slug,
                 tenant_database=tenant_database,
-                tenant_status=tenant_status
+                tenant_status=is_active
             )
             
         except Exception as e:
-            print(f"❌ Errore risoluzione tenant {tenant_uuid}: {e}")
-            raise RuntimeError(f"Impossibile risolvere tenant {tenant_uuid}: {e}")
+            error_msg = f"❌ ERRORE risoluzione tenant {tenant_uuid}: {e}"
+            print(error_msg)
+            raise RuntimeError(error_msg)
     
     @classmethod  
     def from_slug(cls, tenant_slug: str) -> 'Tenant':
         """
-        Crea un oggetto Tenant dal slug risolvendo TUTTE le info dal database.
+        Crea un oggetto Tenant dal slug risolvendo TUTTE le info dal database TAG LOCALE.
         
         Args:
-            tenant_slug: Slug del tenant (es: 'wopta')
+            tenant_slug: Slug del tenant (es: 'golvalerio')
             
         Returns:
             Tenant: Oggetto tenant popolato
         """
         try:
-            sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'MySql'))
-            from connettore import MySqlConnettore
+            sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'TagDatabase'))
+            from tag_database_connector import TagDatabaseConnector
             
-            remote = MySqlConnettore()
+            tag_connector = TagDatabaseConnector()
+            tag_connector.connetti()
             
             query = """
-            SELECT tenant_id, tenant_name, tenant_database, tenant_status
-            FROM common.tenants 
-            WHERE tenant_database = %s AND tenant_status = 1
+            SELECT tenant_id, tenant_name, tenant_slug, is_active
+            FROM tenants 
+            WHERE tenant_slug = %s AND is_active = 1
             """
             
-            result = remote.esegui_query(query, (tenant_slug,))
-            remote.disconnetti()
+            result = tag_connector.esegui_query(query, (tenant_slug,))
+            tag_connector.disconnetti()
             
             if not result or len(result) == 0:
-                raise ValueError(f"Tenant slug '{tenant_slug}' non trovato nel database")
+                error_msg = f"❌ ERRORE: Tenant slug '{tenant_slug}' non trovato nel database TAG locale"
+                print(error_msg)
+                raise ValueError(error_msg)
                 
-            tenant_id, tenant_name, tenant_database_name, tenant_status = result[0]
+            tenant_id, tenant_name, tenant_database_name, is_active = result[0]
             
-            # Genera database name completo
-            tenant_database = f"{tenant_slug}_{tenant_id.replace('-', '_')}"
+            # Il tenant_database corrisponde al tenant_slug per golvalerio 
+            tenant_database = tenant_slug
             
-            print(f"🎯 Tenant risolto da slug: {tenant_name} ({tenant_slug}) UUID={tenant_id}")
+            print(f"✅ Tenant risolto da slug (DB TAG locale): {tenant_name} ({tenant_slug}) UUID={tenant_id}")
             
             return cls(
                 tenant_id=tenant_id,
                 tenant_name=tenant_name,
                 tenant_slug=tenant_slug, 
                 tenant_database=tenant_database,
-                tenant_status=tenant_status
+                tenant_status=is_active
             )
             
         except Exception as e:
-            print(f"❌ Errore risoluzione tenant slug {tenant_slug}: {e}")
-            raise RuntimeError(f"Impossibile risolvere tenant slug {tenant_slug}: {e}")
+            error_msg = f"❌ ERRORE risoluzione tenant slug {tenant_slug}: {e}"
+            print(error_msg)
+            raise RuntimeError(error_msg)
     
     @staticmethod
     def _is_valid_uuid(uuid_string: str) -> bool:

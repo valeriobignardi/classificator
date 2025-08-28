@@ -68,19 +68,24 @@ class BERTopicFeatureProvider:
                  use_svd: bool = False,
                  svd_components: int = 32,
                  # Nuovo parametro embedder per BERTopic transform
-                 embedder: Optional[Any] = None) -> None:
+                 embedder: Optional[Any] = None,
+                 # Nuovi parametri per configurazione completa da database
+                 hdbscan_params: Optional[Dict[str, Any]] = None,
+                 umap_params: Optional[Dict[str, Any]] = None) -> None:
         """
         Inizializza provider con iperparametri riproducibili.
 
         Parametri:
         - random_state: seed per riproducibilità
         - calculate_probabilities: se calcolare p(topic|doc)
-        - n_neighbors, min_dist, metric: UMAP
-        - hdbscan_min_cluster_size, hdbscan_min_samples: clustering
+        - n_neighbors, min_dist, metric: UMAP (deprecati, usa umap_params)
+        - hdbscan_min_cluster_size, hdbscan_min_samples: clustering (deprecati, usa hdbscan_params)
         - top_k_words: parole chiave per topic_info
         - use_svd: abilita riduzione SVD sulle full probas (default 32)
         - svd_components: dimensione target per SVD (default 32)
         - embedder: Embedder per BERTopic transform singoli (default None)
+        - hdbscan_params: Dict completo parametri HDBSCAN da database (sovrascrive parametri individuali)
+        - umap_params: Dict completo parametri UMAP da database (sovrascrive parametri individuali)
         
         Ultimo aggiornamento: 2025-08-28
         """
@@ -89,18 +94,38 @@ class BERTopicFeatureProvider:
         self.random_state = random_state
         self.calculate_probabilities = calculate_probabilities
         self.embedder = embedder  # Salva embedder per uso interno
-        self.umap_params = {
-            "n_neighbors": n_neighbors,
-            "min_dist": min_dist,
-            "n_components": 5,
-            "metric": metric,
-            "random_state": random_state,
-        }
-        self.hdbscan_params = {
-            "min_cluster_size": hdbscan_min_cluster_size,
-            "min_samples": hdbscan_min_samples,
-            "metric": metric,
-        }
+        
+        # 🆕 GESTIONE PARAMETRI UMAP
+        # Se umap_params è fornito, usa quello (configurazione dal database)
+        # Altrimenti usa parametri individuali (backward compatibility)
+        if umap_params is not None:
+            self.umap_params = umap_params.copy()
+            # Assicurati che random_state sia impostato per riproducibilità
+            if 'random_state' not in self.umap_params:
+                self.umap_params['random_state'] = random_state
+        else:
+            # Backward compatibility: usa parametri individuali
+            self.umap_params = {
+                "n_neighbors": n_neighbors,
+                "min_dist": min_dist,
+                "n_components": 5,
+                "metric": metric,
+                "random_state": random_state,
+            }
+        
+        # 🆕 GESTIONE PARAMETRI HDBSCAN
+        # Se hdbscan_params è fornito, usa quello (configurazione dal database)
+        # Altrimenti usa parametri individuali (backward compatibility)
+        if hdbscan_params is not None:
+            self.hdbscan_params = hdbscan_params.copy()
+        else:
+            # Backward compatibility: usa parametri individuali
+            self.hdbscan_params = {
+                "min_cluster_size": hdbscan_min_cluster_size,
+                "min_samples": hdbscan_min_samples,
+                "metric": metric,
+            }
+        
         self.top_k_words = top_k_words
         # Stato SVD
         self.use_svd = use_svd and _SVD_AVAILABLE
@@ -214,7 +239,14 @@ class BERTopicFeatureProvider:
         )
         
         try:
-            self.model.fit(texts, embeddings=embeddings)
+            # 🆕 IMPORTANTE: Non passare embeddings se abbiamo embedding_model personalizzato
+            # Altrimenti BERTopic ignora il nostro embedding_model e usa il backend interno
+            if embedding_model is not None:
+                print("   🎯 Usando embedding_model personalizzato, BERTopic genererà embeddings internamente")
+                self.model.fit(texts)  # Lascia che BERTopic usi il nostro embedding_model
+            else:
+                print("   🔧 Usando embeddings pre-computati")
+                self.model.fit(texts, embeddings=embeddings)
             print(f"✅ BERTopic FIT completato su {n_samples} campioni")
         except Exception as e:
             error_msg = str(e).lower()

@@ -213,6 +213,33 @@ class EndToEndPipeline:
         # 🆕 PARAMETRI UMAP da tenant config
         umap_params = self.config_helper.get_umap_parameters(self.tenant_id)
         
+        # 🎯 COSTRUZIONE DIZIONARI PARAMETRI PER BERTOPIC
+        # Creo dizionari con TUTTI i parametri per garantire piena consistenza
+        bertopic_hdbscan_params = {
+            'min_cluster_size': cluster_min_size,
+            'min_samples': cluster_min_samples,
+            'alpha': cluster_alpha,
+            'cluster_selection_method': cluster_selection_method,
+            'cluster_selection_epsilon': cluster_selection_epsilon,
+            'metric': cluster_metric,
+            'allow_single_cluster': cluster_allow_single,
+            'max_cluster_size': cluster_max_size,
+            # Parametri specifici per BERTopic
+            'prediction_data': True,  # Necessario per BERTopic
+            'match_reference_implementation': True  # Compatibilità
+        }
+        
+        # Parametri UMAP per BERTopic (solo se UMAP è abilitato)
+        bertopic_umap_params = None
+        if umap_params['use_umap']:
+            bertopic_umap_params = {
+                'n_neighbors': umap_params['n_neighbors'],
+                'min_dist': umap_params['min_dist'],
+                'n_components': umap_params['n_components'],
+                'metric': umap_params['metric'],  # ✅ CORRETTO: usa metrica dal database
+                'random_state': umap_params['random_state']  # ✅ CORRETTO: usa random_state dal database
+            }
+        
         print(f"🔧 [FIX DEBUG] Parametri tenant passati a HDBSCANClusterer:")
         print(f"   min_cluster_size: {cluster_min_size}")
         print(f"   min_samples: {cluster_min_samples}")
@@ -227,6 +254,18 @@ class EndToEndPipeline:
             print(f"   🗂️  umap_n_neighbors: {umap_params['n_neighbors']}")
             print(f"   🗂️  umap_min_dist: {umap_params['min_dist']}")
             print(f"   🗂️  umap_n_components: {umap_params['n_components']}")
+        
+        print(f"🎯 [BERTOPIC] Parametri consistenti configurati:")
+        print(f"   📊 HDBSCAN: {len(bertopic_hdbscan_params)} parametri")
+        if bertopic_umap_params:
+            print(f"   📊 UMAP: {len(bertopic_umap_params)} parametri")
+        else:
+            print(f"   📊 UMAP: Disabilitato (usa embeddings pre-computati)")
+        
+        # 💾 MEMORIZZA PARAMETRI COME ATTRIBUTI DELLA CLASSE
+        # Per poterli usare nella creazione del BERTopicFeatureProvider
+        self.bertopic_hdbscan_params = bertopic_hdbscan_params
+        self.bertopic_umap_params = bertopic_umap_params
         
         self.clusterer = HDBSCANClusterer(
             min_cluster_size=cluster_min_size,
@@ -609,7 +648,9 @@ class EndToEndPipeline:
             bertopic_provider = BERTopicFeatureProvider(
                 use_svd=self.bertopic_config.get('use_svd', False),
                 svd_components=self.bertopic_config.get('svd_components', 32),
-                embedder=self.embedder  # ✅ AGGIUNTO: passa embedder configurato
+                embedder=self.embedder,  # ✅ AGGIUNTO: passa embedder configurato
+                hdbscan_params=self.bertopic_hdbscan_params,  # ✅ NUOVO: parametri HDBSCAN consistenti
+                umap_params=self.bertopic_umap_params  # ✅ NUOVO: parametri UMAP consistenti
             )
             
             print("   🔥 Esecuzione bertopic_provider.fit() su dataset completo...")

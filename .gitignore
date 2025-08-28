@@ -64,6 +64,7 @@ human-review-ui/build/
 # Environment files with sensitive data
 .env
 *.env
+config.yaml
 
 # Temporary files
 *.tmp

@@ -1,0 +1,407 @@
+bertopic:
+  enabled: true
+  hdbscan_params:
+    metric: euclidean
+    min_cluster_size: 8
+    min_samples: 4
+  model_subdir: bertopic
+  return_one_hot: false
+  svd_components: 20
+  top_k: 10
+  umap_params:
+    metric: euclidean
+    min_dist: 0.05
+    n_components: 3
+    n_neighbors: 10
+  use_svd: true
+clustering:
+  algorithm: hdbscan
+  enabled: true
+clustering:
+  algorithm: hdbscan
+  enabled: true
+  gpu_enabled: true
+  gpu_fallback_cpu: true
+  gpu_memory_limit: 0.8
+  min_cluster_size: 5
+  min_samples: 3
+database:
+  database: common
+  host: xxx.xxx.xxx.xxx
+  password: your_password
+  port: 3306
+  user: your_user
+debug:
+  debug_files:
+    base_path: ./debug_logs
+    llm_log: llm_debug.log
+    max_file_size_mb: 50
+    ml_log: ml_debug.log
+    quality_log: quality_debug.log
+    rotate_files: true
+  enabled: true
+  llm_debug:
+    enabled: true
+    log_confidence: true
+    log_input: true
+    log_output: true
+    log_processing: true
+    log_reasoning: true
+    save_to_file: true
+    visual_formatting: true
+  ml_debug:
+    enabled: true
+    log_ensemble_voting: true
+    log_features: true
+    log_prediction: true
+    log_probabilities: true
+    log_training: true
+  quality_gate_debug:
+    enabled: true
+    log_decisions: true
+    log_human_review: true
+    log_thresholds: true
+hierarchical_clustering:
+  boundary_refinement: true
+  boundary_threshold: 0.45
+  confidence_threshold: 0.75
+  conflict_detection_threshold: 0.4
+  conflict_resolution_strategy: split
+  convergence_threshold: 0.05
+  enabled: false
+  export_hierarchy_structure: true
+  generate_region_reports: false
+  log_conflict_details: true
+  max_hierarchy_depth: 3
+  max_iterations: 3
+  merge_threshold: 0.85
+  min_membership_confidence: 0.3
+  min_region_size: 2
+  outlier_threshold: 0.25
+  preserve_outliers: true
+  split_threshold: 0.6
+  use_semantic_analysis: true
+intelligent_clustering:
+  diverse_representatives:
+    consensus_confidence_bonus: 0.1
+    consensus_strategy: majority
+    enabled: true
+    majority_threshold: 0.6
+    max_representatives: 5
+    min_representatives: 2
+  enabled: true
+  human_validation:
+    ambiguous_intents:
+    - altro
+    - info_generali
+    enabled: true
+    low_confidence_threshold: 0.6
+  intent_categories:
+  - accesso_problemi
+  - prenotazione_esami
+  - info_esami_specifici
+  - ritiro_referti
+  - richiesta_operatore
+  - fatturazione_problemi
+  - modifica_appuntamenti
+  - orari_contatti
+  - problemi_tecnici
+  - info_generali
+  - cortesia
+  - altro
+  llm_cache:
+    enabled: true
+    max_size: 1000
+  llm_confidence_threshold: 0.8
+  min_average_confidence: 0.4
+  min_conversations_per_intent: 2
+  use_llm_primary: true
+  use_patterns_fallback: false
+intent_clustering:
+  enabled: true
+  fallback_patterns:
+    altro:
+    - .*
+    cortesia:
+    - \bgrazie\b
+    - \bbuongiorno\b
+    - \bbuonasera\b
+    - \barrivederci\b
+    - \bprego\b
+    domande_vaghe:
+    - ^(come|cosa|quando|dove|perché).*\?$
+    - mi\s+serve\s+aiuto
+    - ho\s+bisogno
+  intent_patterns:
+    accesso_problemi:
+    - non\s+riesco.*accedere
+    - password.*sbagliata
+    - problema.*login
+    - account.*bloccato
+    - errore.*accesso
+    - email.*sbagliata
+    - profilo.*errato
+    contatti_info:
+    - numero.*telefono
+    - contatti.*struttura
+    - come.*contattare
+    - centralino
+    - telefono.*reparto
+    - numero.*assistenza
+    fatturazione_problemi:
+    - non.*ricevuto.*fattura
+    - problema.*pagamento
+    - errore.*fatturazione
+    - mancata.*fattura
+    - pagamento.*fallito
+    - non\s+riesco.*pagare
+    indicazioni_sede:
+    - dove\s+siete
+    - indirizzo.*ospedale
+    - come.*arrivare
+    - mezzi.*pubblici
+    - indicazioni.*strada
+    - raggiungere.*sede
+    - parcheggio.*dove
+    info_esami_specifici:
+    - come\s+si\s+svolge.*esame
+    - preparazione.*esame
+    - modalità.*esame
+    - cosa\s+devo\s+fare.*esame
+    - digiuno.*esame
+    - portare.*esame
+    - prepara.*esame
+    - prima.*esame
+    info_generali:
+    - informazioni.*servizi
+    - cosa\s+offrite
+    - quali\s+esami
+    - specializzazioni
+    - reparti.*disponibili
+    - servizi.*offerti
+    modifica_appuntamenti:
+    - modificare.*appuntamento
+    - cambiare.*prenotazione
+    - spostare.*visita
+    - cancellare.*appuntamento
+    - disdire.*prenotazione
+    - annullare.*visita
+    - modificare.*telefonicamente
+    - cambiare.*orario
+    - spostato.*luglio
+    - posticipare.*appuntamento
+    orari_contatti:
+    - orari.*apertura
+    - orari.*ambulatorio
+    - orari.*visita.*degenti
+    - quando.*aperto
+    - ore.*apertura
+    - fino.*che.*ora
+    prenotazione_esami:
+    - prenotare.*visita
+    - fissare.*appuntamento
+    - nuovo.*appuntamento
+    - prenotazione.*esame
+    - quando\s+posso.*prenotare
+    - disponibilità.*appuntamento
+    - vorrei.*prenotare
+    - dovrei.*prenotare
+    - posso.*prenotare
+    problemi_tecnici:
+    - errore.*sistema
+    - non\s+funziona.*sito
+    - problema.*tecnico
+    - bug.*applicazione
+    - errore.*caricamento
+    - lento.*sistema
+    richiesta_operatore:
+    - operatore\s+umano
+    - parlare\s+con.*operatore
+    - contattare.*operatore
+    - trasferire.*operatore
+    - assistenza\s+diretta
+    - persona\s+reale
+    - operatore.*reale
+    - umano.*assistenza
+    ritiro_referti:
+    - ritirare.*referto
+    - scaricare.*risultat
+    - vedere.*esito
+    - consultare.*referto
+    - quando.*pronti.*risultati
+    - dove.*trovo.*referto
+    - quando.*posso.*ritirare
+    - risultati.*esami
+    - esito.*radiografia
+    - referto.*piattaforma
+    servizi_supporto:
+    - assistenza.*parcheggio
+    - contatto.*guardiania
+    - parcheggio.*pagamento
+    - ticket.*parcheggio
+    - dove.*parcheggiare
+    verifica_appuntamenti:
+    - verifica.*appuntamento
+    - stato.*prenotazione
+    - conferma.*appuntamento
+    - è\s+stato\s+spostato
+    - quando.*ho.*visita
+    - controllare.*appuntamento
+    - informazioni.*mio.*appuntamento
+  min_conversations_per_intent: 2
+  semantic_refinement:
+    enabled: true
+    min_size_for_refinement: 10
+    similarity_threshold: 0.85
+llm:
+  finetuning:
+    auto_switch: true
+    base_model: mistral:7b
+    enabled: true
+    max_training_samples: 1000
+    min_training_samples: 50
+  generation:
+    max_tokens: 150
+    repeat_penalty: 1.1
+    temperature: 0.1
+    top_k: 40
+    top_p: 0.9
+  models:
+    available:
+    - mistral:7b
+    - llama3.3:70b-instruct-q2_K
+    - gpt-oss:20b
+    clients:
+      16c222a9-f293-11ef-9315-96000228e7fe: mistral:7b
+      a0fd7600-f4f7-11ef-9315-96000228e7fe: gpt-oss:20b
+      humanitas: mistral:7b
+    default: mistral:7b
+  ollama:
+    timeout: 300
+    url: http://localhost:11434
+mongodb:
+  database: classificazioni
+  url: mongodb://localhost:27017
+pipeline:
+  auto_retrain_on_init: false
+  auto_tag_creation: true
+  bertopic_fallback_threshold: 0.0
+  classification_batch_size: 32
+  confidence_threshold: 0.7
+  default_auto_mode: false
+  default_confidence_threshold: 0.7
+  default_days_back: 7
+  default_extraction_limit: 200
+  default_min_cluster_size: 5
+  default_min_samples: 3
+  embedding_similarity_threshold: 0.85
+  embedding_validation: false
+  ensemble_mode_default: true
+  intelligent_classifier_embedding: true
+  interactive_mode_default: true
+  llm_confidence_threshold: 0.85
+  new_category_detection: true
+  new_tag_similarity_threshold: 0.75
+  semantic_fallback: true
+  use_shared_embedder: true
+quality_gate:
+  auto_retrain_enabled: true
+  confidence_threshold: 0.9
+  max_model_backups: 5
+  max_training_examples: 1000
+  min_decisions_for_retrain: 5
+  model_backup_enabled: true
+  novelty_threshold: 0.6
+  retraining_threshold: 5
+  uncertainty_threshold: 0.2
+semantic_memory:
+  cache_path: semantic_cache/
+  enable_detailed_logging: true
+  max_samples_per_label: 50
+  refresh_threshold: 100
+similarity_thresholds:
+  classification_confidence: 0.8
+  clustering_similarity: 0.8
+  reuse_existing_label: 0.8
+  semantic_similarity: 0.8
+supervised_training:
+  extraction:
+    full_clustering_required: true
+    ignore_session_limits: true
+    use_full_dataset: true
+  human_review:
+    confidence_threshold_priority: 0.7
+    max_representatives_per_cluster: 5
+    max_total_sessions: 500
+    min_cluster_size_for_review: 2
+    min_representatives_per_cluster: 1
+    overflow_handling: proportional
+    priority_large_clusters: true
+    priority_low_confidence: true
+    representatives_per_cluster: 3
+    selection_strategy: prioritize_by_size
+  reporting:
+    log_excluded_clusters: true
+    show_clustering_stats: true
+    show_extraction_stats: true
+    show_selection_stats: true
+tag_database:
+  database: TAG
+  host: localhost
+  password: Valerio220693!
+  port: 3306
+  user: root
+tenant_configs:
+  16c222a9-f293-11ef-9315-96000228e7fe:
+    llm_model: mistral:7b
+  a0fd7600-f4f7-11ef-9315-96000228e7fe:
+    llm_model: gpt-oss:20b
+  humanitas:
+    embedding_engine: bge_m3
+tokenization:
+  max_tokens: 8000
+  model_name: cl100k_base
+  truncation_strategy: start
+ui_config:
+  classification:
+    confidence_threshold: 0.7
+    debug_mode: false
+    force_retrain: true
+    max_sessions: null
+  mock_cases:
+    default_count: 3
+  review:
+    auto_refresh: false
+    default_limit: null
+    refresh_interval: 30
+
+# Strategia di risoluzione disaccordi ML vs LLM
+ensemble_disagreement:
+  # Soglia di confidence per etichettare come "ALTRO"
+  low_confidence_threshold: 0.7
+  
+  # Soglia caratteri per favorire LLM su testi lunghi
+  long_text_threshold: 500
+  
+  # Soglia numero esempi training per favorire ML
+  min_training_examples_for_ml: 20
+  
+  # Strategia di selezione
+  strategy:
+    # 1. Se confidence < 0.7 → ALTRO
+    use_altro_for_low_confidence: true
+    
+    # 2. Se testo > 500 caratteri → LLM
+    favor_llm_for_long_text: true
+    
+    # 3. Se molti esempi training simili → ML, altrimenti LLM
+    favor_ml_for_frequent_patterns: true
+    
+    # 4. Default: LLM
+    default_preference: "llm"
+  
+  # Penalità confidence per disaccordi
+  disagreement_penalty: 0.8
+  
+  # Tag da usare per confidence bassa
+  low_confidence_tag: "ALTRO"

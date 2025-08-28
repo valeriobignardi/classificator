@@ -27,10 +27,10 @@ clustering:
   min_samples: 3
 database:
   database: common
-  host: 159.69.223.201
-  password: zsRxiYmcVG9XX7Q3TvAT
+  host: xxx.xxx.xxx.xxx
+  password: your_password
   port: 3306
-  user: taggenerator
+  user: your_user
 debug:
   debug_files:
     base_path: ./debug_logs

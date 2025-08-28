@@ -1130,7 +1130,7 @@ class EndToEndPipeline:
                     # Salva in MongoDB come "pending review"
                     success = self.mongo_reader.save_classification_result(
                         session_id=session_id,
-                        client_name=self.tenant.tenant_id,
+                        client_name=self.tenant.tenant_slug,  # 🔧 FIX: usa tenant_slug non tenant_id
                         final_decision=final_decision,
                         conversation_text=conversation_text,
                         needs_review=True,  # ✅ FONDAMENTALE: marca per review
@@ -1308,7 +1308,7 @@ class EndToEndPipeline:
                 # Salva come pending review (TUTTE le sessioni propagate devono essere reviewabili)
                 success = self.mongo_reader.save_classification_result(
                     session_id=session_id,
-                    client_name=self.tenant.tenant_id,
+                    client_name=self.tenant.tenant_slug,  # 🔧 FIX: usa tenant_slug non tenant_id
                     final_decision=final_decision,
                     conversation_text=sessioni[session_id].get('testo_completo', ''),
                     needs_review=True,  # ✅ ANCHE LE PROPAGATE devono essere pending per filtri
@@ -3858,17 +3858,57 @@ class EndToEndPipeline:
                     
                     mongo_reader = MongoClassificationReader()
                     
+                    # 🆕 CLASSIFICA LA SESSIONE CON L'ENSEMBLE PRIMA DEL SALVATAGGIO
+                    # Questo risolve il problema N/A nell'interfaccia di review
+                    conversation_text = session_data.get('testo_completo', '')
+                    
+                    # Classifica con ensemble per ottenere ml_result e llm_result reali
+                    ml_result = None
+                    llm_result = None
+                    
+                    if hasattr(self, 'ensemble') and self.ensemble and conversation_text:
+                        try:
+                            # Esegui classificazione con ensemble
+                            ensemble_result = self.ensemble.classify_text(conversation_text)
+                            
+                            if ensemble_result:
+                                # Estrai ml_result se disponibile
+                                if 'ml_result' in ensemble_result and ensemble_result['ml_result']:
+                                    ml_pred = ensemble_result['ml_result']
+                                    ml_result = {
+                                        'predicted_label': ml_pred.get('predicted_label', 'unknown'),
+                                        'confidence': ml_pred.get('confidence', 0.0),
+                                        'method': 'ml_ensemble',
+                                        'probabilities': ml_pred.get('probabilities', {})
+                                    }
+                                
+                                # Estrai llm_result se disponibile
+                                if 'llm_result' in ensemble_result and ensemble_result['llm_result']:
+                                    llm_pred = ensemble_result['llm_result']
+                                    llm_result = {
+                                        'predicted_label': llm_pred.get('predicted_label', 'unknown'),
+                                        'confidence': llm_pred.get('confidence', 0.0),
+                                        'method': 'llm_ensemble',
+                                        'reasoning': llm_pred.get('reasoning', '')
+                                    }
+                                    
+                            print(f"🔍 CLASSIFICAZIONE RAPPRESENTANTE {session_id}: ML={ml_result['predicted_label'] if ml_result else 'N/A'}, LLM={llm_result['predicted_label'] if llm_result else 'N/A'}")
+                            
+                        except Exception as e:
+                            print(f"⚠️ Errore classificazione ensemble per {session_id}: {e}")
+                            # Continua con ml_result=None, llm_result=None come fallback
+                    
                     success = mongo_reader.save_classification_result(
                         session_id=session_id,
-                        client_name=self.tenant.tenant_id,  # 🔧 FIX: usa tenant_id non tenant_slug
-                        # 🆕 SIMULA ml_result e llm_result per training supervisionado
-                        ml_result=None,  # Non disponibile durante training supervisionado
-                        llm_result={
+                        client_name=self.tenant.tenant_slug,  # 🔧 FIX: usa tenant_slug non tenant_id
+                        # 🆕 USA RISULTATI REALI DELL'ENSEMBLE invece di None/simulazioni
+                        ml_result=ml_result,  # Risultato reale ML
+                        llm_result=llm_result if llm_result else {
                             'predicted_label': final_label,
                             'confidence': confidence,
                             'method': method,
                             'reasoning': notes
-                        },
+                        },  # Usa risultato ensemble se disponibile, altrimenti fallback
                         final_decision={
                             'predicted_label': final_label,
                             'confidence': confidence,
@@ -3913,17 +3953,58 @@ class EndToEndPipeline:
                     mongo_reader = MongoClassificationReader()
                     
                     # Usa il metodo corretto save_classification_result
+                    
+                    # 🆕 CLASSIFICA LA SESSIONE CON L'ENSEMBLE PRIMA DEL SALVATAGGIO
+                    # Risolve il problema N/A nell'interfaccia di review
+                    conversation_text = session_data.get('testo_completo', '')
+                    
+                    # Classifica con ensemble per ottenere risultati reali
+                    ml_result = None
+                    llm_result_ensemble = None
+                    
+                    if hasattr(self, 'ensemble') and self.ensemble and conversation_text:
+                        try:
+                            # Esegui classificazione con ensemble
+                            ensemble_result = self.ensemble.classify_text(conversation_text)
+                            
+                            if ensemble_result:
+                                # Estrai ml_result se disponibile
+                                if 'ml_result' in ensemble_result and ensemble_result['ml_result']:
+                                    ml_pred = ensemble_result['ml_result']
+                                    ml_result = {
+                                        'predicted_label': ml_pred.get('predicted_label', 'unknown'),
+                                        'confidence': ml_pred.get('confidence', 0.0),
+                                        'method': 'ml_ensemble',
+                                        'probabilities': ml_pred.get('probabilities', {})
+                                    }
+                                
+                                # Estrai llm_result se disponibile
+                                if 'llm_result' in ensemble_result and ensemble_result['llm_result']:
+                                    llm_pred = ensemble_result['llm_result']
+                                    llm_result_ensemble = {
+                                        'predicted_label': llm_pred.get('predicted_label', 'unknown'),
+                                        'confidence': llm_pred.get('confidence', 0.0),
+                                        'method': 'llm_ensemble',
+                                        'reasoning': llm_pred.get('reasoning', '')
+                                    }
+                                    
+                            print(f"🔍 CLASSIFICAZIONE SESSIONE {session_id}: ML={ml_result['predicted_label'] if ml_result else 'N/A'}, LLM={llm_result_ensemble['predicted_label'] if llm_result_ensemble else 'N/A'}")
+                            
+                        except Exception as e:
+                            print(f"⚠️ Errore classificazione ensemble per {session_id}: {e}")
+                            # Continua con ml_result=None come fallback
+                    
                     success = mongo_reader.save_classification_result(
                         session_id=session_id,
-                        client_name=self.tenant.tenant_id,  # 🔧 FIX: usa tenant_id non tenant_slug
-                        # 🆕 SIMULA ml_result e llm_result per training supervisionado
-                        ml_result=None,  # Non disponibile durante training supervisionado  
-                        llm_result={
+                        client_name=self.tenant.tenant_slug,  # 🔧 FIX: usa tenant_slug non tenant_id
+                        # 🆕 USA RISULTATI REALI DELL'ENSEMBLE invece di simulazioni
+                        ml_result=ml_result,  # Risultato reale ML
+                        llm_result=llm_result_ensemble if llm_result_ensemble else {
                             'predicted_label': final_label,
                             'confidence': confidence,
                             'method': method,
                             'reasoning': notes
-                        },
+                        },  # Usa ensemble se disponibile, altrimenti fallback
                         final_decision={
                             'predicted_label': final_label,
                             'confidence': confidence,

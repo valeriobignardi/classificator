@@ -1619,7 +1619,8 @@ class MongoClassificationReader:
                 or_conditions.append({
                     "review_status": "pending",
                     "$or": [
-                        {"metadata.is_representative": True},
+                        {"cluster_metadata.is_representative": True},
+                        {"metadata.is_representative": True},  # Fallback legacy
                         {"metadata.is_representative": {"$exists": False}}  # Fallback per dati legacy
                     ]
                 })
@@ -1627,15 +1628,26 @@ class MongoClassificationReader:
             # 2. PROPAGATE: propagated_from esiste E non sono rappresentanti
             if show_propagated:
                 or_conditions.append({
-                    "metadata.propagated_from": {"$exists": True, "$ne": None},
-                    "metadata.is_representative": {"$ne": True}
+                    "$or": [
+                        {
+                            "cluster_metadata.session_type": "propagated",
+                            "cluster_metadata.is_representative": {"$ne": True}
+                        },
+                        {  # Fallback legacy
+                            "metadata.propagated_from": {"$exists": True, "$ne": None},
+                            "metadata.is_representative": {"$ne": True}
+                        }
+                    ]
                 })
             
             # 3. OUTLIERS: cluster_id inizia con "outlier_" O valori legacy
             if show_outliers:
                 or_conditions.append({
                     "$or": [
-                        # 🆕 NUOVO: outliers con formato outlier_X
+                        # 🆕 NUOVO: outliers con session_type
+                        {"cluster_metadata.session_type": "outlier"},
+                        # NUOVO: outliers con formato outlier_X
+                        {"cluster_metadata.cluster_id": {"$regex": "^outlier_"}},
                         {"metadata.cluster_id": {"$regex": "^outlier_"}},
                         # Legacy: outliers con cluster_id = -1
                         {"metadata.cluster_id": -1},

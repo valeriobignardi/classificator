@@ -1077,17 +1077,19 @@ class ApiService {
         n_outliers: number;
         silhouette_score: number;
         execution_time: number;
+        clustering_ratio: number;
+        n_conversations: number;
       }>;
-      statistics: {
+      metrics_summary: {
         avg_clusters: number;
         avg_outliers: number;
-        avg_silhouette_score: number;
-        avg_execution_time: number;
-        trend_analysis: {
-          clusters_trend: 'increasing' | 'decreasing' | 'stable';
-          quality_trend: 'improving' | 'degrading' | 'stable';
-        };
+        avg_silhouette: number;
+        best_silhouette: number;
+        best_version: number;
+        total_versions: number;
       };
+      has_data: boolean;
+      tenant_id: string;
     };
     error?: string;
   }> {

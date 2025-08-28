@@ -113,17 +113,18 @@ interface TrendData {
     n_outliers: number;
     silhouette_score: number;
     execution_time: number;
+    clustering_ratio: number;
+    n_conversations: number;
   }>;
-  statistics: {
+  metrics_summary: {
     avg_clusters: number;
     avg_outliers: number;
-    avg_silhouette_score: number;
-    avg_execution_time: number;
-    trend_analysis: {
-      clusters_trend: 'increasing' | 'decreasing' | 'stable';
-      quality_trend: 'improving' | 'degrading' | 'stable';
-    };
+    avg_silhouette: number;
+    best_silhouette: number;
+    best_version: number;
+    total_versions: number;
   };
+  has_data: boolean;
 }
 
 /**
@@ -335,14 +336,14 @@ const ClusteringVersionManager: React.FC = () => {
     if (selectedVersionId) {
       loadVersionDetail(selectedVersionId);
     }
-  }, [selectedVersionId, selectedTenant]); // ✅ Dipende da versione e tenant
+  }, [selectedVersionId, loadVersionDetail]); // ✅ Includiamo loadVersionDetail
 
-  // Effect per caricare il trend quando cambia tab o giorni
+  // Effect per caricare il trend quando cambia tab
   useEffect(() => {
     if (activeTab === 2) {
       loadTrendData();
     }
-  }, [activeTab, selectedTenant]); // ✅ Dipende da tab e tenant
+  }, [activeTab, loadTrendData]);
 
   if (!selectedTenant) {
     return (
@@ -695,18 +696,12 @@ const ClusteringVersionManager: React.FC = () => {
                       <Card>
                         <CardContent sx={{ textAlign: 'center' }}>
                           <Typography variant="h6" color="primary">
-                            {trendData.statistics.avg_clusters.toFixed(1)}
+                            {trendData.metrics_summary.avg_clusters.toFixed(1)}
                           </Typography>
                           <Typography variant="body2">Media Cluster</Typography>
-                          <Chip
-                            label={trendData.statistics.trend_analysis.clusters_trend}
-                            color={
-                              trendData.statistics.trend_analysis.clusters_trend === 'stable' 
-                                ? 'success' 
-                                : 'warning'
-                            }
-                            size="small"
-                          />
+                          <Typography variant="caption" color="text.secondary">
+                            {trendData.metrics_summary.total_versions} versioni
+                          </Typography>
                         </CardContent>
                       </Card>
                     </Box>
@@ -714,7 +709,7 @@ const ClusteringVersionManager: React.FC = () => {
                       <Card>
                         <CardContent sx={{ textAlign: 'center' }}>
                           <Typography variant="h6" color="secondary">
-                            {trendData.statistics.avg_outliers.toFixed(1)}
+                            {trendData.metrics_summary.avg_outliers.toFixed(1)}
                           </Typography>
                           <Typography variant="body2">Media Outliers</Typography>
                         </CardContent>
@@ -724,30 +719,22 @@ const ClusteringVersionManager: React.FC = () => {
                       <Card>
                         <CardContent sx={{ textAlign: 'center' }}>
                           <Typography variant="h6" color="success.main">
-                            {trendData.statistics.avg_silhouette_score.toFixed(3)}
+                            {trendData.metrics_summary.avg_silhouette.toFixed(3)}
                           </Typography>
                           <Typography variant="body2">Media Silhouette</Typography>
-                          <Chip
-                            label={trendData.statistics.trend_analysis.quality_trend}
-                            color={
-                              trendData.statistics.trend_analysis.quality_trend === 'improving' 
-                                ? 'success' 
-                                : trendData.statistics.trend_analysis.quality_trend === 'stable'
-                                ? 'info'
-                                : 'error'
-                            }
-                            size="small"
-                          />
                         </CardContent>
                       </Card>
                     </Box>
                     <Box sx={{ flex: '1 1 200px', minWidth: '200px' }}>
                       <Card>
                         <CardContent sx={{ textAlign: 'center' }}>
-                          <Typography variant="h6">
-                            {trendData.statistics.avg_execution_time.toFixed(1)}s
+                          <Typography variant="h6" color="info.main">
+                            {trendData.metrics_summary.best_silhouette.toFixed(3)}
                           </Typography>
-                          <Typography variant="body2">Media Tempo</Typography>
+                          <Typography variant="body2">Best Silhouette</Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            v{trendData.metrics_summary.best_version}
+                          </Typography>
                         </CardContent>
                       </Card>
                     </Box>

@@ -66,7 +66,9 @@ class BERTopicFeatureProvider:
                  top_k_words: int = 10,
                  # Nuovi parametri SVD
                  use_svd: bool = False,
-                 svd_components: int = 32) -> None:
+                 svd_components: int = 32,
+                 # Nuovo parametro embedder per BERTopic transform
+                 embedder: Optional[Any] = None) -> None:
         """
         Inizializza provider con iperparametri riproducibili.
 
@@ -76,16 +78,17 @@ class BERTopicFeatureProvider:
         - n_neighbors, min_dist, metric: UMAP
         - hdbscan_min_cluster_size, hdbscan_min_samples: clustering
         - top_k_words: parole chiave per topic_info
-        - use_svd: abilita riduzione SVD sulle full probas (default False)
+        - use_svd: abilita riduzione SVD sulle full probas (default 32)
         - svd_components: dimensione target per SVD (default 32)
-
-        Ritorno: None
-        Ultimo aggiornamento: 2025-08-07
+        - embedder: Embedder per BERTopic transform singoli (default None)
+        
+        Ultimo aggiornamento: 2025-08-28
         """
         self.available = BERTopic_AVAILABLE
         self.model: Optional[BERTopic] = None
         self.random_state = random_state
         self.calculate_probabilities = calculate_probabilities
+        self.embedder = embedder  # Salva embedder per uso interno
         self.umap_params = {
             "n_neighbors": n_neighbors,
             "min_dist": min_dist,
@@ -192,9 +195,17 @@ class BERTopicFeatureProvider:
             else:
                 print(f"⚠️ Disabilito calculate_probabilities per sicurezza ({n_samples} campioni)")
         
+        # 🔧 CONFIGURAZIONE EMBEDDING MODEL per BERTopic transform
+        # Se abbiamo un embedder configurato, creamo un wrapper compatibile con BERTopic
+        embedding_model = None
+        if self.embedder is not None:
+            print(f"   🎯 Configurando embedding model per BERTopic: {type(self.embedder).__name__}")
+            embedding_model = self._create_bertopic_embedding_wrapper()
+        
         self.model = BERTopic(
             umap_model=reducer,
             hdbscan_model=clusterer,  # Usa configurazione personalizzata
+            embedding_model=embedding_model,  # ✅ AGGIUNTO: embedding model configurato
             calculate_probabilities=calculate_probs,  # Disabilita per dataset piccoli
             verbose=False,
             low_memory=True,
@@ -530,3 +541,35 @@ class BERTopicFeatureProvider:
             self.use_svd = bool(meta.get("use_svd", self.use_svd)) and _SVD_AVAILABLE
             self.svd_components = int(meta.get("svd_components", self.svd_components))
         return self
+    
+    def _create_bertopic_embedding_wrapper(self):
+        """
+        Crea wrapper embedder compatibile con BERTopic
+        
+        Scopo della funzione: Crea wrapper per embedder che rispetta interfaccia BERTopic
+        Parametri di input: None (usa self.embedder)
+        Parametri di output: Wrapper embedder BERTopic-compatibile
+        Valori di ritorno: Classe wrapper con metodo embed
+        Tracciamento aggiornamenti: 2025-08-28 - Creata per fix BERTopic transform
+        
+        Returns:
+            Wrapper embedder per BERTopic
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-28
+        """
+        embedder = self.embedder
+        
+        class BERTopicEmbeddingWrapper:
+            """Wrapper per embedder compatibile con BERTopic"""
+            
+            def __init__(self, embedder):
+                self.embedder = embedder
+            
+            def embed(self, texts, verbose=False):
+                """Metodo embed richiesto da BERTopic"""
+                if isinstance(texts, str):
+                    texts = [texts]
+                return self.embedder.encode(texts, show_progress_bar=verbose)
+        
+        return BERTopicEmbeddingWrapper(embedder)

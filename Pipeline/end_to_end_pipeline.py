@@ -608,7 +608,8 @@ class EndToEndPipeline:
             
             bertopic_provider = BERTopicFeatureProvider(
                 use_svd=self.bertopic_config.get('use_svd', False),
-                svd_components=self.bertopic_config.get('svd_components', 32)
+                svd_components=self.bertopic_config.get('svd_components', 32),
+                embedder=self.embedder  # ✅ AGGIUNTO: passa embedder configurato
             )
             
             print("   🔥 Esecuzione bertopic_provider.fit() su dataset completo...")

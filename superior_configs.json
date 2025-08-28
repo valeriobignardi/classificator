@@ -1,0 +1,74 @@
+{
+  "superior": {
+    "config_name": "SUPERIOR_V1",
+    "parameters": {
+      "use_umap": true,
+      "metric": "euclidean",
+      "alpha": 0.55,
+      "min_cluster_size": 9,
+      "min_samples": 9,
+      "cluster_selection_method": "eom",
+      "cluster_selection_epsilon": 0.22,
+      "umap_metric": "cosine",
+      "umap_min_dist": 0.02,
+      "umap_n_neighbors": 25,
+      "umap_n_components": 48,
+      "umap_random_state": 42,
+      "max_cluster_size": 0,
+      "allow_single_cluster": false,
+      "only_user": false
+    },
+    "expected_performance": {
+      "silhouette_score_range": [
+        0.12,
+        0.18
+      ],
+      "outlier_ratio_range": [
+        0.08,
+        0.15
+      ],
+      "n_clusters_range": [
+        55,
+        75
+      ],
+      "target_quality_score": 0.1
+    }
+  },
+  "ultra": {
+    "config_name": "ULTRA_OPTIMIZED_V1",
+    "parameters": {
+      "use_umap": true,
+      "metric": "euclidean",
+      "alpha": 0.35,
+      "min_cluster_size": 7,
+      "min_samples": 7,
+      "cluster_selection_method": "leaf",
+      "cluster_selection_epsilon": 0.28,
+      "umap_metric": "cosine",
+      "umap_min_dist": 0.0,
+      "umap_n_neighbors": 20,
+      "umap_n_components": 45,
+      "umap_random_state": 42,
+      "max_cluster_size": 0,
+      "allow_single_cluster": false,
+      "only_user": false
+    },
+    "expected_performance": {
+      "outlier_ratio_range": [
+        0.05,
+        0.1
+      ],
+      "n_clusters_range": [
+        70,
+        90
+      ],
+      "silhouette_score_range": [
+        0.08,
+        0.12
+      ],
+      "target_quality_score": 0.09
+    }
+  },
+  "generated_at": "2025-08-28",
+  "rationale": "Configurations designed to exceed all existing performance"
+}

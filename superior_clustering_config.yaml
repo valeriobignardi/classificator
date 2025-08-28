@@ -1,0 +1,43 @@
+# CONFIGURAZIONE CLUSTERING SUPERIORE - HUMANITAS
+# Progettata per SUPERARE tutte le configurazioni esistenti
+# Generata: 2025-08-28
+# Autore: Valerio Bignardi
+# Target: Quality Score > 0.10, Outliers < 15%
+
+clustering:
+  # Parametri HDBSCAN ottimizzati
+  alpha: 0.55
+  metric: "euclidean"
+  min_samples: 9
+  min_cluster_size: 9
+  max_cluster_size: 0
+  cluster_selection_method: "eom"
+  cluster_selection_epsilon: 0.22
+  allow_single_cluster: false
+  
+  # Parametri UMAP ottimizzati per performance superiore
+  use_umap: true
+  umap_metric: "cosine"
+  umap_min_dist: 0.02
+  umap_n_neighbors: 25
+  umap_n_components: 48
+  umap_random_state: 42
+  
+  # Filtri
+  only_user: false
+
+# Performance attese
+expected_performance:
+  silhouette_score: "0.12-0.18"
+  outlier_ratio: "8-15%"
+  n_clusters: "55-75"
+  quality_score: ">0.10"
+  execution_time: "30-45s"
+
+# Metadati
+metadata:
+  config_name: "SUPERIOR_V1"
+  design_approach: "Hybrid optimization combining best elements"
+  tenant_id: "015007d9-d413-11ef-86a5-96000228e7fe"
+  generated_at: "2025-08-28"
+  version: "1.0"

@@ -1,7 +1,7 @@
 clustering_parameters:
   allow_single_cluster: false
-  alpha: 0.4
-  cluster_selection_epsilon: 0.36
+  alpha: 1.4
+  cluster_selection_epsilon: 0.3
   cluster_selection_method: leaf
   max_cluster_size: 0
   metric: euclidean
@@ -9,16 +9,16 @@ clustering_parameters:
   min_samples: 16
   only_user: false
   umap_metric: cosine
-  umap_min_dist: 0
-  umap_n_components: 52
-  umap_n_neighbors: 30
+  umap_min_dist: 0.05
+  umap_n_components: 77
+  umap_n_neighbors: 50
   umap_random_state: 42
   use_umap: true
-last_updated: '2025-08-28T06:59:12.506686'
+last_updated: '2025-08-28T10:29:39.843764'
 previous_config_backup:
   allow_single_cluster: false
   alpha: 0.4
-  cluster_selection_epsilon: 0.31
+  cluster_selection_epsilon: 0.3
   cluster_selection_method: leaf
   max_cluster_size: 0
   metric: euclidean
@@ -26,9 +26,9 @@ previous_config_backup:
   min_samples: 16
   only_user: false
   umap_metric: cosine
-  umap_min_dist: 0
-  umap_n_components: 52
-  umap_n_neighbors: 30
+  umap_min_dist: 0.05
+  umap_n_components: 77
+  umap_n_neighbors: 50
   umap_random_state: 42
   use_umap: true
 tenant_id: 015007d9-d413-11ef-86a5-96000228e7fe

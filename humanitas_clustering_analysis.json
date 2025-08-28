@@ -1,0 +1,242 @@
+{
+  "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+  "tenant_name": "Humanitas",
+  "analysis_date": "2025-08-28",
+  "analysis_summary": {
+    "total_configurations_tested": 22,
+    "best_current_version": 16,
+    "best_quality_score": 0.0854,
+    "best_silhouette_score": 0.1638,
+    "best_outlier_ratio": 0.129,
+    "recommendations": "La configurazione Versione 16 offre la migliore qualità cluster ma con alta percentuale outliers. Le configurazioni 21-22 offrono migliore copertura ma qualità inferiore."
+  },
+  "top_configurations": [
+    {
+      "rank": 1,
+      "version": 16,
+      "quality_score": 0.0854,
+      "silhouette_score": 0.1638,
+      "n_clusters": 19,
+      "n_outliers": 1549,
+      "outlier_ratio": 0.479,
+      "clustering_ratio": 0.521,
+      "execution_time": 18.70,
+      "parameters": {
+        "alpha": 0.5,
+        "metric": "euclidean",
+        "use_umap": false,
+        "only_user": false,
+        "min_samples": 8,
+        "umap_metric": "cosine",
+        "umap_min_dist": 0,
+        "max_cluster_size": 0,
+        "min_cluster_size": 10,
+        "umap_n_neighbors": 30,
+        "umap_n_components": 52,
+        "umap_random_state": 42,
+        "allow_single_cluster": false,
+        "cluster_selection_method": "eom",
+        "cluster_selection_epsilon": 0.15
+      },
+      "pros": ["Buona qualità cluster", "Tempo esecuzione accettabile"],
+      "cons": ["Alta percentuale outliers (47.9%)"]
+    },
+    {
+      "rank": 2,
+      "version": 21,
+      "quality_score": 0.0752,
+      "silhouette_score": 0.0888,
+      "n_clusters": 58,
+      "n_outliers": 498,
+      "outlier_ratio": 0.154,
+      "clustering_ratio": 0.846,
+      "execution_time": 42.85,
+      "parameters": {
+        "alpha": 0.4,
+        "metric": "euclidean",
+        "use_umap": true,
+        "only_user": false,
+        "min_samples": 16,
+        "umap_metric": "cosine",
+        "umap_min_dist": 0,
+        "max_cluster_size": 0,
+        "min_cluster_size": 13,
+        "umap_n_neighbors": 30,
+        "umap_n_components": 52,
+        "umap_random_state": 42,
+        "allow_single_cluster": false,
+        "cluster_selection_method": "leaf",
+        "cluster_selection_epsilon": 0.31
+      },
+      "pros": ["Bassa percentuale outliers", "Numero clusters bilanciato"],
+      "cons": ["Qualità cluster migliorabile"]
+    },
+    {
+      "rank": 3,
+      "version": 22,
+      "quality_score": 0.0728,
+      "silhouette_score": 0.0836,
+      "n_clusters": 51,
+      "n_outliers": 417,
+      "outlier_ratio": 0.129,
+      "clustering_ratio": 0.871,
+      "execution_time": 42.35,
+      "parameters": {
+        "alpha": 0.4,
+        "metric": "euclidean",
+        "use_umap": true,
+        "only_user": false,
+        "min_samples": 16,
+        "umap_metric": "cosine",
+        "umap_min_dist": 0,
+        "max_cluster_size": 0,
+        "min_cluster_size": 13,
+        "umap_n_neighbors": 30,
+        "umap_n_components": 52,
+        "umap_random_state": 42,
+        "allow_single_cluster": false,
+        "cluster_selection_method": "leaf",
+        "cluster_selection_epsilon": 0.36
+      },
+      "pros": ["Bassa percentuale outliers (12.9%)", "Numero clusters bilanciato"],
+      "cons": ["Qualità cluster migliorabile"]
+    }
+  ],
+  "optimized_configurations": [
+    {
+      "name": "QUALITÀ_MASSIMA",
+      "description": "Configurazione per massimizzare la qualità dei cluster (Silhouette Score)",
+      "target_objectives": {
+        "silhouette_score": "> 0.20",
+        "expected_clusters": "25-30",
+        "expected_outlier_ratio": "35-45%"
+      },
+      "parameters": {
+        "alpha": 0.6,
+        "metric": "euclidean",
+        "use_umap": false,
+        "only_user": false,
+        "min_samples": 10,
+        "umap_metric": "cosine",
+        "umap_min_dist": 0.1,
+        "max_cluster_size": 0,
+        "min_cluster_size": 12,
+        "umap_n_neighbors": 30,
+        "umap_n_components": 52,
+        "umap_random_state": 42,
+        "allow_single_cluster": false,
+        "cluster_selection_method": "eom",
+        "cluster_selection_epsilon": 0.12
+      },
+      "use_case": "Quando la qualità semantica dei cluster è più importante della copertura completa"
+    },
+    {
+      "name": "COPERTURA_MASSIMA",
+      "description": "Configurazione per minimizzare gli outliers e massimizzare la copertura",
+      "target_objectives": {
+        "outlier_ratio": "< 20%",
+        "expected_clusters": "60-80",
+        "expected_silhouette": "0.08-0.12"
+      },
+      "parameters": {
+        "alpha": 0.3,
+        "metric": "euclidean",
+        "use_umap": true,
+        "only_user": false,
+        "min_samples": 6,
+        "umap_metric": "cosine",
+        "umap_min_dist": 0.0,
+        "max_cluster_size": 0,
+        "min_cluster_size": 8,
+        "umap_n_neighbors": 30,
+        "umap_n_components": 52,
+        "umap_random_state": 42,
+        "allow_single_cluster": false,
+        "cluster_selection_method": "leaf",
+        "cluster_selection_epsilon": 0.25
+      },
+      "use_case": "Quando è importante categorizzare quante più conversazioni possibile"
+    },
+    {
+      "name": "BILANCIATA",
+      "description": "Configurazione bilanciata tra qualità e copertura",
+      "target_objectives": {
+        "silhouette_score": "0.10-0.15",
+        "outlier_ratio": "25-30%",
+        "expected_clusters": "40-50"
+      },
+      "parameters": {
+        "alpha": 0.45,
+        "metric": "euclidean",
+        "use_umap": true,
+        "only_user": false,
+        "min_samples": 8,
+        "umap_metric": "cosine",
+        "umap_min_dist": 0.05,
+        "max_cluster_size": 0,
+        "min_cluster_size": 10,
+        "umap_n_neighbors": 30,
+        "umap_n_components": 52,
+        "umap_random_state": 42,
+        "allow_single_cluster": false,
+        "cluster_selection_method": "eom",
+        "cluster_selection_epsilon": 0.18
+      },
+      "use_case": "Configurazione raccomandata per la maggior parte dei casi d'uso"
+    }
+  ],
+  "test_plan": {
+    "step_1": {
+      "action": "Testare configurazione BILANCIATA",
+      "rationale": "Baseline equilibrata per valutare performance generali"
+    },
+    "step_2": {
+      "action": "Se Silhouette Score < 0.12, testare QUALITÀ_MASSIMA",
+      "rationale": "Migliorare la qualità semantica dei cluster"
+    },
+    "step_3": {
+      "action": "Se Outlier Ratio > 30%, testare COPERTURA_MASSIMA", 
+      "rationale": "Ridurre il numero di conversazioni non categorizzate"
+    },
+    "step_4": {
+      "action": "Fine-tuning incrementale",
+      "rationale": "Ottimizzazione graduale dei parametri migliori"
+    }
+  },
+  "performance_targets": {
+    "silhouette_score": {
+      "minimum": 0.10,
+      "good": 0.15,
+      "excellent": 0.20
+    },
+    "outlier_ratio": {
+      "maximum": 0.40,
+      "good": 0.25,
+      "excellent": 0.15
+    },
+    "n_clusters": {
+      "minimum": 15,
+      "optimal_range": [30, 60],
+      "maximum": 100
+    },
+    "execution_time": {
+      "maximum_seconds": 300,
+      "acceptable_seconds": 180,
+      "optimal_seconds": 60
+    }
+  },
+  "parameter_insights": {
+    "use_umap": "False produce migliore Silhouette, True migliore copertura",
+    "metric": "Euclidean funziona meglio per questo dataset",
+    "cluster_selection_method": "EOM per qualità, Leaf per copertura",
+    "min_cluster_size": "10-15 range ottimale, più basso = più cluster",
+    "alpha": "0.4-0.6 range ottimale, più alto = cluster più compatti",
+    "cluster_selection_epsilon": "0.12-0.25, più alto = meno outliers"
+  },
+  "production_recommendation": {
+    "primary_choice": "BILANCIATA",
+    "fallback_choice": "Versione 22 (migliore copertura attuale)",
+    "monitoring_metrics": ["silhouette_score", "outlier_ratio", "cluster_count", "execution_time"],
+    "retest_frequency": "Ogni 1000 nuove conversazioni o mensile"
+  }
+}

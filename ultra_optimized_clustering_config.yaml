@@ -1,0 +1,41 @@
+# CONFIGURAZIONE CLUSTERING ULTRA OPTIMIZED - HUMANITAS  
+# Configurazione ESTREMAMENTE aggressiva per massima copertura
+# Generata: 2025-08-28
+# Target: Outliers < 10%, massima granularità
+
+clustering:
+  # Parametri HDBSCAN ultra-ottimizzati
+  alpha: 0.35
+  metric: "euclidean"
+  min_samples: 7
+  min_cluster_size: 7
+  max_cluster_size: 0
+  cluster_selection_method: "leaf"
+  cluster_selection_epsilon: 0.28
+  allow_single_cluster: false
+  
+  # Parametri UMAP per copertura estrema
+  use_umap: true
+  umap_metric: "cosine"
+  umap_min_dist: 0.0
+  umap_n_neighbors: 20
+  umap_n_components: 45
+  umap_random_state: 42
+  
+  # Filtri
+  only_user: false
+
+# Performance attese
+expected_performance:
+  outlier_ratio: "5-10%"
+  n_clusters: "70-90"
+  silhouette_score: "0.08-0.12"
+  quality_score: "0.08-0.11"
+
+# Metadati  
+metadata:
+  config_name: "ULTRA_OPTIMIZED_V1"
+  design_approach: "Extreme coverage optimization"
+  tenant_id: "015007d9-d413-11ef-86a5-96000228e7fe"
+  generated_at: "2025-08-28"
+  version: "1.0"

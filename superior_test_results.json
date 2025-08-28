@@ -1,0 +1,21 @@
+{
+  "test_date": "2025-08-28T09:55:21.478540",
+  "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+  "results_summary": [
+    {
+      "config": "SUPERIOR V1",
+      "version": null,
+      "quality_score": 0,
+      "success": false
+    },
+    {
+      "config": "ULTRA OPTIMIZED V1",
+      "version": null,
+      "quality_score": 0,
+      "success": false
+    }
+  ],
+  "new_records_count": 0,
+  "best_previous_quality_score": 0.0854,
+  "improvement_achieved": false
+}

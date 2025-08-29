@@ -29,6 +29,10 @@ from labse_embedder import LaBSEEmbedder
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__))))
 from mongo_classification_reader import MongoClassificationReader
 
+# Import per oggetto Tenant
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
+from tenant import Tenant
+
 class SemanticMemoryManager:
     """
     Gestisce la memoria semantica delle classificazioni esistenti per
@@ -36,19 +40,25 @@ class SemanticMemoryManager:
     """
     
     def __init__(self, 
+                 tenant: Tenant,  # OGGETTO TENANT OBBLIGATORIO
                  config_path: str = None,
-                 embedder: Optional[LaBSEEmbedder] = None,
-                 tenant_name: str = None):
+                 embedder: Optional[LaBSEEmbedder] = None):
         """
         Inizializza il gestore della memoria semantica
+        CAMBIO RADICALE: USA OGGETTO TENANT
         
         Args:
+            tenant: Oggetto Tenant completo con tutti i dati (OBBLIGATORIO)
             config_path: Percorso del file di configurazione
             embedder: Embedder per generare rappresentazioni semantiche
-            tenant_name: Nome del tenant per cache isolation
         """
-        # Salva tenant per naming tenant-aware
-        self.tenant_name = tenant_name
+        # VALIDA OGGETTO TENANT
+        if not hasattr(tenant, 'tenant_id') or not hasattr(tenant, 'tenant_name') or not hasattr(tenant, 'tenant_slug'):
+            raise TypeError("Il parametro 'tenant' deve essere un oggetto Tenant valido")
+            
+        # Salva oggetto tenant
+        self.tenant = tenant
+        self.tenant_name = tenant.tenant_name  # Mantieni per compatibilità
         
         # Carica configurazione
         if config_path is None:
@@ -76,8 +86,8 @@ class SemanticMemoryManager:
         self.embedder = embedder or LaBSEEmbedder()
         self.db_connector = TagDatabaseConnector()
         
-        # MongoDB reader per classificazioni (sostituisce MySQL session_classifications)
-        self.mongo_reader = MongoClassificationReader()
+        # MongoDB reader per classificazioni con OGGETTO TENANT
+        self.mongo_reader = MongoClassificationReader(tenant=self.tenant)
         
         # Crea directory cache prima di tutto
         os.makedirs(self.cache_path, exist_ok=True)
@@ -129,9 +139,9 @@ class SemanticMemoryManager:
             sys.path.append(os.path.dirname(os.path.dirname(__file__)))
             from mongo_classification_reader import MongoClassificationReader
             
-            # Usa la funzione helper per generare il percorso
-            mongo_reader = MongoClassificationReader()
-            tenant_cache_path = mongo_reader.generate_semantic_cache_path(self.tenant_name, "memory")
+            # Usa la funzione helper per generare il percorso con OGGETTO TENANT
+            mongo_reader = MongoClassificationReader(tenant=self.tenant)
+            tenant_cache_path = mongo_reader.generate_semantic_cache_path(self.tenant.tenant_name, "memory")
             
             return tenant_cache_path
             

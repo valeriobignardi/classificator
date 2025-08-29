@@ -19,6 +19,10 @@ from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
 from datetime import datetime
 
+# Aggiungi path per la classe Tenant
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Utils'))
+from tenant import Tenant
+
 # Import della funzione centralizzata per conversione NumPy
 from Utils.numpy_serialization import convert_numpy_types
 import json
@@ -74,7 +78,7 @@ class QualityGateEngine:
     """
     
     def __init__(self, 
-                 tenant_name: str,
+                 tenant,  # OGGETTO TENANT OBBLIGATORIO
                  training_log_path: str = None,
                  config: Dict[str, Any] = None,
                  confidence_threshold: float = None,
@@ -83,9 +87,10 @@ class QualityGateEngine:
                  novelty_threshold: float = None):
         """
         Inizializza il QualityGateEngine per un specifico tenant.
+        CAMBIO RADICALE: USA OGGETTO TENANT
         
         Args:
-            tenant_name: Nome del tenant (cliente)
+            tenant: Oggetto Tenant completo (OBBLIGATORIO)
             training_log_path: Percorso del file di log per le decisioni di training (opzionale)
             config: Configurazione aggiuntiva (opzionale)
             confidence_threshold: Soglia di confidenza personalizzata (sovrascrive config)
@@ -93,8 +98,13 @@ class QualityGateEngine:
             uncertainty_threshold: Soglia di incertezza personalizzata (sovrascrive config)
             novelty_threshold: Soglia di novità personalizzata (sovrascrive config)
         """
-        self.tenant_name = tenant_name
-        self.training_log_path = training_log_path or f"training_decisions_{tenant_name}.jsonl"
+        # VALIDA OGGETTO TENANT
+        if not hasattr(tenant, 'tenant_id') or not hasattr(tenant, 'tenant_name') or not hasattr(tenant, 'tenant_slug'):
+            raise TypeError("Il parametro 'tenant' deve essere un oggetto Tenant valido")
+            
+        self.tenant = tenant
+        self.tenant_name = tenant.tenant_name  # Mantieni per compatibilità 
+        self.training_log_path = training_log_path or f"training_decisions_{tenant.tenant_slug}.jsonl"
         
         # Usa config fornito o carica dal file
         if config is None:
@@ -119,9 +129,9 @@ class QualityGateEngine:
         self.uncertainty_threshold = uncertainty_threshold if uncertainty_threshold is not None else self.quality_config.get('uncertainty_threshold', 0.5)
         self.novelty_threshold = novelty_threshold if novelty_threshold is not None else self.quality_config.get('novelty_threshold', 0.8)
         
-        # Inizializza MongoReader per gestire review cases
+        # Inizializza MongoReader per gestire review cases con OGGETTO TENANT
         from mongo_classification_reader import MongoClassificationReader
-        self.mongo_reader = MongoClassificationReader()
+        self.mongo_reader = MongoClassificationReader(tenant=self.tenant)
         self.mongo_reader.connect()
         
         # Inizializza dizionario per pending reviews (in-memory cache)
@@ -130,7 +140,7 @@ class QualityGateEngine:
         # Inizializza SemanticMemoryManager per novelty detection
         try:
             if SemanticMemoryManager is not None:
-                self.semantic_memory = SemanticMemoryManager(tenant_name=self.tenant_name)
+                self.semantic_memory = SemanticMemoryManager(tenant=self.tenant)
                 self.semantic_memory.load_semantic_memory()
                 self.logger.info(f"SemanticMemoryManager inizializzato per novelty detection - Tenant: {self.tenant_name}")
             else:
@@ -140,7 +150,7 @@ class QualityGateEngine:
             self.logger.warning(f"Errore inizializzazione SemanticMemoryManager: {e}")
             self.semantic_memory = None
         
-        self.logger.info(f"QualityGate inizializzato per tenant {tenant_name} con soglie: "
+        self.logger.info(f"QualityGate inizializzato per tenant {self.tenant.tenant_name} con soglie: "
                         f"confidence={self.confidence_threshold}, disagreement={self.disagreement_threshold}, "
                         f"uncertainty={self.uncertainty_threshold}")
         self.logger.info(f"Log training: {self.training_log_path}")
@@ -960,13 +970,13 @@ class QualityGateEngine:
             # USA MONGODB CLASSIFICATION READER per ottenere conversazioni classificate
             from mongo_classification_reader import MongoClassificationReader
             
-            # Inizializza il reader MongoDB
-            mongo_reader = MongoClassificationReader()
+            # Inizializza il reader MongoDB con OGGETTO TENANT
+            mongo_reader = MongoClassificationReader(tenant=self.tenant)
             mongo_reader.connect()
             
             try:
-                # Ottieni tutte le sessioni classificate dal MongoDB per il cliente 'humanitas'
-                all_sessions = mongo_reader.get_all_sessions("humanitas")
+                # Ottieni tutte le sessioni classificate dal MongoDB per questo tenant
+                all_sessions = mongo_reader.get_all_sessions()
                 
                 # Crea un dizionario per accesso rapido alle sessioni per session_id
                 sessions_dict = {}

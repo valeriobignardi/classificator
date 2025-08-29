@@ -286,13 +286,19 @@ class IntelligentClassifier:
                     print(f"⚠️ MySQL connector non disponibile: {e}")
                 self.mysql_connector = None
 
-        # MongoDB connector (se disponibile) - USA IL CONNETTORE GIUSTO
+        # MongoDB connector (se disponibile) - USA OGGETTO TENANT
         self.mongo_reader = None
         if MONGODB_AVAILABLE:
             try:
-                self.mongo_reader = MongoClassificationReader()
-                if enable_logging:
-                    print(f"🗄️ MongoDB reader inizializzato")
+                # Verifica che abbiamo un tenant valido per MongoDB
+                if self.tenant:
+                    self.mongo_reader = MongoClassificationReader(tenant=self.tenant)
+                    if enable_logging:
+                        print(f"🗄️ MongoDB reader inizializzato per tenant: {self.tenant.tenant_name}")
+                else:
+                    if enable_logging:
+                        print(f"⚠️ MongoDB reader non inizializzato: tenant mancante")
+                    self.mongo_reader = None
             except Exception as e:
                 if enable_logging:
                     print(f"⚠️ MongoDB reader non disponibile: {e}")

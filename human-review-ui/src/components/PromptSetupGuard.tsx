@@ -70,10 +70,10 @@ const PromptSetupGuard: React.FC<PromptSetupGuardProps> = ({ children }) => {
     try {
       await apiService.createPromptFromTemplate(
         selectedTenant.tenant_id,
-        selectedTenant.nome,
+        selectedTenant.tenant_name,
         {
           customize_prompts: true,
-          system_customization: customization || `per ${selectedTenant.nome}`
+          system_customization: customization || `per ${selectedTenant.tenant_name}`
         }
       );
 
@@ -95,7 +95,7 @@ const PromptSetupGuard: React.FC<PromptSetupGuardProps> = ({ children }) => {
           ⚠️ Configurazione Prompt Obbligatoria
         </Typography>
         <Typography>
-          Il tenant <strong>{selectedTenant.nome}</strong> non ha i prompt LLM obbligatori configurati.
+          Il tenant <strong>{selectedTenant.tenant_name}</strong> non ha i prompt LLM obbligatori configurati.
           È necessario configurarli prima di utilizzare le funzionalità di classificazione.
         </Typography>
       </Alert>
@@ -144,7 +144,7 @@ const PromptSetupGuard: React.FC<PromptSetupGuardProps> = ({ children }) => {
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             Possiamo creare automaticamente i prompt necessari utilizzando il template di Humanitas
-            come base, personalizzandolo per {selectedTenant.nome}.
+            come base, personalizzandolo per {selectedTenant.tenant_name}.
           </Typography>
 
           <Button
@@ -166,7 +166,7 @@ const PromptSetupGuard: React.FC<PromptSetupGuardProps> = ({ children }) => {
       {/* Dialog per personalizzazione */}
       <Dialog open={createDialogOpen} onClose={() => setCreateDialogOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>
-          Configura Prompt per {selectedTenant.nome}
+          Configura Prompt per {selectedTenant.tenant_name}
         </DialogTitle>
         <DialogContent>
           <Typography variant="body2" sx={{ mb: 2 }}>
@@ -177,7 +177,7 @@ const PromptSetupGuard: React.FC<PromptSetupGuardProps> = ({ children }) => {
           <TextField
             fullWidth
             label="Personalizzazione Sistema"
-            placeholder={`per ${selectedTenant.nome}`}
+            placeholder={`per ${selectedTenant.tenant_name}`}
             value={customization}
             onChange={(e) => setCustomization(e.target.value)}
             helperText="Es: 'per la compagnia assicurativa Alleanza', 'per l'ospedale San Raffaele', ecc."

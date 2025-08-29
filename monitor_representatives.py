@@ -21,7 +21,17 @@ def monitor_representatives():
     print("🔍 Monitoraggio rappresentanti in tempo reale...")
     
     try:
-        mongo_reader = MongoClassificationReader()
+        # CORREZIONE: Usa il primo tenant disponibile per il monitoraggio
+        tenant_objects = MongoClassificationReader.get_available_tenants()
+        if not tenant_objects:
+            print("❌ Nessun tenant trovato nel database")
+            return
+        
+        # Usa il primo tenant disponibile
+        test_tenant = tenant_objects[0]
+        print(f"📝 Monitoraggio per tenant: {test_tenant.tenant_name}")
+        
+        mongo_reader = MongoClassificationReader(tenant=test_tenant)
         
         # Controlla rappresentanti recenti (ultimi 5 minuti)
         from datetime import datetime, timedelta

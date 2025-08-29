@@ -117,7 +117,16 @@ class MistralFineTuningManager:
         if tenant_slug:
             sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
             from mongo_classification_reader import MongoClassificationReader
-            self.mongo_reader = MongoClassificationReader()
+            from Utils.tenant import Tenant
+            
+            # Crea oggetto Tenant dal tenant_slug per il MongoClassificationReader
+            try:
+                tenant_obj = Tenant.from_slug(tenant_slug)
+                self.mongo_reader = MongoClassificationReader(tenant=tenant_obj)
+                print(f"🗄️ MongoClassificationReader inizializzato per tenant: {tenant_obj.tenant_name}")
+            except Exception as e:
+                print(f"⚠️ Errore creazione tenant da slug '{tenant_slug}': {e}")
+                self.mongo_reader = None
         else:
             self.mongo_reader = None
         

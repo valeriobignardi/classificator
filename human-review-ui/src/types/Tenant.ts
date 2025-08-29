@@ -1,6 +1,7 @@
 export interface Tenant {
   tenant_id: string;
-  nome: string;
+  tenant_name: string;
+  tenant_slug?: string;
   is_active?: boolean;
 }
 

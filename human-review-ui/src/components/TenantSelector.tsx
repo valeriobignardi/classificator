@@ -224,7 +224,7 @@ const TenantSelector: React.FC<TenantSelectorProps> = ({
                       >
                         <Box display="flex" alignItems="center" gap={1} width="100%">
                           <Typography variant="body1" fontWeight="medium">
-                            {tenant.nome}
+                            {tenant.tenant_name}
                           </Typography>
                           {tenant.is_active && (
                             <Chip
@@ -267,7 +267,7 @@ const TenantSelector: React.FC<TenantSelectorProps> = ({
                     🏢 Tenant Corrente:
                   </Typography>
                   <Typography variant="h6" color="success.dark" fontWeight="bold" sx={{ mb: 0.5 }}>
-                    {selectedTenant.nome}
+                    {selectedTenant.tenant_name}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
                     ID completo: {selectedTenant.tenant_id}

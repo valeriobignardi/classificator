@@ -25,6 +25,7 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Semant
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'LLMClassifier'))
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'HumanReview'))
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'LabelDeduplication'))
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
 
 from lettore import LettoreConversazioni
 from session_aggregator import SessionAggregator
@@ -57,6 +58,7 @@ from mongo_classification_reader import MongoClassificationReader
 # 🆕 Import per gestione parametri tenant UMAP
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
 from tenant_config_helper import TenantConfigHelper
+from tenant import Tenant
 
 # Import BERTopic provider
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'TopicModeling'))
@@ -108,8 +110,9 @@ class EndToEndPipeline:
         self.tenant_id = self.tenant.tenant_id
         self.tenant_slug = self.tenant.tenant_slug
         
-        # Inizializza helper per naming tenant-aware
-        self.mongo_reader = MongoClassificationReader()
+        # CAMBIO RADICALE: Non più inizializzazione globale di MongoClassificationReader
+        # Ogni operazione creerà istanza tenant-specifica quando necessario
+        self.mongo_reader = None  # Placeholder - istanze create dinamicamente
         
         # 🆕 Inizializza helper per parametri tenant UMAP
         self.config_helper = TenantConfigHelper()
@@ -1449,18 +1452,19 @@ class EndToEndPipeline:
         
         return saved_count
     
-    def update_propagated_after_review(self, cluster_id: int):
+    def update_propagated_after_review(self, cluster_id: int, tenant_uuid: str):
         """
         Aggiorna status propagated dopo review umana di un rappresentante
         
         Scopo della funzione: Trigger automatico dopo review umana rappresentanti
-        Parametri di input: cluster_id del cluster reviewato
+        Parametri di input: cluster_id del cluster reviewato, tenant_uuid del tenant
         Parametri di output: numero sessioni propagate aggiornate
         Valori di ritorno: conteggio aggiornamenti effettuati
-        Tracciamento aggiornamenti: 2025-08-28 - Nuovo per logica dinamica
+        Tracciamento aggiornamenti: 2025-08-29 - Modificato per oggetto Tenant
         
         Args:
             cluster_id: ID del cluster i cui rappresentanti sono stati reviewed
+            tenant_uuid: UUID del tenant per creare l'oggetto Tenant
             
         Returns:
             int: Numero di sessioni propagate aggiornate
@@ -1468,12 +1472,15 @@ class EndToEndPipeline:
         Nota: Chiamato automaticamente ogni volta che un rappresentante viene reviewed
         
         Autore: Valerio Bignardi  
-        Data: 2025-08-28
+        Data: 2025-08-29
         """
         
         try:
+            # Crea oggetto Tenant
+            tenant = Tenant.from_uuid(tenant_uuid)
+            
             from mongo_classification_reader import MongoClassificationReader
-            mongo_reader = MongoClassificationReader()
+            mongo_reader = MongoClassificationReader(tenant=tenant)
             mongo_reader.connect()  # Stabilisce connessione database
             
             # 1. Ottieni tutti i rappresentanti del cluster
@@ -1965,7 +1972,8 @@ class EndToEndPipeline:
                 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
                 from mongo_classification_reader import MongoClassificationReader
                 
-                mongo_reader = MongoClassificationReader()
+                # CAMBIO RADICALE: Usa oggetto Tenant
+                mongo_reader = MongoClassificationReader(tenant=self.tenant)
                 
                 # Cancella tutte le classificazioni del tenant
                 clear_result = mongo_reader.clear_tenant_collection(self.tenant_slug)
@@ -2197,7 +2205,8 @@ class EndToEndPipeline:
                 # 🆕 SALVA USANDO SOLO MONGODB (SISTEMA UNIFICATO)
                 from mongo_classification_reader import MongoClassificationReader
                 
-                mongo_reader = MongoClassificationReader()
+                # CAMBIO RADICALE: Usa oggetto Tenant
+                mongo_reader = MongoClassificationReader(tenant=self.tenant)
                 
                 # Estrai dati ensemble se disponibili
                 ml_result = None
@@ -4101,7 +4110,8 @@ class EndToEndPipeline:
                     # Usa il connettore MongoDB per salvataggio unificato
                     from mongo_classification_reader import MongoClassificationReader
                     
-                    mongo_reader = MongoClassificationReader()
+                    # CAMBIO RADICALE: Usa oggetto Tenant
+                    mongo_reader = MongoClassificationReader(tenant=self.tenant)
                     
                     # 🆕 CLASSIFICA LA SESSIONE CON L'ENSEMBLE PRIMA DEL SALVATAGGIO
                     # Questo risolve il problema N/A nell'interfaccia di review
@@ -4192,10 +4202,11 @@ class EndToEndPipeline:
                     # Usa il connettore MongoDB corretto
                     from mongo_classification_reader import MongoClassificationReader
                     
-                    # Genera tenant_id consistente
-                    tenant_id = hashlib.md5(self.tenant_slug.encode()).hexdigest()[:16]
+                    # CAMBIO RADICALE: Usa oggetto Tenant (non più hash manuale)
+                    # tenant_id = hashlib.md5(self.tenant_slug.encode()).hexdigest()[:16]
                     
-                    mongo_reader = MongoClassificationReader()
+                    # CAMBIO RADICALE: Usa oggetto Tenant
+                    mongo_reader = MongoClassificationReader(tenant=self.tenant)
                     
                     # Usa il metodo corretto save_classification_result
                     

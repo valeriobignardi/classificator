@@ -329,7 +329,7 @@ const ClusteringStatisticsManager: React.FC = () => {
             </Box>
             <Box display="flex" alignItems="center" gap={1}>
               <Chip 
-                label={selectedTenant.nome} 
+                label={selectedTenant.tenant_name} 
                 color="primary" 
                 variant="outlined" 
               />

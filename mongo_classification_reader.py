@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 """
-Author: System
-Date: 2025-08-21
+Author: Valerio Bignardi
+Date: 2025-08-29
 Description: Reader per classificazioni da MongoDB
-Last Update: 2025-08-21
+Last Update: 2025-08-29
 
 MongoDB Classification Reader - Legge le classificazioni direttamente da MongoDB
 per l'interfaccia web React
+
+AGGIORNATO: Supporta oggetto Tenant centralizzato per eliminare conversioni ridondanti
 """
 
 from pymongo import MongoClient
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 import os
+import sys
+
+# Import della classe Tenant
+sys.path.append(os.path.join(os.path.dirname(__file__), 'Utils'))
+from tenant import Tenant
 
 
 class MongoClassificationReader:
@@ -33,32 +40,35 @@ class MongoClassificationReader:
     Ultimo aggiornamento: 2025-08-21
     """
     
-    def __init__(self, mongodb_url: str = "mongodb://localhost:27017", 
-                 database_name: str = "classificazioni", 
-                 tenant_name: str = None,
-                 collection_name: str = None):
+    def __init__(self, tenant: Tenant, 
+                 mongodb_url: str = "mongodb://localhost:27017", 
+                 database_name: str = "classificazioni"):
         """
-        Inizializza il reader MongoDB con supporto tenant-based collections
+        Inizializza il reader MongoDB con OGGETTO TENANT OBBLIGATORIO
+        CAMBIO RADICALE: Elimina tutte le stringhe, USA SOLO OGGETTO TENANT
         
         Args:
-            tenant_name: Se specificato, usa collection {tenant_slug}_{tenant_id}
-            collection_name: Collection legacy (per backward compatibility)
+            tenant: Oggetto Tenant completo con tutti i dati (OBBLIGATORIO)
+            mongodb_url: URL di connessione MongoDB
+            database_name: Nome del database
         """
+        if not hasattr(tenant, 'tenant_id') or not hasattr(tenant, 'tenant_name') or not hasattr(tenant, 'tenant_slug'):
+            raise TypeError(f"Il parametro 'tenant' deve essere un oggetto Tenant con attributi tenant_id, tenant_name, tenant_slug. Ricevuto: {type(tenant)} - {tenant}")
+            
+        self.tenant = tenant
         self.mongodb_url = mongodb_url
         self.database_name = database_name
-        self.tenant_name = tenant_name
         
-        # Determina collection name usando il metodo corretto per pattern multi-tenant
-        if collection_name:
-            # Collection esplicita per backward compatibility
-            self.collection_name = collection_name
-        else:
-            # Usa il metodo get_collection_name per pattern {tenant_slug}_{tenant_id}
-            self.collection_name = self.get_collection_name(tenant_name)
+        # Collection name basata su tenant object
+        self.collection_name = self.get_collection_name()
             
         # Database e Client
         self.client = None
         self.db = None
+        
+        print(f"✅ MongoClassificationReader inizializzato per tenant: {tenant.tenant_name}")
+        print(f"   📊 Collection: {self.collection_name}")
+        print(f"   🏢 Database: {database_name}")
     
     def get_tenant_id_from_name(self, tenant_name: str) -> Optional[str]:
         """
@@ -234,39 +244,24 @@ class MongoClassificationReader:
             print(f"Errore nel recupero info tenant '{tenant_name}': {e}")
             return None
 
-    def get_collection_name(self, tenant_name: str = None) -> str:
+    def get_collection_name(self) -> str:
         """
-        Genera il nome della collection MongoDB per il tenant usando pattern {tenant_slug}_{tenant_id}
+        Genera il nome della collection MongoDB per il tenant usando l'oggetto Tenant
+        CAMBIO RADICALE: USA SOLO L'OGGETTO TENANT INTERNO
         
-        Args:
-            tenant_name: Nome del tenant (opzionale)
-            
         Returns:
             Nome della collection per il tenant: {tenant_slug}_{tenant_id}
             
-        Ultimo aggiornamento: 2025-08-23
+        Ultimo aggiornamento: 2025-08-29
         """
-        effective_tenant = tenant_name or self.tenant_name
+        # Usa direttamente l'oggetto Tenant per generare nome collection
+        safe_tenant_slug = self.tenant.tenant_slug.replace(' ', '_').replace('-', '_').lower()
         
-        if effective_tenant:
-            # USA IL METODO UNIFICATO generate_collection_name
-            return self.generate_collection_name(effective_tenant)
-        else:
-            return "client_session_classifications"  # Fallback legacy
-    
-    def set_tenant(self, tenant_name: str):
-        """
-        Cambia il tenant attivo e riconfigura la collection
+        # FORMATO MONGODB: {tenant_slug}_{tenant_id_completo}
+        collection_name = f"{safe_tenant_slug}_{self.tenant.tenant_id}"
         
-        Args:
-            tenant_name: Nome del nuovo tenant
-        """
-        self.tenant_name = tenant_name
-        self.collection_name = self.get_collection_name(tenant_name)
-        
-        # Se già connesso, aggiorna la collection
-        if self.db is not None:
-            self.collection = self.db[self.collection_name]
+        print(f"📊 Collection generata: {collection_name} per tenant {self.tenant.tenant_name}")
+        return collection_name
     
     def connect(self) -> bool:
         """
@@ -379,47 +374,33 @@ class MongoClassificationReader:
             print("⚠️ Connessione MongoDB morta, riconnessione...")
             return self.connect()
     
-    def get_all_sessions(self, client_name: str = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_all_sessions(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """
-        Scopo: Recupera tutte le sessioni classificate per un cliente/tenant
-        
-        AGGIORNATO: Supporta tenant-based collections
+        Scopo: Recupera tutte le sessioni classificate per il tenant
+        CAMBIO RADICALE: USA SEMPRE L'OGGETTO TENANT INTERNO
         
         Parametri input:
-            - client_name: Nome del cliente/tenant (opzionale se già impostato nell'istanza)
             - limit: Numero massimo di sessioni da recuperare
             
         Output:
             - Lista di sessioni con classificazioni
             
-        Ultimo aggiornamento: 2025-08-21
+        Ultimo aggiornamento: 2025-08-29
         """
-        # Determina il tenant effettivo
-        effective_tenant = client_name or self.tenant_name
-        
-        # Se il tenant è diverso da quello attuale, cambia collection
-        if client_name and client_name != self.tenant_name:
-            self.set_tenant(client_name)
-        
         # Ensure we're connected to MongoDB
         if not self.ensure_connection():
             print("❌ Impossibile connettersi a MongoDB")
             return []
-        
+
         try:
-            # Usa la collection appropriata per il tenant
-            collection = self.db[self.get_collection_name()]
+            # Usa la collection del tenant
+            collection = self.db[self.collection_name]
             
-            # NUOVO: Query semplificata (no filtro "client" per tenant-based collections)
-            if self.tenant_name:
-                # Collection per tenant: non serve filtro client
-                query = {"review_status": {"$in": ["auto_classified", "resolved", "not_required"]}}
-            else:
-                # Fallback legacy: usa filtro client per collection condivisa
-                query = {
-                    "client": effective_tenant,
-                    "review_status": {"$in": ["auto_classified", "resolved", "not_required"]}
-                }
+            print(f"📊 Recupero sessioni per tenant: {self.tenant.tenant_name}")
+            print(f"   📂 Collection: {self.collection_name}")
+            
+            # Query semplificata: usa sempre collection per tenant (non serve filtro client)
+            query = {"review_status": {"$in": ["auto_classified", "resolved", "not_required"]}}
             
             # Proiezione per escludere embedding (troppo pesante)
             projection = {
@@ -451,7 +432,8 @@ class MongoClassificationReader:
                     'method': doc.get('classification_method', doc.get('metadata', {}).get('method', 'unknown')),
                     'processing_time': doc.get('metadata', {}).get('processing_time', 0.0),
                     'timestamp': doc.get('classified_at', doc.get('timestamp')),
-                    'tenant_name': effective_tenant,  # AGGIORNATO: usa tenant effettivo
+                    'tenant_name': self.tenant.tenant_name,  # USA OGGETTO TENANT
+                    'tenant_id': self.tenant.tenant_id,      # AGGIUNGI ANCHE TENANT_ID
                     
                     # NUOVI CAMPI: Dettagli ML/LLM 
                     'ml_prediction': doc.get('ml_prediction', ''),
@@ -482,41 +464,27 @@ class MongoClassificationReader:
             print(f"Errore nel recupero sessioni: {e}")
             return []
     
-    def get_available_labels(self, client_name: str = None) -> List[str]:
+    def get_available_labels(self) -> List[str]:
         """
-        Scopo: Recupera tutte le etichette/classificazioni disponibili per un cliente/tenant
+        Scopo: Recupera tutte le etichette/classificazioni disponibili per il tenant
+        CAMBIO RADICALE: USA SEMPRE L'OGGETTO TENANT INTERNO
         
-        AGGIORNATO: Supporta tenant-based collections
-        
-        Parametri input:
-            - client_name: Nome del cliente/tenant (opzionale se già impostato nell'istanza)
-            
         Output:
-            - Lista di etichette unique
+            - Lista di etichette unique per il tenant
             
-        Ultimo aggiornamento: 2025-08-21
+        Ultimo aggiornamento: 2025-08-29
         """
-        # Determina il tenant effettivo
-        effective_tenant = client_name or self.tenant_name
-        
-        # Se il tenant è diverso da quello attuale, cambia collection
-        if client_name and client_name != self.tenant_name:
-            self.set_tenant(client_name)
-            
         try:
             if not self.ensure_connection():
                 return []
                 
-            # Usa la collection appropriata per il tenant
-            collection = self.db[self.get_collection_name()]
+            # Usa la collection del tenant
+            collection = self.db[self.collection_name]
             
-            # NUOVO: Query semplificata per tenant-based collections
-            if self.tenant_name:
-                # Collection per tenant: non serve filtro client
-                filter_query = {}
-            else:
-                # Fallback legacy: usa filtro client
-                filter_query = {"client": effective_tenant}
+            print(f"🏷️ Recupero etichette per tenant: {self.tenant.tenant_name}")
+            
+            # Query semplificata: usa collection per tenant (non serve filtro client)
+            filter_query = {}
                 
             # Recupera etichette distinct
             labels = collection.distinct("classification", filter_query)
@@ -536,44 +504,28 @@ class MongoClassificationReader:
             print(f"Errore nel recupero etichette: {e}")
             return []
     
-    def get_classification_stats(self, client_name: str = None) -> Dict[str, Any]:
+    def get_classification_stats(self) -> Dict[str, Any]:
         """
-        Scopo: Recupera statistiche sulle classificazioni per un cliente/tenant
+        Scopo: Recupera statistiche sulle classificazioni per il tenant
+        CAMBIO RADICALE: USA SEMPRE L'OGGETTO TENANT INTERNO
         
-        AGGIORNATO: Supporta tenant-based collections
-        
-        Parametri input:
-            - client_name: Nome del cliente/tenant (opzionale se già impostato nell'istanza)
-            
         Output:
-            - Dizionario con statistiche dettagliate
+            - Dizionario con statistiche dettagliate per il tenant
             
-        Ultimo aggiornamento: 2025-08-21
+        Ultimo aggiornamento: 2025-08-29
         """
-        # Determina il tenant effettivo
-        effective_tenant = client_name or self.tenant_name
-        
-        # Se il tenant è diverso da quello attuale, cambia collection
-        if client_name and client_name != self.tenant_name:
-            self.set_tenant(client_name)
-            
         try:
             if not self.ensure_connection():
-                return []
+                return {}
                 
-            # Usa la collection appropriata per il tenant
-            collection = self.db[self.get_collection_name()]
+            # Usa la collection del tenant
+            collection = self.db[self.collection_name]
             
-            # NUOVO: Pipeline semplificata per tenant-based collections
-            if self.tenant_name:
-                # Collection per tenant: non serve filtro client
-                match_stage = {}
-            else:
-                # Fallback legacy: usa filtro client
-                match_stage = {"client": effective_tenant}
+            print(f"📊 Calcolo statistiche per tenant: {self.tenant.tenant_name}")
             
+            # Pipeline semplificata: usa collection per tenant (non serve filtro client)
             pipeline = [
-                {"$match": match_stage},
+                {"$match": {}},  # Nessun filtro necessario
                 {
                     "$group": {
                         "_id": {"$ifNull": ["$classification", "$classificazione"]},  # Supporta entrambi i campi
@@ -607,44 +559,42 @@ class MongoClassificationReader:
                 'total_classifications': total_classifications,
                 'unique_labels': len(results),
                 'label_distribution': label_stats,
-                'client': client_name
+                'tenant_name': self.tenant.tenant_name,
+                'tenant_id': self.tenant.tenant_id
             }
             
         except Exception as e:
             print(f"Errore nel calcolo statistiche: {e}")
             return {}
     
-    def get_sessions_by_label(self, client_name: str, label: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_sessions_by_label(self, label: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """
-        Scopo: Recupera sessioni filtrate per etichetta specifica
+        Scopo: Recupera sessioni filtrate per etichetta specifica per il tenant
+        CAMBIO RADICALE: USA SEMPRE L'OGGETTO TENANT INTERNO
         
         Parametri input:
-            - client_name: Nome del cliente
             - label: Etichetta da filtrare
             - limit: Numero massimo di risultati
             
         Output:
-            - Lista di sessioni con l'etichetta specificata
+            - Lista di sessioni con l'etichetta specificata per il tenant
             
-        Ultimo aggiornamento: 2025-08-21
+        Ultimo aggiornamento: 2025-08-29
         """
         try:
             if not self.ensure_connection():
                 return []
                 
-            # Usa la collection appropriata per il tenant
-            collection = self.db[self.get_collection_name()]
+            # Usa la collection del tenant
+            collection = self.db[self.collection_name]
             
-            # Query per etichetta specifica
-            if self.tenant_name:
-                # Collection tenant: nessun filtro client
-                query = {"classificazione": label}
-            else:
-                # Collection legacy: filtro client
-                query = {
-                    "client": client_name,
-                    "classificazione": label
-                }
+            print(f"🔍 Filtraggio sessioni per label '{label}' del tenant: {self.tenant.tenant_name}")
+            
+            # Query semplificata: filtra per classificazione in collection tenant-specifica
+            query = {"classification": label}
+                
+            # Usa la collection del tenant
+            collection = self.db[self.collection_name]
             
             # Proiezione esclude embedding
             projection = {"embedding": 0}
@@ -706,15 +656,8 @@ class MongoClassificationReader:
             collection = self.db[self.get_collection_name()]
             
             # Query per sessioni che necessitano review
-            if self.tenant_name:
-                # Collection tenant: nessun filtro client
-                query = {"review_status": "pending"}
-            else:
-                # Collection legacy: filtro client
-                query = {
-                    "client": client_name,
-                    "review_status": "pending"
-                }
+            # Con oggetto Tenant non serve più filtro client
+            query = {"review_status": "pending"}
             
             # Proiezione esclude embedding
             projection = {"embedding": 0}
@@ -789,9 +732,8 @@ class MongoClassificationReader:
             collection = self.db[self.get_collection_name()]
             
             # Prepara il filtro per trovare il documento
+            # Con oggetto Tenant, filtra solo per session_id
             filter_dict = {"session_id": session_id}
-            if not self.tenant_name:
-                filter_dict["client"] = client_name
             
             # Prima verifica se il documento esiste
             existing_doc = collection.find_one(filter_dict)
@@ -830,10 +772,10 @@ class MongoClassificationReader:
                     }
                 }
                 
-                # Aggiungi campo "client" solo se non usiamo tenant collection
-                if not self.tenant_name:
-                    new_doc["client"] = client_name
-                    new_doc["tenant_name"] = client_name
+                # Con oggetto Tenant, aggiungi sempre i dati tenant
+                new_doc["client"] = self.tenant.tenant_name
+                new_doc["tenant_name"] = self.tenant.tenant_name
+                new_doc["tenant_id"] = self.tenant.tenant_id
                 
                 result = collection.insert_one(new_doc)
                 return result.inserted_id is not None
@@ -880,8 +822,7 @@ class MongoClassificationReader:
                 "_id": object_id,
                 "review_status": "pending"
             }
-            if not self.tenant_name:
-                filter_dict["client"] = client_name
+            # CON OGGETTO TENANT: Non serve più filtro client, usiamo collection specifica
             
             # Prima recupera il documento per ottenere la confidence attuale
             existing_doc = collection.find_one(filter_dict, {"confidence": 1})
@@ -955,8 +896,7 @@ class MongoClassificationReader:
                 "_id": object_id,
                 "review_status": "pending"
             }
-            if not self.tenant_name:
-                filter_dict["client"] = client_name
+            # CON OGGETTO TENANT: Non serve più filtro client
             
             # 1. Recupera il documento completo per ottenere i metadati cluster
             case_doc = collection.find_one(filter_dict, {
@@ -996,9 +936,7 @@ class MongoClassificationReader:
                     "review_status": {"$ne": "completed"},
                     "_id": {"$ne": object_id}  # Escludi il rappresentante già aggiornato
                 }
-                
-                if not self.tenant_name:
-                    cluster_filter["client"] = client_name
+                # CON OGGETTO TENANT: Non serve più filtro client, usiamo collection specifica
                 
                 # Applica la propagazione con confidenza leggermente ridotta
                 propagation_confidence = max(human_confidence * 0.9, 0.1)  # Minimo 0.1
@@ -1065,27 +1003,15 @@ class MongoClassificationReader:
             collection = self.db[self.get_collection_name()]
             
             # Pipeline di aggregazione per statistiche review
-            if self.tenant_name:
-                # Per collection tenant, non filtrare per client
-                pipeline = [
-                    {
-                        "$group": {
-                            "_id": "$review_status",
-                            "count": {"$sum": 1}
-                        }
+            # CON OGGETTO TENANT: Usa sempre collection tenant-specifica
+            pipeline = [
+                {
+                    "$group": {
+                        "_id": "$review_status",
+                        "count": {"$sum": 1}
                     }
-                ]
-            else:
-                # Per collection legacy, filtra per client
-                pipeline = [
-                    {"$match": {"client": client_name}},
-                    {
-                        "$group": {
-                            "_id": "$review_status",
-                            "count": {"$sum": 1}
-                        }
-                    }
-                ]
+                }
+            ]
             
             results = list(collection.aggregate(pipeline))
             
@@ -1108,14 +1034,17 @@ class MongoClassificationReader:
             print(f"Errore nel calcolo statistiche review: {e}")
             return {"pending": 0, "completed": 0, "not_required": 0, "total": 0}
 
-    def get_available_tenants(self) -> List[Dict[str, str]]:
+    @classmethod
+    def get_available_tenants(cls) -> List[Tenant]:
         """
-        Scopo: Recupera tutti i tenant disponibili dalla tabella MySQL TAG.tenants
+        Scopo: Recupera tutti i tenant disponibili e restituisce oggetti Tenant completi
+        CORREZIONE FONDAMENTALE: Questa è l'UNICA funzione che genera oggetti Tenant 
+        perché non ha bisogno di ricevere un tenant - è quella che LI CREA
         
         Output:
-            - Lista di dizionari con tenant_id e nome del tenant
+            - Lista di oggetti Tenant completi con tutti i dati necessari
             
-        Ultimo aggiornamento: 2025-01-27
+        Ultimo aggiornamento: 2025-08-29 - CORREZIONE LOGICA TENANT
         """
         try:
             # Importa le librerie necessarie
@@ -1142,71 +1071,38 @@ class MongoClassificationReader:
             
             cursor = connection.cursor()
             
-            # Query per recuperare i tenant dalla tabella tenants (inclusi inattivi per debug)
-            query = "SELECT tenant_id, tenant_name, is_active FROM tenants ORDER BY tenant_name"
+            # Query per recuperare i tenant completi dalla tabella tenants
+            query = """
+                SELECT tenant_id, tenant_name, tenant_slug, is_active
+                FROM tenants 
+                WHERE is_active = 1
+                ORDER BY tenant_name
+            """
             cursor.execute(query)
             risultati = cursor.fetchall()
             
             cursor.close()
             connection.close()
             
-            tenants = []
+            tenant_objects = []
             if risultati:
-                for tenant_id, tenant_name, is_active in risultati:
-                    tenants.append({
-                        "tenant_id": str(tenant_id),
-                        "nome": tenant_name + (" (inattivo)" if is_active == 0 else "")
-                    })
+                for tenant_id, tenant_name, tenant_slug, is_active in risultati:
+                    # Crea oggetto Tenant completo
+                    tenant = Tenant(
+                        tenant_id=str(tenant_id),
+                        tenant_name=tenant_name,
+                        tenant_slug=tenant_slug,
+                        tenant_database=tenant_slug,  # Per ora, tenant_database = tenant_slug
+                        tenant_status=is_active
+                    )
+                    tenant_objects.append(tenant)
             
-            print(f"Recuperati {len(tenants)} tenant dalla tabella TAG.tenants")
-            return tenants
+            print(f"🏢 Recuperati {len(tenant_objects)} oggetti Tenant dalla tabella TAG.tenants")
+            return tenant_objects
             
         except Exception as e:
-            print(f"Errore nel recupero tenant da MySQL: {e}")
-            
-            # Fallback: prova a leggere dalle collection MongoDB esistenti
-            try:
-                if not self.ensure_connection():
-                    return []
-                
-                # Ottieni lista collection del database
-                collection_names = self.db.list_collection_names()
-                
-                tenants = []
-                for collection_name in collection_names:
-                    if collection_name.endswith("_classifications"):
-                        # Estrai tenant_id dalla collection
-                        tenant_id = collection_name.replace("_classifications", "")
-                        # Escludi collection legacy
-                        if tenant_id != "client_session":
-                            # Cerca nome tenant dal tenant_id
-                            tenant_name = self.get_tenant_name_from_id(tenant_id)
-                            tenants.append({
-                                "tenant_id": tenant_id,
-                                "nome": tenant_name if tenant_name else tenant_id.title()
-                            })
-                
-                # Ordina alfabeticamente
-                tenants.sort(key=lambda x: x['nome'])
-                
-                # Se non ci sono collection tenant, controlla la collection legacy
-                if not tenants and "client_session_classifications" in collection_names:
-                    legacy_collection = self.db["client_session_classifications"]
-                    legacy_tenants = legacy_collection.distinct("client")
-                    for tenant in legacy_tenants:
-                        if tenant and tenant.strip():
-                            tenants.append({
-                                "tenant_id": tenant,
-                                "nome": tenant.title()
-                            })
-                    tenants.sort(key=lambda x: x['nome'])
-                
-                print(f"Fallback MongoDB: recuperati {len(tenants)} tenant dalle collection")
-                return tenants
-                
-            except Exception as fallback_error:
-                print(f"Errore anche nel fallback MongoDB: {fallback_error}")
-                return []
+            print(f"❌ Errore nel recupero tenant da MySQL: {e}")
+            return []
 
     def generate_collection_name(self, tenant_name: str) -> str:
         """
@@ -1641,10 +1537,8 @@ class MongoClassificationReader:
                 })
             
             # Query base per tenant
-            if self.tenant_name:
-                base_query = {}  # Collection tenant: nessun filtro client
-            else:
-                base_query = {"client": client_name}  # Collection legacy: filtro client
+            # CON OGGETTO TENANT: Usa sempre collection tenant-specifica
+            base_query = {}  # Nessun filtro client necessario
             
             # Combina filtri
             if or_conditions:
@@ -2222,19 +2116,35 @@ def main():
     """
     print("🔍 Test MongoDB Classification Reader")
     
-    reader = MongoClassificationReader()
+    # CORREZIONE: Crea oggetto Tenant di esempio per il test
+    try:
+        # Usa il primo tenant disponibile per il test
+        tenant_objects = MongoClassificationReader.get_available_tenants()
+        if tenant_objects:
+            test_tenant = tenant_objects[0]
+            print(f"📝 Test con tenant: {test_tenant.tenant_name}")
+        else:
+            # Fallback: crea tenant di test (potrebbe fallire se non esiste)
+            print("⚠️ Nessun tenant trovato, uso tenant di test 'humanitas'")
+            test_tenant = Tenant.from_slug('humanitas')
+    except Exception as e:
+        print(f"❌ Errore creazione tenant di test: {e}")
+        print("💡 Assicurati che ci siano tenant nel database locale TAG")
+        return
+    
+    reader = MongoClassificationReader(tenant=test_tenant)
     
     if reader.connect():
         print("✅ Connesso a MongoDB")
         
-        # Test recupero etichette
-        labels = reader.get_available_labels("humanitas")
+        # Test recupero etichette (usa l'oggetto tenant interno)
+        labels = reader.get_available_labels()
         print(f"📋 Etichette trovate: {len(labels)}")
         for label in labels[:5]:
             print(f"  - {label}")
         
-        # Test recupero sessioni
-        sessions = reader.get_all_sessions("humanitas", limit=3)
+        # Test recupero sessioni (usa l'oggetto tenant interno)
+        sessions = reader.get_all_sessions(limit=3)
         print(f"📊 Sessioni trovate: {len(sessions)}")
         for session in sessions:
             print(f"  - {session['session_id']}: {session['classification']} ({session['confidence']})")

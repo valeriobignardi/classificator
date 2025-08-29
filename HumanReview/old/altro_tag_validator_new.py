@@ -1,7 +1,23 @@
 """
 Sistema di validazione per i tag "ALTRO" durante il training supervisionato
 
-Nuova logica basata su embedding semantico:
+Nuova logica         
+        self.logger.info(f"🔧 AltroTagValidator inizializzato - soglia: {self.similarity_threshold}")
+        
+        # Inizializza i componenti necessari
+        self.schema_manager = ClassificationSchemaManager()
+        
+        # Crea oggetto Tenant dal tenant_id per il MongoClassificationReader
+        try:
+            from Utils.tenant import Tenant
+            tenant_obj = Tenant.from_uuid(self.tenant_id)
+            self.db_connector = MongoClassificationReader(tenant=tenant_obj)
+            self.logger.info(f"🗄️ MongoClassificationReader inizializzato per tenant: {tenant_obj.tenant_name}")
+        except Exception as e:
+            self.logger.error(f"⚠️ Errore creazione tenant da UUID '{self.tenant_id}': {e}")
+            raise ValueError(f"Impossibile creare oggetto Tenant da ID: {self.tenant_id}")
+        
+        # ✅ Embedder dinamico configurato per il tenantu embedding semantico:
 1. Ottiene proposta tag dalla raw response LLM
 2. Calcola embedding della proposta con motore tenant-specific
 3. Confronta embedding con tutti i tag esistenti
@@ -31,6 +47,7 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from tag_manager import TagDatabaseManager
 from mongo_classification_reader import MongoClassificationReader
+from tenant import Tenant
 
 # Import per embedding dinamico
 try:
@@ -97,7 +114,10 @@ class AltroTagValidator:
         
         # Inizializza i componenti necessari
         self.tag_manager = TagDatabaseManager()
-        self.db_connector = MongoClassificationReader()
+        
+        # CORREZIONE: Crea oggetto Tenant dal tenant_id per MongoClassificationReader
+        tenant_obj = Tenant.from_uuid(self.tenant_id)
+        self.db_connector = MongoClassificationReader(tenant=tenant_obj)
         
         # ✅ Embedder dinamico configurato per il tenant
         self.embedder = self._get_dynamic_embedder()

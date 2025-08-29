@@ -16,6 +16,11 @@ from datetime import datetime
 import traceback
 from typing import Dict, List, Any, Optional
 import numpy as np
+import re
+
+# Import della classe Tenant
+sys.path.append(os.path.join(os.path.dirname(__file__), 'Utils'))
+from tenant import Tenant
 
 # Aggiungi path per i moduli
 sys.path.append(os.path.join(os.path.dirname(__file__), 'Pipeline'))
@@ -29,6 +34,7 @@ from quality_gate_engine import QualityGateEngine
 from mongo_classification_reader import MongoClassificationReader
 from prompt_manager import PromptManager
 from tool_manager import ToolManager
+from tenant import Tenant
 
 # Import del blueprint per validazione prompt
 sys.path.append(os.path.join(os.path.dirname(__file__), 'APIServer'))
@@ -49,11 +55,110 @@ CORS(app,
      allow_headers=["Content-Type", "Authorization"],
      supports_credentials=False)
 
+# HELPER FUNCTIONS PER GESTIONE TENANT
+import re
+
+def is_uuid(value: str) -> bool:
+    """Controlla se una stringa è un UUID valido"""
+    uuid_pattern = r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    return bool(re.match(uuid_pattern, value))
+
+def resolve_tenant_from_identifier(identifier: str) -> Tenant:
+    """
+    CORREZIONE FONDAMENTALE: Risolve SOLO UUID in oggetto Tenant
+    NUOVO VINCOLO: identifier deve essere SEMPRE un UUID valido
+    Il frontend deve inviare sempre l'UUID del tenant, mai nomi o slug
+    
+    Args:
+        identifier: UUID del tenant (SOLO UUID ACCETTATI)
+        
+    Returns:
+        Oggetto Tenant completo
+        
+    Raises:
+        ValueError: Se identifier non è UUID o tenant non trovato
+        
+    Ultimo aggiornamento: 2025-08-29 - CORREZIONE LOGICA FONDAMENTALE
+    """
+    try:
+        # CONTROLLO RIGIDO: accetta SOLO UUID
+        if not is_uuid(identifier):
+            error_msg = f"❌ ERRORE: identifier deve essere un UUID valido. Ricevuto: '{identifier}'"
+            print(error_msg)
+            print("💡 SOLUZIONE: Il frontend deve inviare tenant_id (UUID), non nomi o slug")
+            raise ValueError(error_msg)
+        
+        print(f"🔍 Risoluzione tenant da UUID: {identifier}")
+        
+        # Usa il metodo statico della classe Tenant per risoluzione univoca
+        tenant = Tenant.from_uuid(identifier)
+        
+        print(f"✅ Tenant risolto: {tenant.tenant_name} ({tenant.tenant_id})")
+        return tenant
+        
+    except Exception as e:
+        error_msg = f"❌ Errore risoluzione tenant UUID '{identifier}': {e}"
+        print(error_msg)
+        print("💡 Verifica che:")
+        print("   1. Il tenant_id esista nel database TAG locale")
+        print("   2. Il tenant sia attivo (is_active = 1)")
+        print("   3. L'UUID sia nel formato corretto")
+        raise ValueError(error_msg)
+
 # Registrazione blueprint per validazione prompt
 app.register_blueprint(prompt_validation_bp, url_prefix='/api/prompt-validation')
 
 # Registrazione blueprint per gestione esempi
 app.register_blueprint(esempi_bp)
+
+
+def _is_uuid(value: str) -> bool:
+    """
+    Verifica se una stringa è un UUID valido
+    
+    Args:
+        value: Stringa da verificare
+        
+    Returns:
+        bool: True se è un UUID valido, False altrimenti
+    """
+    uuid_pattern = r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    return bool(re.match(uuid_pattern, value))
+
+
+def _create_tenant_from_client_name(client_name: str) -> Tenant:
+    """
+    Crea un oggetto Tenant dal client_name che può essere UUID o slug
+    
+    Args:
+        client_name: UUID del tenant o slug del tenant
+        
+    Returns:
+        Tenant: Oggetto tenant popolato con tutte le informazioni
+        
+    Raises:
+        ValueError: Se il tenant non viene trovato o client_name non valido
+    """
+    if not client_name or not isinstance(client_name, str):
+        raise ValueError(f"client_name deve essere una stringa valida, ricevuto: {client_name}")
+    
+    print(f"🏗️ Creazione oggetto Tenant da client_name: '{client_name}'")
+    
+    try:
+        if _is_uuid(client_name):
+            print(f"   🆔 Riconosciuto come UUID, risoluzione tramite Tenant.from_uuid()")
+            tenant = Tenant.from_uuid(client_name)
+        else:
+            print(f"   🏷️ Riconosciuto come slug, risoluzione tramite Tenant.from_slug()")
+            tenant = Tenant.from_slug(client_name)
+            
+        print(f"   ✅ Tenant creato: {tenant}")
+        return tenant
+        
+    except Exception as e:
+        error_msg = f"❌ Impossibile creare Tenant da client_name '{client_name}': {e}"
+        print(error_msg)
+        raise ValueError(error_msg)
 
 
 def sanitize_for_json(obj):
@@ -125,7 +230,6 @@ class ClassificationService:
         self.tag_db = TagDatabaseConnector()
         self.quality_gates = {}  # Cache dei QualityGateEngine per cliente
         self.shared_embedder = None  # Embedder condiviso per tutti i clienti per evitare CUDA OOM
-        self.mongo_reader = MongoClassificationReader()  # Reader per classificazioni MongoDB
         
         # SOLUZIONE ALLA RADICE: Lock per evitare inizializzazioni simultanee
         self._pipeline_locks = {}  # Lock per pipeline per cliente
@@ -184,22 +288,25 @@ class ClassificationService:
     
     def get_mongo_reader(self, client_name: str) -> MongoClassificationReader:
         """
-        Ottieni o crea un MongoClassificationReader per un cliente specifico
-        NUOVO: Sistema multitenant con pattern {tenant_name_sanitizzato}{tenant_id}
+        Ottieni o crea un MongoClassificationReader per un tenant specifico
+        APPROCCIO RADICALE: USA SEMPRE OGGETTO TENANT
         
         Args:
-            client_name: Nome del cliente (es. 'humanitas', 'Humanitas Milano')
+            client_name: Nome del cliente o UUID (es. 'humanitas', '015007d9-d413-11ef-86a5-96000228e7fe')
             
         Returns:
-            MongoClassificationReader configurato per il cliente con collection dedicata
+            MongoClassificationReader configurato per il tenant
         """
-        # Per semplicità, crea una nuova istanza per ogni richiesta con tenant-aware
         print(f"🔧 Creazione MongoClassificationReader per cliente: {client_name}")
         
-        # Crea MongoClassificationReader tenant-aware
-        mongo_reader = MongoClassificationReader(tenant_name=client_name)
+        # Risolve client_name in oggetto Tenant (UUID o slug)
+        tenant = resolve_tenant_from_identifier(client_name)
         
-        print(f"✅ MongoClassificationReader {client_name} creato con collection: {mongo_reader.get_collection_name()}")
+        # Crea MongoClassificationReader con oggetto Tenant
+        mongo_reader = MongoClassificationReader(tenant=tenant)
+        
+        print(f"✅ MongoClassificationReader creato per tenant: {tenant.tenant_name} ({tenant.tenant_slug})")
+        print(f"   📊 Collection: {mongo_reader.get_collection_name()}")
         
         return mongo_reader
     
@@ -273,10 +380,13 @@ class ClassificationService:
             if cache_key not in self.quality_gates:
                 print(f"🔧 Inizializzazione QualityGateEngine per cliente: {client_name} (con lock)")
                 
-                # Parametri per QualityGateEngine
+                # Risolve client_name in oggetto Tenant
+                tenant = resolve_tenant_from_identifier(client_name)
+                
+                # Parametri per QualityGateEngine con OGGETTO TENANT
                 qg_params = {
-                    'tenant_name': client_name,
-                    'training_log_path': f"training_decisions_{client_name}.jsonl"
+                    'tenant': tenant,  # PASSA OGGETTO TENANT
+                    'training_log_path': f"training_decisions_{tenant.tenant_slug}.jsonl"
                 }
                 
                 # Aggiungi soglie personalizzate se fornite
@@ -1758,9 +1868,9 @@ def api_get_review_cases(client_name: str):
         else:
             # Comportamento legacy: recupera tutte le sessioni
             if label_filter and label_filter != "Tutte le etichette":
-                sessions = mongo_reader.get_sessions_by_label(client_name, label_filter, limit)
+                sessions = mongo_reader.get_sessions_by_label(label_filter, limit)
             else:
-                sessions = mongo_reader.get_all_sessions(client_name, limit)
+                sessions = mongo_reader.get_all_sessions(limit)
         
         # Trasforma i dati MongoDB in formato ReviewCase per compatibilità frontend
         formatted_cases = []
@@ -1795,10 +1905,10 @@ def api_get_review_cases(client_name: str):
             formatted_cases.append(case_item)
         
         # Recupera etichette disponibili
-        available_labels = mongo_reader.get_available_labels(client_name)
+        available_labels = mongo_reader.get_available_labels()
         
         # Recupera statistiche
-        stats = mongo_reader.get_classification_stats(client_name)
+        stats = mongo_reader.get_classification_stats()
         
         return jsonify({
             'success': True,
@@ -1837,10 +1947,10 @@ def api_get_available_labels(client_name: str):
         mongo_reader = classification_service.get_mongo_reader(client_name)
         
         # Recupera etichette disponibili
-        available_labels = mongo_reader.get_available_labels(client_name)
+        available_labels = mongo_reader.get_available_labels()
         
         # Recupera statistiche dettagliate
-        stats = mongo_reader.get_classification_stats(client_name)
+        stats = mongo_reader.get_classification_stats()
         
         return jsonify({
             'success': True,
@@ -2172,11 +2282,15 @@ def api_get_review_stats(client_name: str):
         
         # 🆕 STATISTICHE DA MONGODB (SISTEMA UNIFICATO)
         from mongo_classification_reader import MongoClassificationReader
-        mongo_reader = MongoClassificationReader()
+        
+        # CORREZIONE CRITICA: client_name DEVE essere UUID (tenant_id)
+        # Il frontend deve inviare l'UUID del tenant selezionato dal menu
+        tenant = resolve_tenant_from_identifier(client_name)
+        mongo_reader = MongoClassificationReader(tenant=tenant)
         
         try:
-            # Usa MongoDB per statistiche invece di MySQL
-            general_stats = mongo_reader.get_classification_stats(client_name=client_name)
+            # Usa MongoDB per statistiche con oggetto Tenant
+            general_stats = mongo_reader.get_classification_stats()
         except Exception as e:
             print(f"⚠️ Errore statistiche MongoDB: {e}")
             general_stats = {
@@ -2218,32 +2332,44 @@ def api_get_review_stats(client_name: str):
 @app.route('/api/tenants', methods=['GET'])
 def get_tenants():
     """
-    Ottieni lista completa dei tenant dalla tabella MySQL TAG.tenants
+    Ottieni lista completa dei tenant come oggetti Tenant
+    CORREZIONE FONDAMENTALE: Usa oggetti Tenant per garantire coerenza
     
     Returns:
-        Lista di tenant con tenant_id e nome per il frontend
+        Lista di tenant con tenant_id (UUID) univoco per il frontend
+        Il frontend userà l'UUID internamente ma mostrerà tenant_name
         
-    Ultimo aggiornamento: 2025-01-27
+    Ultimo aggiornamento: 2025-08-29 - CORREZIONE LOGICA TENANT
     """
-    print("🔍 [DEBUG] GET /api/tenants - Avvio richiesta tenant")
+    print("🔍 [DEBUG] GET /api/tenants - Avvio richiesta tenant con oggetti Tenant")
     try:
-        print("🔍 [DEBUG] Inizializzo MongoClassificationReader...")
-        # Usa il nuovo metodo del MongoClassificationReader che legge da MySQL
-        mongo_reader = MongoClassificationReader()
+        print("🔍 [DEBUG] Chiamo get_available_tenants() per oggetti Tenant...")
+        # Usa il metodo di classe che restituisce oggetti Tenant completi
+        tenant_objects = MongoClassificationReader.get_available_tenants()
         
-        print("🔍 [DEBUG] Chiamo get_available_tenants()...")
-        tenants = mongo_reader.get_available_tenants()
+        print(f"🔍 [DEBUG] Recuperati {len(tenant_objects)} oggetti Tenant dal database")
         
-        print(f"🔍 [DEBUG] Recuperati {len(tenants)} tenant dal database")
-        print(f"🔍 [DEBUG] Primi 3 tenant: {tenants[:3] if tenants else 'Nessuno'}")
+        # Converti oggetti Tenant in formato JSON per il frontend
+        tenants_for_frontend = []
+        for tenant_obj in tenant_objects:
+            tenant_data = {
+                'tenant_id': tenant_obj.tenant_id,         # UUID univoco (per backend)
+                'tenant_name': tenant_obj.tenant_name,     # Nome leggibile (per frontend)
+                'tenant_slug': tenant_obj.tenant_slug,     # Slug per compatibilità
+                'is_active': tenant_obj.tenant_status == 1
+            }
+            tenants_for_frontend.append(tenant_data)
+        
+        print(f"🔍 [DEBUG] Primi 3 tenant convertiti: {tenants_for_frontend[:3] if tenants_for_frontend else 'Nessuno'}")
         
         response_data = {
             'success': True,
-            'tenants': tenants,
-            'total': len(tenants)
+            'tenants': tenants_for_frontend,
+            'total': len(tenants_for_frontend),
+            'message': 'Tenant recuperati come oggetti completi'
         }
         
-        print(f"🔍 [DEBUG] Invio risposta con {len(tenants)} tenant")
+        print(f"🔍 [DEBUG] Invio risposta con {len(tenants_for_frontend)} tenant")
         return jsonify(response_data), 200
         
     except Exception as e:
@@ -2253,7 +2379,9 @@ def get_tenants():
         traceback.print_exc()
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': str(e),
+            'tenants': [],
+            'total': 0
         }), 500
 
 @app.route('/api/tenants/sync', methods=['POST'])
@@ -2269,12 +2397,13 @@ def sync_tenants_from_remote():
     try:
         print("🔄 [API] Richiesta sincronizzazione tenant dal remoto")
         
-        # Usa MongoClassificationReader per la sincronizzazione
-        mongo_reader = MongoClassificationReader()
+        # Usa MongoClassificationReader.get_available_tenants() per sincronizzazione globale
+        from mongo_classification_reader import MongoClassificationReader
         
-        # Esegui sincronizzazione con metodo implementato
-        if hasattr(mongo_reader, 'sync_tenants_from_remote'):
-            result = mongo_reader.sync_tenants_from_remote()
+        # Usa metodo di classe per operazioni sui tenant globali
+        # (Non serve istanza specifica per sincronizzazione generale)
+        if hasattr(MongoClassificationReader, 'sync_tenants_from_remote'):
+            result = MongoClassificationReader.sync_tenants_from_remote()
             
             # Mappa il formato di ritorno per compatibilità frontend
             if result['success'] and 'stats' in result:
@@ -2286,14 +2415,14 @@ def sync_tenants_from_remote():
         else:
             # Fallback: utilizza il metodo esistente get_available_tenants per ora
             print("⚠️ [API] Metodo sync_tenants_from_remote non implementato, usando fallback")
-            tenants = mongo_reader.get_available_tenants()
+            tenant_objects = MongoClassificationReader.get_available_tenants()
             result = {
                 'success': True,
-                'message': f'Fallback sync completato: {len(tenants)} tenant disponibili',
+                'message': f'Fallback sync completato: {len(tenant_objects)} tenant disponibili',
                 'imported_count': 0,
                 'updated_count': 0,
-                'total_processed': len(tenants),
-                'total_remote_tenants': len(tenants)
+                'total_processed': len(tenant_objects),
+                'total_remote_tenants': len(tenant_objects)
             }
         
         if result['success']:
@@ -3014,9 +3143,12 @@ def get_all_sessions(client):
         # NON inizializzare pipeline o QualityGate per evitare CUDA out of memory
         # "Tutte le Sessioni" è solo lettura delle CLASSIFICAZIONI GIÀ SALVATE in MongoDB
         
-        # CORREZIONE: Usa MongoDB per sessioni già classificate, NON MySQL raw
+        # CORREZIONE: Usa MongoDB per sessioni già classificate con oggetto Tenant
         from mongo_classification_reader import MongoClassificationReader
-        mongo_reader = MongoClassificationReader()
+        
+        # Risolvi client in oggetto Tenant
+        tenant = resolve_tenant_from_identifier(client)
+        mongo_reader = MongoClassificationReader(tenant=tenant)
         if not mongo_reader.connect():
             return jsonify({
                 'success': False,
@@ -3026,7 +3158,7 @@ def get_all_sessions(client):
             }), 500
         
         # Estrai sessioni già classificate da MongoDB
-        sessioni_classificate = mongo_reader.get_all_sessions(client, limit=limit)
+        sessioni_classificate = mongo_reader.get_all_sessions(limit=limit)
         
         if not sessioni_classificate:
             return jsonify({
@@ -3239,9 +3371,12 @@ def add_session_to_review_queue(client):
         
         print(f"➕ Aggiunta manuale sessione {session_id} alla review queue per {client}")
         
-        # NUOVO: Usa MongoDB per ottenere i dati della sessione
+        # NUOVO: Usa MongoDB per ottenere i dati della sessione con oggetto Tenant
         from mongo_classification_reader import MongoClassificationReader
-        mongo_reader = MongoClassificationReader()
+        
+        # Risolvi client in oggetto Tenant
+        tenant = resolve_tenant_from_identifier(client)
+        mongo_reader = MongoClassificationReader(tenant=tenant)
         if not mongo_reader.connect():
             return jsonify({
                 'success': False,
@@ -3249,7 +3384,7 @@ def add_session_to_review_queue(client):
             }), 500
         
         # Verifica se la sessione esiste in MongoDB
-        all_sessions = mongo_reader.get_all_sessions(client)
+        all_sessions = mongo_reader.get_all_sessions()
         session_data = None
         for session in all_sessions:
             if session.get('session_id') == session_id:
@@ -3707,20 +3842,20 @@ def get_finetuning_status(client_name: str):
 
 # ==================== NUOVI ENDPOINT PER FILTRO TENANT/ETICHETTE ====================
 
-@app.route('/api/tenants', methods=['GET'])
-def api_get_all_tenants():
+@app.route('/api/tenants/stats', methods=['GET'])  # PATH DIVERSO per evitare conflitti
+def api_get_all_tenants_stats():
     """
-    API per recuperare tutti i tenant disponibili da MongoDB
+    API per recuperare statistiche di tutti i tenant da MongoDB
     
-    Scopo: Fornisce la lista dei tenant per il filtro principale in React
+    Scopo: Fornisce statistiche dettagliate dei tenant per dashboard
     
     Returns:
         {
             "success": true,
             "tenants": [
                 {
+                    "tenant_id": "uuid",
                     "tenant_name": "humanitas",
-                    "client": "humanitas", 
                     "session_count": 2901,
                     "classification_count": 1850
                 }
@@ -3729,65 +3864,68 @@ def api_get_all_tenants():
         }
     """
     try:
-        print("🔍 API: Recupero tutti i tenant da MongoDB...")
+        print("🔍 API: Recupero statistiche tenant da MongoDB...")
         
-        # Usa MongoDB reader per recuperare tenant
-        mongo_reader = MongoClassificationReader()
+        # Ottieni tutti i tenant come oggetti completi
+        tenant_objects = MongoClassificationReader.get_available_tenants()
         
-        if not mongo_reader.connect():
+        if not tenant_objects:
             return jsonify({
                 'success': False,
-                'error': 'Impossibile connettersi a MongoDB',
+                'error': 'Nessun tenant trovato nel database locale',
                 'tenants': []
             }), 500
         
-        try:
-            # Query aggregation per recuperare statistiche per tenant
-            pipeline = [
-                {
-                    '$group': {
-                        '_id': {
-                            'tenant_name': '$tenant_name',
-                            'client': '$client'
-                        },
-                        'session_count': {'$addToSet': '$session_id'},
-                        'classification_count': {'$sum': 1}
-                    }
-                },
-                {
-                    '$project': {
-                        'tenant_name': '$_id.tenant_name',
-                        'client': '$_id.client',
-                        'session_count': {'$size': '$session_count'},
-                        'classification_count': 1,
-                        '_id': 0
-                    }
-                },
-                {
-                    '$sort': {'tenant_name': 1}
+        tenant_stats = []
+        
+        # Per ogni tenant, calcola le sue statistiche
+        for tenant_obj in tenant_objects:
+            try:
+                mongo_reader = MongoClassificationReader(tenant=tenant_obj)
+                
+                # Recupera statistiche specifiche del tenant
+                stats = mongo_reader.get_classification_stats()
+                
+                tenant_stat = {
+                    'tenant_id': tenant_obj.tenant_id,
+                    'tenant_name': tenant_obj.tenant_name,
+                    'tenant_slug': tenant_obj.tenant_slug,
+                    'session_count': stats.get('total_classifications', 0),  # Per ora usiamo questo
+                    'classification_count': stats.get('total_classifications', 0),
+                    'unique_labels': stats.get('unique_labels', 0),
+                    'is_active': tenant_obj.tenant_status == 1
                 }
-            ]
-            
-            # Esegui aggregation
-            cursor = mongo_reader.collection.aggregate(pipeline)
-            tenants = list(cursor)
-            
-            print(f"✅ Trovati {len(tenants)} tenant in MongoDB")
-            for tenant in tenants:
-                print(f"  - {tenant['tenant_name']}: {tenant['session_count']} sessioni, {tenant['classification_count']} classificazioni")
-            
-            return jsonify({
-                'success': True,
-                'tenants': tenants,
-                'total': len(tenants),
-                'timestamp': datetime.now().isoformat()
-            })
-            
-        finally:
-            mongo_reader.disconnect()
+                
+                tenant_stats.append(tenant_stat)
+                mongo_reader.disconnect()
+                
+                print(f"  ✅ {tenant_obj.tenant_name}: {tenant_stat['classification_count']} classificazioni")
+                
+            except Exception as tenant_error:
+                print(f"  ⚠️ Errore statistiche per {tenant_obj.tenant_name}: {tenant_error}")
+                # Aggiungi comunque il tenant con statistiche zero
+                tenant_stats.append({
+                    'tenant_id': tenant_obj.tenant_id,
+                    'tenant_name': tenant_obj.tenant_name,
+                    'tenant_slug': tenant_obj.tenant_slug,
+                    'session_count': 0,
+                    'classification_count': 0,
+                    'unique_labels': 0,
+                    'is_active': tenant_obj.tenant_status == 1,
+                    'error': str(tenant_error)
+                })
+        
+        print(f"✅ Recuperate statistiche per {len(tenant_stats)} tenant")
+        
+        return jsonify({
+            'success': True,
+            'tenants': tenant_stats,
+            'total': len(tenant_stats),
+            'timestamp': datetime.now().isoformat()
+        })
             
     except Exception as e:
-        print(f"❌ Errore recupero tenant: {e}")
+        print(f"❌ Errore recupero statistiche tenant: {e}")
         return jsonify({
             'success': False,
             'error': str(e),
@@ -3822,8 +3960,9 @@ def api_get_labels_by_tenant(tenant_name: str):
     try:
         print(f"🔍 API: Recupero etichette per tenant '{tenant_name}' da MongoDB...")
         
-        # Usa MongoDB reader per recuperare etichette
-        mongo_reader = MongoClassificationReader()
+        # CORREZIONE CRITICA: tenant_name DEVE essere UUID (tenant_id)
+        tenant = resolve_tenant_from_identifier(tenant_name)
+        mongo_reader = MongoClassificationReader(tenant=tenant)
         
         if not mongo_reader.connect():
             return jsonify({
@@ -3833,49 +3972,35 @@ def api_get_labels_by_tenant(tenant_name: str):
             }), 500
         
         try:
-            # Query aggregation per recuperare statistiche etichette per tenant
-            pipeline = [
-                {
-                    '$match': {
-                        'tenant_name': tenant_name,
-                        'classificazione': {'$ne': None, '$ne': '', '$ne': 'non_classificata'}
-                    }
-                },
-                {
-                    '$group': {
-                        '_id': '$classificazione',
-                        'count': {'$sum': 1},
-                        'avg_confidence': {'$avg': '$confidence'},
-                        'sessions': {'$addToSet': '$session_id'}
-                    }
-                },
-                {
-                    '$project': {
-                        'label': '$_id',
-                        'count': 1,
-                        'session_count': {'$size': '$sessions'},
-                        'avg_confidence': {'$round': ['$avg_confidence', 3]},
-                        '_id': 0
-                    }
-                },
-                {
-                    '$sort': {'count': -1, 'label': 1}
-                }
-            ]
+            # USA METODI DELLA CLASSE invece di query aggregation manuali
+            # Con oggetto Tenant, non serve più filtro tenant_name
+            labels = mongo_reader.get_available_labels()
+            stats = mongo_reader.get_classification_stats()
             
-            # Esegui aggregation
-            cursor = mongo_reader.collection.aggregate(pipeline)
-            labels = list(cursor)
+            # Formatta le etichette con statistiche
+            labels_with_stats = []
+            if stats and 'label_distribution' in stats:
+                for label_stat in stats['label_distribution']:
+                    labels_with_stats.append({
+                        'label': label_stat['label'],
+                        'count': label_stat['count'],
+                        'avg_confidence': label_stat['avg_confidence'],
+                        'percentage': label_stat['percentage']
+                    })
+            else:
+                # Fallback: solo nomi etichette
+                labels_with_stats = [{'label': label, 'count': 0} for label in labels]
             
-            print(f"✅ Trovate {len(labels)} etichette per tenant '{tenant_name}'")
-            for label in labels[:5]:  # Log delle prime 5
-                print(f"  - {label['label']}: {label['count']} classificazioni, {label['session_count']} sessioni")
+            print(f"✅ Trovate {len(labels_with_stats)} etichette per tenant {tenant.tenant_name}")
+            for label_info in labels_with_stats[:5]:  # Log delle prime 5
+                print(f"  - {label_info['label']}: {label_info.get('count', 0)} classificazioni")
             
             return jsonify({
                 'success': True,
-                'tenant_name': tenant_name,
-                'labels': labels,
-                'total': len(labels),
+                'tenant_name': tenant.tenant_name,
+                'tenant_id': tenant.tenant_id,
+                'labels': labels_with_stats,
+                'total': len(labels_with_stats),
                 'timestamp': datetime.now().isoformat()
             })
             
@@ -3924,8 +4049,9 @@ def api_get_sessions_by_tenant(tenant_name: str):
             print(f"  🏷️ Filtro etichetta: '{label_filter}'")
         print(f"  📊 Limite: {limit}")
         
-        # Usa MongoDB reader per recuperare sessioni
-        mongo_reader = MongoClassificationReader()
+        # CORREZIONE CRITICA: tenant_name DEVE essere UUID (tenant_id)
+        tenant = resolve_tenant_from_identifier(tenant_name)
+        mongo_reader = MongoClassificationReader(tenant=tenant)
         
         if not mongo_reader.connect():
             return jsonify({
@@ -3935,55 +4061,21 @@ def api_get_sessions_by_tenant(tenant_name: str):
             }), 500
         
         try:
-            # Costruisci query MongoDB
-            query = {'tenant_name': tenant_name}
-            
-            # Aggiungi filtro etichetta se specificato
+            # USA METODI DELLA CLASSE invece di query manuali
+            # Con oggetto Tenant, non serve più filtro tenant_name
             if label_filter:
-                query['classificazione'] = label_filter
+                sessions = mongo_reader.get_sessions_by_label(label_filter, limit=limit)
+            else:
+                sessions = mongo_reader.get_all_sessions(limit=limit)
             
-            # Recupera sessioni
-            cursor = mongo_reader.collection.find(
-                query,
-                {'embedding': 0}  # Escludi embedding per performance
-            ).sort('timestamp', -1).limit(limit)
-            
-            sessions = []
-            for doc in cursor:
-                # Converti ObjectId in string
-                doc['_id'] = str(doc['_id'])
-                
-                # Formatta per interfaccia React
-                session = {
-                    'id': doc['_id'],
-                    'session_id': doc.get('session_id', ''),
-                    'conversation_text': doc.get('testo', doc.get('conversazione', '')),
-                    'classification': doc.get('classificazione', 'non_classificata'),
-                    'confidence': doc.get('confidence', 0.0),
-                    'motivation': doc.get('motivazione', ''),
-                    'notes': doc.get('motivazione', ''),  # Mapping motivazione → notes per UI
-                    'method': doc.get('metadata', {}).get('method', 'unknown'),
-                    'timestamp': doc.get('timestamp'),
-                    'tenant_name': doc.get('tenant_name'),
-                    'client': doc.get('client'),
-                    'classifications': [{
-                        'tag_name': doc.get('classificazione', 'non_classificata'),
-                        'confidence': doc.get('confidence', 0.0),
-                        'method': doc.get('metadata', {}).get('method', 'unknown'),
-                        'motivation': doc.get('motivazione', ''),
-                        'created_at': doc.get('timestamp').isoformat() if doc.get('timestamp') else '',
-                        'source': 'database'
-                    }] if doc.get('classificazione') and doc.get('classificazione') != 'non_classificata' else []
-                }
-                sessions.append(session)
-            
-            print(f"✅ Recuperate {len(sessions)} sessioni per tenant '{tenant_name}'")
+            print(f"✅ Recuperate {len(sessions)} sessioni per tenant {tenant.tenant_name}")
             if label_filter:
                 print(f"  🏷️ Con etichetta '{label_filter}'")
             
             return jsonify({
                 'success': True,
-                'tenant_name': tenant_name,
+                'tenant_name': tenant.tenant_name,
+                'tenant_id': tenant.tenant_id,
                 'label_filter': label_filter,
                 'sessions': sessions,
                 'total': len(sessions),
@@ -4132,13 +4224,22 @@ def get_prompts_status_by_tenant_id(tenant_identifier: str):
             tenant_id = tenant_identifier
         else:
             print(f"✅ [DEBUG] Riconosciuto come tenant_slug: {tenant_identifier}")
-            # Risolvi slug -> tenant_id
-            print("🔍 [DEBUG] Inizializzo MongoClassificationReader per slug resolution...")
+            # Risolvi slug -> oggetto Tenant completo usando metodo statico
+            print("🔍 [DEBUG] Uso get_available_tenants per ricerca tenant...")
             from mongo_classification_reader import MongoClassificationReader
-            reader = MongoClassificationReader()
             
-            print(f"🔍 [DEBUG] Chiamo get_tenant_info_from_name({tenant_identifier})...")
-            tenant_info = reader.get_tenant_info_from_name(tenant_identifier)
+            # Trova il tenant con questo slug
+            tenant_objects = MongoClassificationReader.get_available_tenants()
+            tenant_info = None
+            for tenant_obj in tenant_objects:
+                if tenant_obj.tenant_slug == tenant_identifier:
+                    tenant_info = {
+                        'tenant_id': tenant_obj.tenant_id,
+                        'tenant_name': tenant_obj.tenant_name,
+                        'tenant_slug': tenant_obj.tenant_slug
+                    }
+                    break
+            
             if not tenant_info:
                 print(f"❌ [DEBUG] Tenant non trovato: {tenant_identifier}")
                 return jsonify({
@@ -5641,11 +5742,12 @@ def get_clustering_statistics(tenant_id):
             else:
                 raise ValueError(f"Tenant {tenant_uuid} non trovato o inattivo")
         
-        tenant_slug = _resolve_tenant_slug_from_id(tenant_id)
-        print(f"✅ [API] Tenant risolto: {tenant_id} -> {tenant_slug}")
+        # CORREZIONE: Crea oggetto Tenant direttamente dal tenant_id (UUID)
+        tenant = resolve_tenant_from_identifier(tenant_id)
+        print(f"✅ [API] Tenant risolto: {tenant.tenant_name} ({tenant.tenant_id})")
         
-        # 2. Inizializza reader classificazioni MongoDB
-        mongo_reader = MongoClassificationReader()
+        # 2. Inizializza reader classificazioni MongoDB con oggetto Tenant
+        mongo_reader = MongoClassificationReader(tenant=tenant)
         mongo_reader.connect()
         
         # 3. Recupera classificazioni recenti con clustering info
@@ -5655,7 +5757,7 @@ def get_clustering_statistics(tenant_id):
         print(f"🔍 [API] Estrazione classificazioni {start_date} -> {end_date}")
         
         classifications = mongo_reader.get_tenant_classifications_with_clustering(
-            tenant_slug=tenant_slug,
+            tenant_slug=tenant.tenant_slug,
             start_date=start_date, 
             end_date=end_date,
             limit=sample_limit
@@ -5666,9 +5768,9 @@ def get_clustering_statistics(tenant_id):
         if not classifications:
             return jsonify({
                 'success': False,
-                'error': f'Nessuna classificazione trovata per {tenant_slug} negli ultimi {days_back} giorni',
-                'tenant_id': tenant_id,
-                'tenant_slug': tenant_slug
+                'error': f'Nessuna classificazione trovata per {tenant.tenant_name} negli ultimi {days_back} giorni',
+                'tenant_id': tenant.tenant_id,
+                'tenant_slug': tenant.tenant_slug
             }), 404
         
         print(f"✅ [API] Trovate {len(classifications)} classificazioni")
@@ -5739,8 +5841,8 @@ def get_clustering_statistics(tenant_id):
         
         result_data = {
             'success': True,
-            'tenant_id': tenant_id,
-            'tenant_slug': tenant_slug,
+            'tenant_id': tenant.tenant_id,
+            'tenant_slug': tenant.tenant_slug,
             'date_range': {
                 'start': start_date.isoformat(),
                 'end': end_date.isoformat(),
@@ -5770,7 +5872,7 @@ def get_clustering_statistics(tenant_id):
                 print("🎨 [API] Generazione dati visualizzazione...")
                 
                 # Inizializza pipeline per ottenere embeddings
-                pipeline = EndToEndPipeline(config_path='config.yaml', tenant_slug=tenant_slug)
+                pipeline = EndToEndPipeline(config_path='config.yaml', tenant_slug=tenant.tenant_slug)
                 embedder = pipeline._get_embedder()
                 
                 # Genera embeddings (campione se troppi)

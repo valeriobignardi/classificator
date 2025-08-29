@@ -336,7 +336,7 @@ const ToolManager: React.FC<ToolManagerProps> = ({ open }) => {
           Gestione Tools LLM
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          Configura le funzioni disponibili per il classificatore LLM di {selectedTenant?.nome || 'questo tenant'}
+          Configura le funzioni disponibili per il classificatore LLM di {selectedTenant?.tenant_name || 'questo tenant'}
         </Typography>
       </Box>
 

@@ -1223,7 +1223,7 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
       {activeTab === 1 && (
         // All Sessions Content
         <AllSessionsView 
-          clientName={tenant.nome} 
+          clientName={tenant.tenant_name} 
           onSessionAdd={handleSessionAddedToQueue}
         />
       )}

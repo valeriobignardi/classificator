@@ -97,7 +97,16 @@ class AltroTagValidator:
         
         # Inizializza i componenti necessari
         self.schema_manager = ClassificationSchemaManager()
-        self.db_connector = MongoClassificationReader()
+        
+        # Crea oggetto Tenant dal tenant_id per il MongoClassificationReader
+        try:
+            from Utils.tenant import Tenant
+            tenant_obj = Tenant.from_uuid(self.tenant_id)
+            self.db_connector = MongoClassificationReader(tenant=tenant_obj)
+            self.logger.info(f"🗄️ MongoClassificationReader inizializzato per tenant: {tenant_obj.tenant_name}")
+        except Exception as e:
+            self.logger.error(f"⚠️ Errore creazione tenant da UUID '{self.tenant_id}': {e}")
+            raise ValueError(f"Impossibile creare oggetto Tenant da ID: {self.tenant_id}")
         
         # ✅ Embedder dinamico configurato per il tenant
         self.embedder = self._get_dynamic_embedder()

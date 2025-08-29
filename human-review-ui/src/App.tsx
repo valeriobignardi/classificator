@@ -91,7 +91,7 @@ function AppContent() {
   // Passa l'oggetto tenant completo anziché solo il nome
   const tenant = selectedTenant || { 
     tenant_id: '015007d9-d413-11ef-86a5-96000228e7fe',  // Default humanitas
-    nome: 'humanitas',
+    tenant_name: 'humanitas',
     is_active: true 
   };
 
@@ -187,7 +187,7 @@ function AppContent() {
               🏥 Human Review Interface
               {selectedTenant && (
                 <Chip
-                  label={selectedTenant.nome.toUpperCase()}
+                  label={selectedTenant.tenant_name.toUpperCase()}
                   color="secondary"
                   variant="outlined"
                   size="small"

@@ -45,8 +45,10 @@ class TestClusterReviewPropagation(unittest.TestCase):
         self.tenant_name = "test_propagation"
         self.client_name = "test_client"
         
-        # Inizializza MongoClassificationReader
-        self.mongo_reader = MongoClassificationReader(tenant_name=self.tenant_name)
+        # Inizializza MongoClassificationReader con oggetto Tenant
+        from tenant import Tenant
+        test_tenant = Tenant.from_slug(self.tenant_name)
+        self.mongo_reader = MongoClassificationReader(tenant=test_tenant)
         self.mongo_reader.connect()
         
         # Inizializza QualityGate per i test

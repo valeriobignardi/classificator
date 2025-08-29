@@ -163,7 +163,7 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
 
     try {
       setLoading(true);
-      console.log('🔄 [DEBUG] Inizio copia prompt da Humanitas per tenant:', selectedTenant.nome);
+      console.log('🔄 [DEBUG] Inizio copia prompt da Humanitas per tenant:', selectedTenant.tenant_name);
       
       const result = await apiService.copyPromptsFromHumanitas(selectedTenant.tenant_id);
       

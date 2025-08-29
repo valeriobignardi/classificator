@@ -1016,7 +1016,20 @@ class SemanticMemoryManager:
 if __name__ == "__main__":
     print("=== TEST SEMANTIC MEMORY MANAGER ===\n")
     
-    manager = SemanticMemoryManager()
+    # Crea un tenant di test per il test
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from Utils.tenant import Tenant
+    
+    test_tenant = Tenant(
+        tenant_id="015007d9-d413-11ef-86a5-96000228e7fe",
+        tenant_name="humanitas",
+        tenant_slug="humanitas",
+        is_active=True
+    )
+    
+    manager = SemanticMemoryManager(tenant=test_tenant)
     
     try:
         # Carica memoria

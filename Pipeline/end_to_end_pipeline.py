@@ -305,9 +305,9 @@ class EndToEndPipeline:
         # Inizializza il gestore della memoria semantica
         print("🧠 Inizializzazione memoria semantica...")
         self.semantic_memory = SemanticMemoryManager(
+            tenant=self.tenant,  # Passa l'oggetto Tenant completo
             config_path=config_path,
-            embedder=self.embedder,
-            tenant_name=self.tenant_slug  # Passa il tenant per cache isolation
+            embedder=self.embedder
         )
         
         # Inizializza attributi per BERTopic pre-addestrato

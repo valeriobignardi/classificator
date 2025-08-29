@@ -190,10 +190,18 @@ class EmbeddingEngineFactory:
         print(f"🚀 FACTORY DEBUG: Creazione embedder tipo '{engine_type}' con config: {config}")
         try:
             if engine_type == 'labse':
-                from labse_embedder import LaBSEEmbedder
-                print(f"✅ FACTORY DEBUG: Importo LaBSEEmbedder...")
-                embedder = LaBSEEmbedder(**config)
-                print(f"✅ FACTORY DEBUG: LaBSEEmbedder creato con successo")
+                # AGGIORNAMENTO 2025-08-29: Usa servizio Docker remoto per LaBSE
+                print(f"🐳 FACTORY DEBUG: Creazione LaBSE Remote Client...")
+                from labse_remote_client import LaBSERemoteClient
+                
+                # Configura client remoto (ignora config locale per ora)
+                embedder = LaBSERemoteClient(
+                    service_url="http://localhost:8081",
+                    timeout=config.get('timeout', 300),
+                    max_retries=config.get('max_retries', 3),
+                    fallback_local=config.get('fallback_local', True)
+                )
+                print(f"✅ FACTORY DEBUG: LaBSE Remote Client creato con successo")
                 return embedder
                 
             elif engine_type == 'bge_m3':
@@ -273,13 +281,22 @@ class EmbeddingEngineFactory:
     
     def get_default_embedder(self) -> BaseEmbedder:
         """
-        Ottiene embedder di default (LaBSE) per compatibilità
+        Ottiene embedder di default (LaBSE remoto/locale) per compatibilità
+        
+        AGGIORNAMENTO 2025-08-29: Usa servizio Docker come default
         
         Returns:
-            Embedder di default
+            Embedder di default (preferibilmente remoto)
         """
-        from labse_embedder import LaBSEEmbedder
-        return LaBSEEmbedder()
+        try:
+            print(f"🐳 Default embedder: tentativo servizio remoto...")
+            from labse_remote_client import LaBSERemoteClient
+            return LaBSERemoteClient(service_url="http://localhost:8081")
+        except Exception as e:
+            print(f"⚠️ Default embedder remoto fallito: {e}")
+            print(f"🔄 Fallback su LaBSE locale...")
+            from labse_embedder import LaBSEEmbedder
+            return LaBSEEmbedder()
     
     def reload_tenant_embedder(self, tenant_id: str) -> BaseEmbedder:
         """

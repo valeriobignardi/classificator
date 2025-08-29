@@ -115,34 +115,56 @@ class EmbedderFactory:
     @classmethod
     def _create_labse_local(cls, config: Dict[str, Any]) -> Any:
         """
-        Crea istanza LaBSE locale
+        Crea embedder LaBSE locale con fallback su remoto
+        
+        AGGIORNAMENTO 2025-08-29: Preferisce servizio Docker remoto quando possibile
         
         Args:
-            config: Configurazione per LaBSEEmbedder
+            config: Configurazione per embedder
         
         Returns:
-            Istanza LaBSEEmbedder locale
+            Istanza embedder LaBSE (preferibilmente remoto)
         """
+        # STRATEGIA: Prima prova servizio remoto, poi fallback locale
         try:
-            from labse_embedder import LaBSEEmbedder
+            print(f"🐳 Tentativo LaBSE remoto...")
+            from labse_remote_client import LaBSERemoteClient
             
-            # Parametri default
-            local_config = {
-                'test_on_init': config.get('test_on_init', False),
-                'model_name': config.get('model_name', 'sentence-transformers/LaBSE'),
-                'device': config.get('device', None)
+            # Mappa parametri config per client remoto
+            remote_config = {
+                'service_url': config.get('service_url', 'http://localhost:8081'),
+                'timeout': config.get('timeout', 300),
+                'max_retries': config.get('max_retries', 3),
+                'fallback_local': True  # Sempre fallback abilitato
             }
             
-            print(f"📦 Caricamento LaBSEEmbedder locale...")
-            embedder = LaBSEEmbedder(**local_config)
-            print(f"✅ LaBSEEmbedder locale caricato")
-            
+            embedder = LaBSERemoteClient(**remote_config)
+            print(f"✅ LaBSE remoto caricato")
             return embedder
             
-        except ImportError as e:
-            raise RuntimeError(f"Impossibile importare LaBSEEmbedder: {e}")
-        except Exception as e:
-            raise RuntimeError(f"Errore creazione LaBSEEmbedder locale: {e}")
+        except Exception as remote_error:
+            print(f"⚠️ LaBSE remoto fallito: {remote_error}")
+            print(f"🔄 Fallback su LaBSE locale...")
+            
+            try:
+                from labse_embedder import LaBSEEmbedder
+                
+                # Parametri default per locale
+                local_config = {
+                    'test_on_init': config.get('test_on_init', False),
+                    'model_name': config.get('model_name', 'sentence-transformers/LaBSE'),
+                    'device': config.get('device', None)
+                }
+                
+                print(f"📦 Caricamento LaBSEEmbedder locale...")
+                embedder = LaBSEEmbedder(**local_config)
+                print(f"✅ LaBSEEmbedder locale caricato")
+                return embedder
+                
+            except ImportError as e:
+                raise RuntimeError(f"Impossibile importare LaBSEEmbedder: {e}")
+            except Exception as e:
+                raise RuntimeError(f"Errore creazione LaBSEEmbedder locale: {e}")
     
     @classmethod  
     def _create_labse_remote(cls, config: Dict[str, Any]) -> Any:

@@ -28,7 +28,7 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'LabelD
 
 from lettore import LettoreConversazioni
 from session_aggregator import SessionAggregator
-from labse_embedder import LaBSEEmbedder
+# RIMOSSO: from labse_embedder import LaBSEEmbedder - Ora usa simple_embedding_manager
 from hdbscan_clusterer import HDBSCANClusterer
 # RIMOSSO: from intent_clusterer import IntentBasedClusterer  # Sistema legacy eliminato
 from intelligent_intent_clusterer import IntelligentIntentClusterer
@@ -523,9 +523,18 @@ class EndToEndPipeline:
                 
             except ImportError as e:
                 print(f"⚠️ Fallback: Impossibile importare simple_embedding_manager: {e}")
-                print(f"🔄 Uso fallback LaBSE hardcodato")
-                from labse_embedder import LaBSEEmbedder
-                self.embedder = LaBSEEmbedder()
+                print(f"🔄 Uso fallback LaBSE remoto/locale")
+                
+                # AGGIORNAMENTO 2025-08-29: Fallback coerente con servizio Docker
+                try:
+                    from labse_remote_client import LaBSERemoteClient
+                    self.embedder = LaBSERemoteClient(service_url="http://localhost:8081")
+                    print(f"✅ Fallback remoto configurato")
+                except Exception as remote_error:
+                    print(f"⚠️ Fallback remoto fallito: {remote_error}")
+                    from labse_embedder import LaBSEEmbedder
+                    self.embedder = LaBSEEmbedder()
+                    print(f"✅ Fallback locale configurato")
                 
         return self.embedder
     

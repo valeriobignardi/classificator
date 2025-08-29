@@ -160,10 +160,16 @@ class QualityGateEngine:
         try:
             from EmbeddingEngine.simple_embedding_manager import simple_embedding_manager
             return simple_embedding_manager.get_embedder_for_tenant(effective_tenant)
-        except Exception:
-            # Fallback per compatibilità
-            from EmbeddingEngine.labse_embedder import LaBSEEmbedder
-            return LaBSEEmbedder()
+        except Exception as e:
+            # AGGIORNAMENTO 2025-08-29: Fallback coerente con servizio Docker
+            print(f"⚠️ QualityGate fallback embedder: {e}")
+            try:
+                from EmbeddingEngine.labse_remote_client import LaBSERemoteClient
+                return LaBSERemoteClient(service_url="http://localhost:8081")
+            except Exception:
+                # Doppio fallback su locale
+                from EmbeddingEngine.labse_embedder import LaBSEEmbedder
+                return LaBSEEmbedder()
 
     def evaluate_classification(self, 
                               session_id: str,
@@ -1605,7 +1611,13 @@ class QualityGateEngine:
         Vantaggi: Veloce, efficiente, buona copertura semantica
         Svantaggi: Non analizza ogni singola sessione individualmente
         """
-        from EmbeddingEngine.labse_embedder import LaBSEEmbedder
+        # AGGIORNAMENTO 2025-08-29: Usa embedder dinamico invece di hardcode
+        try:
+            embedder = self._get_dynamic_embedder()
+        except:
+            from EmbeddingEngine.labse_embedder import LaBSEEmbedder
+            embedder = LaBSEEmbedder()
+            
         from Classification.advanced_ensemble_classifier import AdvancedEnsembleClassifier
         from Preprocessing.session_aggregator import SessionAggregator
         import numpy as np
@@ -1854,7 +1866,13 @@ class QualityGateEngine:
         Vantaggi: Analisi completa, massima precisione
         Svantaggi: Più lenta, richiede più risorse
         """
-        from EmbeddingEngine.labse_embedder import LaBSEEmbedder
+        # AGGIORNAMENTO 2025-08-29: Usa embedder dinamico
+        try:
+            embedder = self._get_dynamic_embedder()
+        except:
+            from EmbeddingEngine.labse_embedder import LaBSEEmbedder
+            embedder = LaBSEEmbedder()
+            
         from Classification.advanced_ensemble_classifier import AdvancedEnsembleClassifier
         from Preprocessing.session_aggregator import SessionAggregator
         
@@ -2046,7 +2064,13 @@ class QualityGateEngine:
         Vantaggi: Efficiente per aggiornamenti, evita riprocessing
         Svantaggi: Richiede logica di tracking delle sessioni processate
         """
-        from EmbeddingEngine.labse_embedder import LaBSEEmbedder
+        # AGGIORNAMENTO 2025-08-29: Usa embedder dinamico
+        try:
+            embedder = self._get_dynamic_embedder()
+        except:
+            from EmbeddingEngine.labse_embedder import LaBSEEmbedder
+            embedder = LaBSEEmbedder()
+            
         from Classification.advanced_ensemble_classifier import AdvancedEnsembleClassifier
         from Preprocessing.session_aggregator import SessionAggregator
         from TagDatabase.tag_database_connector import TagDatabaseConnector

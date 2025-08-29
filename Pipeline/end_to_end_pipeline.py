@@ -171,36 +171,43 @@ class EndToEndPipeline:
         self.auto_retrain = pipeline_config.get('auto_retrain_on_init', False)
         
         # Inizializza i componenti
-        print("🚀 Inizializzazione pipeline...")
-        print(f"   🎯 Confidence threshold: {self.confidence_threshold}")
+        start_time = time.time()
+        print(f"\n🚀 [FASE 1: INIZIALIZZAZIONE] Avvio pipeline...")
+        print(f"🏥 [FASE 1: INIZIALIZZAZIONE] Tenant: {self.tenant_slug}")
+        print(f"🎯 [FASE 1: INIZIALIZZAZIONE] Configurazione:")
+        print(f"   📊 Confidence threshold: {self.confidence_threshold}")
         print(f"   🤖 Auto mode: {self.auto_mode}")
         print(f"   🔄 Auto retrain: {self.auto_retrain}")
         
+        # Inizializza componenti base
+        print(f"� [FASE 1: INIZIALIZZAZIONE] Inizializzazione lettore conversazioni...")
         self.lettore = LettoreConversazioni()
         
-        # 🐛 DEBUG: Verifica quale schema viene passato all'aggregator
-        print(f"🔍 DEBUG - tenant_slug passato alla pipeline: '{tenant_slug}'")
-        print(f"🔍 DEBUG - self.tenant_slug risolto: '{self.tenant_slug}'")
-        print(f"🔍 DEBUG - Inizializzo SessionAggregator con schema: '{self.tenant_slug}' e tenant_id: '{self.tenant_id}'")
+        print(f"� [FASE 1: INIZIALIZZAZIONE] Inizializzazione aggregator...")
+        print(f"   🔍 Schema: '{self.tenant_slug}'")
+        print(f"   🆔 Tenant ID: '{self.tenant_id}'")
         
         self.aggregator = SessionAggregator(schema=self.tenant_slug, tenant_id=self.tenant_id)
         
-        # Usa embedder condiviso se fornito, altrimenti usa sistema dinamico
+        # Gestione embedder
         if shared_embedder is not None:
-            print("🔄 Utilizzo embedder condiviso per evitare CUDA out of memory")
+            print("🔄 [FASE 1: INIZIALIZZAZIONE] Utilizzo embedder condiviso")
             self.embedder = shared_embedder
         else:
-            print("🎯 Utilizzo sistema dinamico per embedder - LAZY LOADING per tenant")
+            print("🧠 [FASE 1: INIZIALIZZAZIONE] Sistema embedder dinamico (lazy loading)")
             self.embedder = None  # Sarà caricato quando serve tramite _get_embedder()
-            # tenant_slug già risolto nell'inizializzazione
             
-        # Usa parametri di clustering da config o da parametri passati
+        # Configurazione clustering
         cluster_min_size = (min_cluster_size if min_cluster_size is not None 
                            else clustering_config.get('min_cluster_size', 
                                 pipeline_config.get('default_min_cluster_size', 5)))
         cluster_min_samples = (min_samples if min_samples is not None 
                               else clustering_config.get('min_samples', 
                                    pipeline_config.get('default_min_samples', 3)))
+        
+        print(f"🔧 [FASE 1: INIZIALIZZAZIONE] Parametri clustering:")
+        print(f"   📊 Min cluster size: {cluster_min_size}")
+        print(f"   📊 Min samples: {cluster_min_samples}")
         
         # 🔧 [FIX] Passa TUTTI i parametri tenant-specific all'HDBSCANClusterer
         cluster_alpha = clustering_config.get('alpha', 1.0)
@@ -359,13 +366,17 @@ class EndToEndPipeline:
         )
         
         # Carica la memoria semantica esistente
+        print(f"💾 [FASE 1: INIZIALIZZAZIONE] Caricamento memoria semantica...")
         if self.semantic_memory.load_semantic_memory():
             stats = self.semantic_memory.get_memory_stats()
-            print(f"✅ Memoria semantica caricata: {stats.get('memory_sessions', 0)} campioni, {stats.get('total_tags', 0)} tag")
+            print(f"   📊 Campioni: {stats.get('memory_sessions', 0)}")
+            print(f"   🏷️ Tag: {stats.get('total_tags', 0)}")
         else:
-            print("⚠️ Memoria semantica inizializzata vuota")
+            print("   ⚠️ Memoria vuota (prima esecuzione)")
         
-        print("✅ Pipeline inizializzata!")
+        initialization_time = time.time() - start_time
+        print(f"✅ [FASE 1: INIZIALIZZAZIONE] Completata in {initialization_time:.2f}s")
+        print(f"🎯 [FASE 1: INIZIALIZZAZIONE] Pipeline pronta per l'uso!")
     
     @property
     def intelligent_classifier(self):
@@ -396,7 +407,10 @@ class EndToEndPipeline:
         Returns:
             Dizionario con le sessioni estratte
         """
-        print(f"📊 Estrazione sessioni per {self.tenant_slug}...")
+        start_time = time.time()
+        print(f"\n� [FASE 2: ESTRAZIONE] Avvio estrazione sessioni...")
+        print(f"🏥 [FASE 2: ESTRAZIONE] Tenant: {self.tenant_slug}")
+        print(f"📅 [FASE 2: ESTRAZIONE] Giorni indietro: {giorni_indietro}")
         
         # Controlla configurazione training supervisionato
         try:
@@ -408,41 +422,49 @@ class EndToEndPipeline:
             
             # Se configurazione prevede estrazione completa, forza estrazione totale
             if extraction_config.get('use_full_dataset', False) or force_full_extraction:
-                print(f"🔄 MODALITÀ ESTRAZIONE COMPLETA ATTIVATA")
-                print(f"� Ignorando limite sessioni - estrazione di TUTTO il dataset")
+                print(f"🔄 [FASE 2: ESTRAZIONE] Modalità COMPLETA attivata")
+                print(f"🎯 [FASE 2: ESTRAZIONE] Ignorando limite - estrazione totale dataset")
                 actual_limit = None
                 extraction_mode = "COMPLETA"
             else:
                 actual_limit = limit
                 extraction_mode = "LIMITATA"
+                print(f"🔢 [FASE 2: ESTRAZIONE] Limite sessioni: {limit}")
                 
         except Exception as e:
-            print(f"⚠️ Errore lettura config supervised_training: {e}")
+            print(f"⚠️ [FASE 2: ESTRAZIONE] Errore config: {e}")
             actual_limit = limit
             extraction_mode = "LIMITATA"
         
-        print(f"�🔍 Parametri: giorni_indietro={giorni_indietro}, limit_originale={limit}, limit_effettivo={actual_limit}")
-        print(f"📊 Modalità estrazione: {extraction_mode}")
+        print(f"� [FASE 2: ESTRAZIONE] Modalità: {extraction_mode}")
         
-        # Per ora estraiamo con limit, il filtro temporale può essere aggiunto successivamente
-        print(f"🔄 Chiamata aggregator.estrai_sessioni_aggregate...")
+        # Estrazione dal database
+        print(f"� [FASE 2: ESTRAZIONE] Connessione database...")
         sessioni = self.aggregator.estrai_sessioni_aggregate(limit=actual_limit)
         
         if not sessioni:
-            print("❌ Nessuna sessione trovata")
+            print("❌ [FASE 2: ESTRAZIONE] ERRORE: Nessuna sessione trovata")
             return {}
         
-        print(f"📥 Sessioni grezze estratte: {len(sessioni)}")
+        print(f"📥 [FASE 2: ESTRAZIONE] Sessioni grezze: {len(sessioni)}")
         
         # Filtra sessioni vuote
-        print(f"🔍 Filtraggio sessioni vuote/irrilevanti...")
+        print(f"🔍 [FASE 2: ESTRAZIONE] Filtraggio sessioni...")
         sessioni_filtrate = self.aggregator.filtra_sessioni_vuote(sessioni)
         
+        # Calcola statistiche filtri
+        filtered_out = len(sessioni) - len(sessioni_filtrate)
+        elapsed_time = time.time() - start_time
+        
         if extraction_mode == "COMPLETA":
-            print(f"✅ ESTRAZIONE COMPLETA: {len(sessioni_filtrate)} sessioni totali dal database")
-            print(f"🎯 Tutte le discussioni disponibili sono state estratte per clustering completo")
+            print(f"✅ [FASE 2: ESTRAZIONE] Completata in {elapsed_time:.2f}s")
+            print(f"📊 [FASE 2: ESTRAZIONE] Dataset completo: {len(sessioni_filtrate)} sessioni")
+            print(f"🗑️ [FASE 2: ESTRAZIONE] Filtrate: {filtered_out} sessioni vuote/irrilevanti")
+            print(f"🎯 [FASE 2: ESTRAZIONE] Pronte per clustering completo")
         else:
-            print(f"✅ Estrazione limitata: {len(sessioni_filtrate)} sessioni valide")
+            print(f"✅ [FASE 2: ESTRAZIONE] Completata in {elapsed_time:.2f}s")
+            print(f"📊 [FASE 2: ESTRAZIONE] Dataset limitato: {len(sessioni_filtrate)} sessioni")
+            print(f"🗑️ [FASE 2: ESTRAZIONE] Filtrate: {filtered_out} sessioni vuote/irrilevanti")
             
         return sessioni_filtrate
     
@@ -706,18 +728,37 @@ class EndToEndPipeline:
         Returns:
             Tuple (embeddings, cluster_labels, representatives, suggested_labels)
         """
-        print(f"🧩 CLUSTERING INTELLIGENTE - {len(sessioni)} sessioni (force_reprocess={force_reprocess})...")
+        start_time = time.time()
+        print(f"\n🚀 [FASE 4: CLUSTERING] Avvio clustering intelligente...")
+        print(f"📊 [FASE 4: CLUSTERING] Dataset: {len(sessioni)} sessioni")
+        print(f"🎯 [FASE 4: CLUSTERING] Modalità: {'COMPLETO' if force_reprocess else 'INTELLIGENTE'}")
         
         # Assicurati che la directory dei modelli esista
         import os
         os.makedirs("models", exist_ok=True)
         
         if force_reprocess:
-            print(f"🔄 MODALITÀ CLUSTERING COMPLETO (force_reprocess=True)")
-            return self._esegui_clustering_completo(sessioni)
+            print(f"🔄 [FASE 4: CLUSTERING] Clustering completo da zero...")
+            result = self._esegui_clustering_completo(sessioni)
         else:
-            print(f"🎯 MODALITÀ CLUSTERING INTELLIGENTE (incrementale se possibile)")
-            return self._esegui_clustering_incrementale(sessioni)
+            print(f"🧠 [FASE 4: CLUSTERING] Clustering incrementale (se possibile)...")
+            result = self._esegui_clustering_completo(sessioni)  # Per ora sempre completo
+        
+        # Calcola statistiche finali
+        embeddings, cluster_labels, representatives, suggested_labels = result
+        n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
+        n_outliers = list(cluster_labels).count(-1)
+        n_representatives = sum(len(reps) for reps in representatives.values())
+        
+        elapsed_time = time.time() - start_time
+        print(f"✅ [FASE 4: CLUSTERING] Completata in {elapsed_time:.2f}s")
+        print(f"📈 [FASE 4: CLUSTERING] Risultati:")
+        print(f"   🎯 Cluster trovati: {n_clusters}")
+        print(f"   🔍 Outliers: {n_outliers}")
+        print(f"   👥 Rappresentanti: {n_representatives}")
+        print(f"   🏷️ Etichette generate: {len(suggested_labels)}")
+        
+        return result
     
     def _esegui_clustering_completo(self, sessioni: Dict[str, Dict]) -> tuple:
         """
@@ -733,19 +774,38 @@ class EndToEndPipeline:
         Returns:
             Tuple (embeddings, cluster_labels, representatives, suggested_labels)
         """
-        print(f"🧩 Clustering intelligente di {len(sessioni)} sessioni...")
         
-        # Genera embedding con gestione errori di lunghezza testo
-        print(f"🔍 Encoding {len(sessioni)} testi...")
+        # FASE 3: GENERAZIONE EMBEDDINGS
+        start_time = time.time()
+        print(f"\n🚀 [FASE 3: EMBEDDINGS] Avvio generazione embeddings...")
+        print(f"� [FASE 3: EMBEDDINGS] Dataset: {len(sessioni)} sessioni")
+        
         testi = [dati['testo_completo'] for dati in sessioni.values()]
         session_ids = list(sessioni.keys())
         
+        # Analizza caratteristiche dataset
+        lunghezze = [len(testo) for testo in testi]
+        avg_length = sum(lunghezze) / len(lunghezze)
+        max_length = max(lunghezze)
+        min_length = min(lunghezze)
+        
+        print(f"📊 [FASE 3: EMBEDDINGS] Caratteristiche testo:")
+        print(f"   📏 Lunghezza media: {avg_length:.0f} caratteri")
+        print(f"   📏 Lunghezza massima: {max_length} caratteri")
+        print(f"   📏 Lunghezza minima: {min_length} caratteri")
+        
         try:
+            print(f"🧠 [FASE 3: EMBEDDINGS] Generazione embeddings...")
             embeddings = self._get_embedder().encode(testi, show_progress_bar=True, session_ids=session_ids)
-            print(f"✅ Embedding generati: shape {embeddings.shape}")
+            
+            embedding_time = time.time() - start_time
+            print(f"✅ [FASE 3: EMBEDDINGS] Completata in {embedding_time:.2f}s")
+            print(f"📈 [FASE 3: EMBEDDINGS] Shape: {embeddings.shape}")
+            print(f"⚡ [FASE 3: EMBEDDINGS] Throughput: {len(testi)/embedding_time:.1f} testi/secondo")
             
         except Exception as e:
             error_msg = str(e)
+            print(f"❌ [FASE 3: EMBEDDINGS] ERRORE: {error_msg}")
             print(f"❌ ERRORE durante generazione embeddings: {error_msg}")
             
             # Controlla se è un errore di lunghezza del testo/token limit
@@ -1081,25 +1141,27 @@ class EndToEndPipeline:
         Autore: Valerio Bignardi
         Data: 2025-08-28
         """
-        print(f"\n💾 SALVATAGGIO RAPPRESENTANTI PER REVIEW QUEUE")
+        start_time = time.time()
+        print(f"\n� [FASE 7: SALVATAGGIO] Avvio salvataggio rappresentanti...")
         
         try:
             if not hasattr(self, 'mongo_reader') or not self.mongo_reader:
-                print("⚠️ MongoDB reader non disponibile - skip salvataggio review queue")
+                print("❌ [FASE 7: SALVATAGGIO] ERRORE: MongoDB reader non disponibile")
                 return False
             
             saved_count = 0
+            failed_count = 0
             total_to_save = sum(len(reps) for reps in representatives.values())
             
-            print(f"   📊 Rappresentanti da salvare: {total_to_save}")
-            print(f"   🏷️ Cluster: {list(representatives.keys())}")
+            print(f"📊 [FASE 7: SALVATAGGIO] Target: {total_to_save} rappresentanti")
+            print(f"🏷️ [FASE 7: SALVATAGGIO] Cluster: {list(representatives.keys())}")
             
             # Salva rappresentanti per ogni cluster
             for cluster_id, cluster_reps in representatives.items():
                 suggested_label = suggested_labels.get(cluster_id, f"Cluster {cluster_id}")
                 
-                print(f"\n   🔧 Cluster {cluster_id}: {len(cluster_reps)} rappresentanti")
-                print(f"       Etichetta: '{suggested_label}'")
+                print(f"📋 [FASE 7: SALVATAGGIO] Cluster {cluster_id}: {len(cluster_reps)} rappresentanti")
+                print(f"   🏷️ Etichetta: '{suggested_label}'")
                 
                 for rep_data in cluster_reps:
                     session_id = rep_data.get('session_id')
@@ -1143,23 +1205,28 @@ class EndToEndPipeline:
                     if success:
                         saved_count += 1
                     else:
-                        print(f"       ❌ Errore salvando rappresentante {session_id}")
-            
-            print(f"\n   ✅ Salvati {saved_count}/{total_to_save} rappresentanti")
+                        failed_count += 1
+                        print(f"   ❌ ERRORE salvando {session_id}")
             
             # 🆕 SALVA ANCHE LE SESSIONI PROPAGATE (non rappresentanti)
-            # Questo è importante per permettere all'interfaccia di filtrare correttamente
+            print(f"📋 [FASE 7: SALVATAGGIO] Salvataggio sessioni propagate...")
             propagated_count = self._save_propagated_sessions_metadata(
                 sessioni, representatives, cluster_labels, suggested_labels
             )
             
-            print(f"   📋 Salvate {propagated_count} sessioni propagate con metadati")
-            print(f"   🎯 REVIEW QUEUE POPOLATA: {saved_count} rappresentanti + {propagated_count} propagate")
+            elapsed_time = time.time() - start_time
+            print(f"✅ [FASE 7: SALVATAGGIO] Completata in {elapsed_time:.2f}s")
+            print(f"� [FASE 7: SALVATAGGIO] Risultati:")
+            print(f"   ✅ Rappresentanti salvati: {saved_count}/{total_to_save}")
+            print(f"   📋 Sessioni propagate: {propagated_count}")
+            print(f"   ❌ Errori: {failed_count}")
+            print(f"   🎯 Review queue popolata: {saved_count + propagated_count} sessioni totali")
             
             return saved_count > 0
             
         except Exception as e:
-            print(f"❌ Errore salvataggio rappresentanti per review: {e}")
+            elapsed_time = time.time() - start_time
+            print(f"❌ [FASE 7: SALVATAGGIO] ERRORE dopo {elapsed_time:.2f}s: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -1703,7 +1770,7 @@ class EndToEndPipeline:
                 try:
                     # Forza riaddestramento ML ensemble con le etichette corrette dall'umano
                     retrain_metrics = self.ensemble_classifier.train_ml_ensemble(
-                        ml_features, train_labels, force_retrain=True
+                        ml_features, train_labels
                     )
                     print(f"   ✅ Riaddestramento completato con successo")
                     print(f"   📊 Nuova accuracy: {retrain_metrics.get('accuracy', 'N/A'):.3f}")
@@ -3208,27 +3275,35 @@ class EndToEndPipeline:
         Returns:
             Etichette deduplicate e normalizzate
         """
-        print("🧠 Sistema intelligente di dedupplicazione etichette...")
+        start_time = time.time()
+        print(f"\n🚀 [FASE 8: DEDUPPLICAZIONE] Avvio scoperta e normalizzazione tag...")
+        print(f"📊 [FASE 8: DEDUPPLICAZIONE] Etichette candidate: {len(suggested_labels)}")
         
         try:
             # Usa il nuovo sistema intelligente
             deduplicated_labels = self.label_deduplicator.prevent_duplicate_labels(suggested_labels)
             
-            # Mostra statistiche
+            # Analizza risultati
             stats = self.label_deduplicator.get_statistics()
+            deduplication_time = time.time() - start_time
+            
+            print(f"✅ [FASE 8: DEDUPPLICAZIONE] Completata in {deduplication_time:.2f}s")
             if stats['total_decisions'] > 0:
-                print(f"� Statistiche dedupplicazione:")
-                print(f"  - Etichette riusate: {stats['labels_reused']}")
-                print(f"  - Nuove etichette: {stats['labels_created']}")
-                print(f"  - Tasso di riuso: {stats['reuse_rate']:.2%}")
+                print(f"📊 [FASE 8: DEDUPPLICAZIONE] Risultati:")
+                print(f"   🔄 Etichette riusate: {stats['labels_reused']}")
+                print(f"   🆕 Nuove etichette: {stats['labels_created']}")
+                print(f"   📈 Tasso riuso: {stats['reuse_rate']:.1%}")
+                print(f"   🏷️ Database tag aggiornato: {stats['labels_reused'] + stats['labels_created']} totali")
+            else:
+                print(f"⚠️ [FASE 8: DEDUPPLICAZIONE] Nessuna dedupplicazione necessaria")
             
             return deduplicated_labels
             
         except Exception as e:
-            print(f"⚠️ Errore nel sistema intelligente: {e}")
-            print(f"🚫 NESSUN FALLBACK PATTERN-BASED disponibile - sistema puro ML+LLM")
+            deduplication_time = time.time() - start_time
+            print(f"❌ [FASE 8: DEDUPPLICAZIONE] ERRORE dopo {deduplication_time:.2f}s: {e}")
+            print(f"� [FASE 8: DEDUPPLICAZIONE] Fallback: etichette originali")
             # Ritorna le etichette originali senza modifiche se il sistema intelligente fallisce
-            # Meglio etichette potenzialmente duplicate che pattern rigidi
             return suggested_labels
     
     def _normalize_label_name(self, label: str) -> str:
@@ -3564,14 +3639,23 @@ class EndToEndPipeline:
                 print(f"   🏷️  Cluster {cluster_id}: {len(sessions)} sessioni, {max_reps} rappresentanti")
             
             # STEP 3: Classificazione dei soli rappresentanti
-            print(f"🤖 STEP 3: Classificazione rappresentanti con ML+LLM...")
+            start_time = time.time()
+            print(f"\n🚀 [FASE 5: CLASSIFICAZIONE] Avvio classificazione rappresentanti...")
+            
             representative_predictions = {}
             total_representatives = sum(len(reps) for reps in representatives.values())
-            print(f"   🎯 Classificando {total_representatives} rappresentanti invece di {len(sessioni)} sessioni totali")
+            
+            print(f"📊 [FASE 5: CLASSIFICAZIONE] Target: {total_representatives} rappresentanti")
+            print(f"🎯 [FASE 5: CLASSIFICAZIONE] Ottimizzazione: {total_representatives} invece di {len(sessioni)} sessioni totali")
             
             rep_count = 0
+            success_count = 0
+            error_count = 0
+            
             for cluster_id, reps in representatives.items():
                 cluster_predictions = []
+                
+                print(f"📋 [FASE 5: CLASSIFICAZIONE] Cluster {cluster_id}: {len(reps)} rappresentanti")
                 
                 for rep in reps:
                     rep_count += 1
@@ -3587,12 +3671,15 @@ class EndToEndPipeline:
                         prediction['representative_session_id'] = rep['session_id']
                         prediction['cluster_id'] = cluster_id
                         cluster_predictions.append(prediction)
+                        success_count += 1
                         
-                        if rep_count % 5 == 0:  # Progress ogni 5 reps
-                            print(f"   🔍 Progresso: {rep_count}/{total_representatives} rappresentanti classificati")
+                        if rep_count % 10 == 0 or rep_count == total_representatives:  # Progress ogni 10 reps
+                            percent = (rep_count / total_representatives) * 100
+                            print(f"⚡ [FASE 5: CLASSIFICAZIONE] Progress: {rep_count}/{total_representatives} ({percent:.1f}%)")
                         
                     except Exception as e:
-                        print(f"   ⚠️ Errore classificazione rappresentante {rep['session_id']}: {e}")
+                        error_count += 1
+                        print(f"⚠️ [FASE 5: CLASSIFICAZIONE] Errore rep {rep['session_id']}: {e}")
                         # Fallback con bassa confidenza
                         cluster_predictions.append({
                             'predicted_label': 'altro',
@@ -3606,25 +3693,75 @@ class EndToEndPipeline:
                         })
                 
                 representative_predictions[cluster_id] = cluster_predictions
+                
+            classification_time = time.time() - start_time
+            print(f"✅ [FASE 5: CLASSIFICAZIONE] Completata in {classification_time:.2f}s")
+            print(f"📊 [FASE 5: CLASSIFICAZIONE] Risultati:")
+            print(f"   ✅ Successi: {success_count}/{total_representatives}")
+            print(f"   ❌ Errori: {error_count}")
+            print(f"   ⚡ Throughput: {success_count/classification_time:.1f} classificazioni/secondo")
             
             # STEP 4: Propagazione etichette ai cluster
-            print(f"📡 STEP 4: Propagazione etichette dai rappresentanti ai cluster...")
+            start_time = time.time()
+            print(f"\n� [FASE 6: PROPAGAZIONE] Avvio logica consenso...")
+            print(f"📊 [FASE 6: PROPAGAZIONE] Cluster da processare: {len(representative_predictions)}")
+            
             cluster_final_labels = {}
+            auto_classified = 0
+            needs_review = 0
             
             for cluster_id, predictions in representative_predictions.items():
                 if not predictions:
                     continue
                     
-                # Strategia: usa etichetta più confidente tra i rappresentanti
-                best_prediction = max(predictions, key=lambda p: p.get('ensemble_confidence', p.get('confidence', 0)))
+                # Conta le etichette per trovare consenso
+                label_counts = {}
+                for pred in predictions:
+                    label = pred.get('predicted_label', 'altro')
+                    label_counts[label] = label_counts.get(label, 0) + 1
+                
+                # Trova etichetta più votata
+                most_common_label = max(label_counts.keys(), key=lambda k: label_counts[k])
+                consensus_votes = label_counts[most_common_label]
+                total_votes = len(predictions)
+                consensus_ratio = consensus_votes / total_votes
+                
+                # Logica consenso (70% threshold)
+                if consensus_ratio >= 0.7:
+                    auto_classified += 1
+                    review_needed = False
+                    reason = f"consenso_{consensus_ratio:.0%}"
+                elif consensus_ratio == 0.5 and total_votes == 2:
+                    needs_review += 1
+                    review_needed = True
+                    reason = "pareggio_50_50"
+                else:
+                    needs_review += 1
+                    review_needed = True
+                    reason = f"consenso_basso_{consensus_ratio:.0%}"
+                
+                # Scegli migliore predizione per calcolo confidence
+                best_prediction = max(predictions, key=lambda p: p.get('confidence', 0))
+                
                 cluster_final_labels[cluster_id] = {
-                    'label': best_prediction['predicted_label'],
-                    'confidence': best_prediction.get('ensemble_confidence', best_prediction.get('confidence', 0)),
+                    'label': most_common_label,
+                    'confidence': best_prediction.get('confidence', 0.5),
+                    'consensus_ratio': consensus_ratio,
+                    'total_representatives': total_votes,
+                    'needs_review': review_needed,
+                    'reason': reason,
                     'method': 'CLUSTER_PROPAGATED',
                     'source_representative': best_prediction['representative_session_id']
                 }
                 
-                print(f"   📋 Cluster {cluster_id}: '{best_prediction['predicted_label']}' (conf: {cluster_final_labels[cluster_id]['confidence']:.3f})")
+                status_symbol = "🎯" if not review_needed else "👤"
+                print(f"   {status_symbol} Cluster {cluster_id}: '{most_common_label}' ({consensus_ratio:.0%} consenso)")
+            
+            propagation_time = time.time() - start_time
+            print(f"✅ [FASE 6: PROPAGAZIONE] Completata in {propagation_time:.2f}s")
+            print(f"📊 [FASE 6: PROPAGAZIONE] Risultati:")
+            print(f"   🎯 Auto-classificati: {auto_classified} cluster (≥70% consenso)")
+            print(f"   👤 Richiedono review: {needs_review} cluster (<70% consenso)")
             
             # STEP 5: Costruzione predizioni finali per tutte le sessioni
             print(f"🏗️  STEP 5: Costruzione predizioni finali...")

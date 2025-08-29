@@ -1240,9 +1240,10 @@ class EndToEndPipeline:
         print(f"\n� [FASE 7: SALVATAGGIO] Avvio salvataggio rappresentanti...")
         
         try:
-            if not hasattr(self, 'mongo_reader') or not self.mongo_reader:
-                print("❌ [FASE 7: SALVATAGGIO] ERRORE: MongoDB reader non disponibile")
-                return False
+            # 🆕 Crea istanza MongoClassificationReader per salvataggio
+            from mongo_classification_reader import MongoClassificationReader
+            mongo_reader = MongoClassificationReader(tenant=self.tenant)
+            print("✅ [FASE 7: SALVATAGGIO] MongoDB reader creato per tenant")
             
             saved_count = 0
             failed_count = 0
@@ -1285,7 +1286,7 @@ class EndToEndPipeline:
                     }
                     
                     # Salva in MongoDB come "pending review"
-                    success = self.mongo_reader.save_classification_result(
+                    success = mongo_reader.save_classification_result(
                         session_id=session_id,
                         client_name=self.tenant.tenant_slug,  # 🔧 FIX: usa tenant_slug non tenant_id
                         final_decision=final_decision,
@@ -1431,6 +1432,10 @@ class EndToEndPipeline:
         """
         print(f"   🔄 Salvando metadati sessioni propagate...")
         
+        # 🆕 Crea istanza MongoClassificationReader per salvataggio propagated
+        from mongo_classification_reader import MongoClassificationReader
+        mongo_reader = MongoClassificationReader(tenant=self.tenant)
+        
         # Crea set di session_id rappresentanti per escluderli
         representative_session_ids = set()
         for cluster_reps in representatives.values():
@@ -1468,7 +1473,7 @@ class EndToEndPipeline:
                 }
                 
                 # Salva come pending review (TUTTE le sessioni propagate devono essere reviewabili)
-                success = self.mongo_reader.save_classification_result(
+                success = mongo_reader.save_classification_result(
                     session_id=session_id,
                     client_name=self.tenant.tenant_slug,  # 🔧 FIX: usa tenant_slug non tenant_id
                     final_decision=final_decision,
@@ -1841,8 +1846,12 @@ class EndToEndPipeline:
         else:
             print(f"🔗 Nessun BERTopic provider disponibile per iniezione finale")
         
+        # 🆕 Crea istanza MongoClassificationReader per generare nome modello
+        from mongo_classification_reader import MongoClassificationReader
+        mongo_reader = MongoClassificationReader(tenant=self.tenant)
+        
         # Salva il modello ensemble e l'eventuale provider BERTopic
-        model_name = self.mongo_reader.generate_model_name(self.tenant_slug, "classifier")
+        model_name = mongo_reader.generate_model_name(self.tenant_slug, "classifier")
         self.ensemble_classifier.save_ensemble_model(f"models/{model_name}")
         
         # 🆕 SALVATAGGIO E CARICAMENTO IMMEDIATO BERTOPIC
@@ -1926,7 +1935,7 @@ class EndToEndPipeline:
                     print(f"   📊 Nuova accuracy: {retrain_metrics.get('accuracy', 'N/A'):.3f}")
                     
                     # Aggiorna il modello salvato con la versione riaddestrata
-                    model_name_retrained = self.mongo_reader.generate_model_name(
+                    model_name_retrained = mongo_reader.generate_model_name(
                         self.tenant_slug, f"classifier_retrained_{datetime.now().strftime('%H%M%S')}"
                     )
                     self.ensemble_classifier.save_ensemble_model(f"models/{model_name_retrained}")

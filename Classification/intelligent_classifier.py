@@ -1872,10 +1872,13 @@ Ragionamento: {ex["motivation"]}"""
             self.logger.warning(f"Errore parsing/validazione: {e}")
             return self._fallback_parse_response(response_text)
     
-    def _fallback_parse_response(self, response_text: str) -> Tuple[str, float, str]:
+    def _fallback_parse_response(self, response_text: str) -> Tuple[str, float, str, str]:
         """
         Fallback per parsing quando il JSON non è valido
         NESSUN PATTERN RIGIDO - solo estrazione euristica generica
+        
+        Returns:
+            Tuple (predicted_label, confidence, motivation, original_llm_label)
         """
         self.logger.debug("Parsing fallback per risposta LLM malformata - nessun pattern rigido")
         
@@ -1903,15 +1906,15 @@ Ragionamento: {ex["motivation"]}"""
                 confidence = 0.4  # Confidence moderata per parsing imperfetto
             
             motivation = f"Etichetta estratta da risposta LLM non strutturata: {predicted_label}"
-            return predicted_label, confidence, motivation
+            return predicted_label, confidence, motivation, predicted_label
         
         # Se il LLM ha menzionato multiple etichette, è ambiguo
         elif len(mentioned_labels) > 1:
             motivation = f"Risposta ambigua, multiple etichette menzionate: {mentioned_labels}"
-            return "altro", 0.2, motivation
+            return "altro", 0.2, motivation, response_text[:50]  # Usa parte della risposta originale
         
         # Nessuna etichetta riconosciuta - fallback completo
-        return "altro", 0.1, "Risposta LLM non interpretabile senza pattern rigidi"
+        return "altro", 0.1, "Risposta LLM non interpretabile senza pattern rigidi", response_text[:50]  # Usa parte della risposta originale
     
     def _normalize_label(self, label: str) -> str:
         """

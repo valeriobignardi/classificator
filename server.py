@@ -2177,6 +2177,33 @@ def api_get_case_detail(client_name: str, case_id: str):
             'cluster_id': int(target_case.cluster_id) if target_case.cluster_id is not None else None  # Converti numpy.int64 a int
         }
         
+        # 🆕 AGGIUNGI TAG SUGGERITI per il frontend
+        try:
+            from TAGS.tag import IntelligentTagSuggestionManager
+            tag_manager = IntelligentTagSuggestionManager()
+            
+            # Recupera tag suggeriti per il cliente
+            raw_suggested_tags = tag_manager.get_suggested_tags_for_client(client_name)
+            
+            # Converti il formato per il frontend
+            suggested_tags = []
+            for tag_data in raw_suggested_tags:
+                suggested_tags.append({
+                    'tag': tag_data.get('tag_name', ''),
+                    'count': tag_data.get('usage_count', 0),
+                    'source': tag_data.get('source', 'available'),
+                    'avg_confidence': tag_data.get('avg_confidence', 0.0)
+                })
+            
+            # Aggiungi i tag al case_data
+            case_data['suggested_tags'] = suggested_tags
+            case_data['total_suggested_tags'] = len(suggested_tags)
+            
+        except Exception as tag_error:
+            print(f"⚠️ Errore recupero tag suggeriti: {tag_error}")
+            case_data['suggested_tags'] = []
+            case_data['total_suggested_tags'] = 0
+        
         return jsonify({
             'success': True,
             'case': case_data,

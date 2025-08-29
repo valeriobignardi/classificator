@@ -256,10 +256,15 @@ class IntelligentClassifier:
         self.finetuning_manager = None
         if self.enable_finetuning and FINETUNING_AVAILABLE:
             try:
-                self.finetuning_manager = MistralFineTuningManager(
-                    config_path=config_path,
-                    ollama_url=ollama_url
-                )
+                if self.tenant:
+                    self.finetuning_manager = MistralFineTuningManager(
+                        tenant=self.tenant,
+                        config_path=config_path,
+                        ollama_url=ollama_url
+                    )
+                else:
+                    print("⚠️ Finetuning richiede oggetto Tenant - disabilitato")
+                    self.finetuning_manager = None
                 
                 # Auto-switch al modello fine-tuned se disponibile per questo cliente
                 if self.client_name:
@@ -355,17 +360,11 @@ class IntelligentClassifier:
         try:
             from TagDatabase.tag_database_connector import TagDatabaseConnector
             if self.tenant:
-                # Usa informazioni centralizzate Tenant
-                self.mysql_connector = TagDatabaseConnector(
-                    tenant_id=self.tenant.tenant_id,
-                    tenant_name=self.tenant.tenant_name
-                )
+                # Usa oggetto Tenant completo (PRINCIPIO UNIVERSALE)
+                self.mysql_connector = TagDatabaseConnector(tenant=self.tenant)
             else:
-                # Fallback legacy
-                self.mysql_connector = TagDatabaseConnector(
-                    tenant_id=self.tenant_id,
-                    tenant_name=self.client_name.title() if self.client_name else "Humanitas"
-                )
+                # ERRORE: Non dovrebbe mai succedere con principio universale
+                raise ValueError("ERRORE PRINCIPIO UNIVERSALE: self.tenant è None!")
             if enable_logging:
                 self.logger.info(f"✅ TagDatabaseConnector inizializzato per tenant {self.tenant_id}")
         except Exception as e:
@@ -720,10 +719,11 @@ class IntelligentClassifier:
         try:
             from TagDatabase.tag_database_connector import TagDatabaseConnector
             
-            tag_db = TagDatabaseConnector(
-                tenant_id=self.tenant_id,
-                tenant_name=self.client_name.title() if self.client_name else "Humanitas"
-            )
+            # Usa oggetto Tenant completo (PRINCIPIO UNIVERSALE)
+            if not self.tenant:
+                raise ValueError("ERRORE PRINCIPIO UNIVERSALE: self.tenant è None!")
+            
+            tag_db = TagDatabaseConnector(tenant=self.tenant)
             if tag_db.connetti():
                 # Verifica se l'etichetta esiste già
                 check_query = "SELECT COUNT(*) FROM tags WHERE tag_name = %s"
@@ -762,10 +762,11 @@ class IntelligentClassifier:
             # Tenta di caricare le etichette dal database TAG
             from TagDatabase.tag_database_connector import TagDatabaseConnector
             
-            tag_db = TagDatabaseConnector(
-                tenant_id=self.tenant_id,
-                tenant_name=self.client_name.title() if self.client_name else "Humanitas"
-            )
+            # Usa oggetto Tenant completo (PRINCIPIO UNIVERSALE)
+            if not self.tenant:
+                raise ValueError("ERRORE PRINCIPIO UNIVERSALE: self.tenant è None!")
+            
+            tag_db = TagDatabaseConnector(tenant=self.tenant)
             if tag_db.connetti():
                 # Query per ottenere tutte le etichette attive dal database per il tenant
                 query = "SELECT tag_name FROM tags WHERE tenant_id = %s ORDER BY tag_name"

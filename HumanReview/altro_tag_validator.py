@@ -19,6 +19,11 @@ import logging
 import json
 import re
 import numpy as np
+from typing import Dict, List, Any, Optional, Tuple
+
+# Import Tenant per principio universale
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Utils'))
+from tenant import Tenant
 from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime
 from dataclasses import dataclass
@@ -64,24 +69,27 @@ class AltroTagValidator:
     - Soglia configurabile per decidere nuovo vs esistente
     """
     
-    def __init__(self, tenant_id: str, config: Dict[str, Any] = None):
+    def __init__(self, tenant: Tenant, config: Dict[str, Any] = None):
         """
         Inizializza il validatore embedding-based
         
+        PRINCIPIO UNIVERSALE: Accetta oggetto Tenant completo
+        
         Scopo della funzione: Inizializza validatore con embedder e configurazione
-        Parametri di input: tenant_id (ID tenant), config (configurazione opzionale)
+        Parametri di input: tenant (oggetto Tenant), config (configurazione opzionale)
         Parametri di output: Istanza AltroTagValidator configurata
         Valori di ritorno: None (costruttore)
-        Tracciamento aggiornamenti: 2025-08-28 - Riscrittura completa embedding-based
+        Tracciamento aggiornamenti: 2025-08-29 - Convertito a principio universale
         
         Args:
-            tenant_id: ID del tenant
+            tenant: Oggetto Tenant completo
             config: Configurazione completa (se None, carica da file)
             
         Autore: Valerio Bignardi
         Data: 2025-08-28
         """
-        self.tenant_id = tenant_id
+        self.tenant = tenant
+        self.tenant_id = tenant.tenant_id  # Estrae tenant_id dall'oggetto Tenant
         self.logger = logging.getLogger(__name__)
         
         # Carica configurazione
@@ -98,15 +106,13 @@ class AltroTagValidator:
         # Inizializza i componenti necessari
         self.schema_manager = ClassificationSchemaManager()
         
-        # Crea oggetto Tenant dal tenant_id per il MongoClassificationReader
+        # Crea MongoClassificationReader usando oggetto Tenant già disponibile
         try:
-            from Utils.tenant import Tenant
-            tenant_obj = Tenant.from_uuid(self.tenant_id)
-            self.db_connector = MongoClassificationReader(tenant=tenant_obj)
-            self.logger.info(f"🗄️ MongoClassificationReader inizializzato per tenant: {tenant_obj.tenant_name}")
+            self.db_connector = MongoClassificationReader(tenant=self.tenant)
+            self.logger.info(f"🗄️ MongoClassificationReader inizializzato per tenant: {self.tenant.tenant_name}")
         except Exception as e:
-            self.logger.error(f"⚠️ Errore creazione tenant da UUID '{self.tenant_id}': {e}")
-            raise ValueError(f"Impossibile creare oggetto Tenant da ID: {self.tenant_id}")
+            self.logger.error(f"⚠️ Errore creazione MongoClassificationReader per tenant '{self.tenant.tenant_name}': {e}")
+            raise ValueError(f"Impossibile creare MongoClassificationReader per tenant: {self.tenant.tenant_name}")
         
         # ✅ Embedder dinamico configurato per il tenant
         self.embedder = self._get_dynamic_embedder()

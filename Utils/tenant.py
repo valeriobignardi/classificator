@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
 File: tenant.py
-Autore: GitHub Copilot & Valerio Bignardi
+Autore: GitHub Copilot             from TagDatabase.tag_database_connector import TagDatabaseConnector
+            
+            # Usa funzione bootstrap per risoluzione tenant
+            tag_connector = TagDatabaseConnector.create_for_tenant_resolution()
+            tag_connector.connetti()lerio Bignardi
 Data creazione: 2025-08-26
 Ultima modifica: 2025-08-26
 
@@ -66,7 +70,8 @@ class Tenant:
             sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'TagDatabase'))
             from tag_database_connector import TagDatabaseConnector
             
-            tag_connector = TagDatabaseConnector()
+            # Usa funzione bootstrap per risoluzione tenant
+            tag_connector = TagDatabaseConnector.create_for_tenant_resolution()
             tag_connector.connetti()
             
             query = """
@@ -118,7 +123,8 @@ class Tenant:
             sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'TagDatabase'))
             from tag_database_connector import TagDatabaseConnector
             
-            tag_connector = TagDatabaseConnector()
+            # Usa funzione bootstrap per risoluzione tenant
+            tag_connector = TagDatabaseConnector.create_for_tenant_resolution()
             tag_connector.connetti()
             
             query = """

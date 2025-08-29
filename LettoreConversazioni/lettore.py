@@ -1,6 +1,7 @@
 import sys
 import os
 import yaml
+from typing import Optional
 
 # Aggiunge il percorso della directory MySql al path per importare il connettore
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'MySql'))
@@ -11,26 +12,32 @@ from connettore import MySqlConnettore
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
 from tenant_config_helper import get_only_user_for_tenant
 
+# Import Tenant per principio universale
+from tenant import Tenant
+
 class LettoreConversazioni:
     """
     Classe per leggere le conversazioni dal database MySQL
     Supporta configurazioni per tenant, incluso il parametro only_user
     """
     
-    def __init__(self, schema='common', config_path=None, tenant_id=None):
+    def __init__(self, tenant: Optional[Tenant] = None, schema='common', config_path=None):
         """
         Inizializza il lettore delle conversazioni
         
+        PRINCIPIO UNIVERSALE: Accetta oggetto Tenant completo
+        
         Args:
+            tenant: Oggetto Tenant completo (None per compatibilità)
             schema (str): Nome dello schema del database (default: 'common')
             config_path (str): Percorso file configurazione (default: '../config.yaml')
-            tenant_id (str): ID del tenant per parametri personalizzati (opzionale)
             
-        Ultima modifica: 2025-08-26
+        Ultima modifica: 2025-08-29 - Convertito a principio universale
         """
         self.connettore = MySqlConnettore()
+        self.tenant = tenant
+        self.tenant_id = tenant.tenant_id if tenant else None  # Estrae tenant_id dall'oggetto
         self.schema = schema
-        self.tenant_id = tenant_id
         
         # Carica configurazione
         if not config_path:
@@ -43,19 +50,19 @@ class LettoreConversazioni:
             print(f"⚠️ Errore caricamento config.yaml: {e}")
             self.config = {}
         
-        # 🆕 NUOVA LOGICA: Usa helper tenant se tenant_id è fornito
-        if tenant_id:
+        # 🆕 NUOVA LOGICA: Usa helper tenant se tenant disponibile
+        if self.tenant_id:
             try:
-                self.only_user = get_only_user_for_tenant(tenant_id)
-                print(f"🎯 [LETTORE] Tenant {tenant_id}: only_user = {self.only_user} (da config tenant)")
+                self.only_user = get_only_user_for_tenant(self.tenant_id)
+                print(f"🎯 [LETTORE] Tenant {self.tenant_id}: only_user = {self.only_user} (da config tenant)")
             except Exception as e:
-                print(f"⚠️ [LETTORE] Errore config tenant {tenant_id}: {e}")
+                print(f"⚠️ [LETTORE] Errore config tenant {self.tenant_id}: {e}")
                 self.only_user = False
-                print(f"� [LETTORE] Fallback: only_user = False (default)")
+                print(f"🔄 [LETTORE] Fallback: only_user = False (default)")
         else:
             # 🔄 LOGICA LEGACY: Per retrocompatibilità, default a False
             self.only_user = False
-            print(f"📖 [LETTORE] Schema {schema}: only_user = {self.only_user} (legacy - no tenant_id)")
+            print(f"📖 [LETTORE] Schema {schema}: only_user = {self.only_user} (legacy - no tenant)")
     
     def leggi_conversazioni(self):
         """
@@ -207,7 +214,7 @@ class LettoreConversazioni:
     def chiudi_connessione(self):
         """
         Chiude la connessione al database
-        """
+si        """
         self.connettore.disconnetti()
 
     def estrai_conversazioni_periodo(self, tenant_slug: str, data_inizio, data_fine=None):
@@ -278,8 +285,13 @@ class LettoreConversazioni:
 
 # Esempio di utilizzo
 if __name__ == "__main__":
-    # Crea un'istanza del lettore per Humanitas
-    lettore = LettoreConversazioni(schema='humanitas')
+    # Crea un'istanza del lettore per test con tenant fake
+    fake_tenant = Tenant(
+        tenant_id="humanitas-test",
+        tenant_name="Humanitas Test",
+        tenant_slug="humanitas"
+    )
+    lettore = LettoreConversazioni(tenant=fake_tenant, schema='humanitas')
     
     try:
         # Legge tutte le conversazioni di Humanitas (limitiamo a 20 per il test)

@@ -16,6 +16,7 @@ from lettore import LettoreConversazioni
 # Aggiunge il percorso per importare l'helper configurazioni tenant
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
 from tenant_config_helper import get_only_user_for_tenant
+from tenant import Tenant
 
 class SessionAggregator:
     """
@@ -23,19 +24,48 @@ class SessionAggregator:
     Supporta configurazioni per tenant, incluso il parametro only_user
     """
     
-    def __init__(self, schema: str = 'humanitas', tenant_id: Optional[str] = None):
+    def __init__(self, tenant: Tenant = None, schema: str = None, tenant_id: Optional[str] = None):
         """
         Inizializza l'aggregatore
         
         Args:
-            schema: Schema del database da utilizzare
-            tenant_id: ID del tenant per parametri personalizzati (opzionale)
+            tenant: Oggetto Tenant (NUOVO - architettura UUID)
+            schema: Schema del database da utilizzare (DEPRECATO)
+            tenant_id: ID del tenant per parametri personalizzati (DEPRECATO)
             
-        Ultima modifica: 2025-08-26
+        Ultima modifica: 2025-08-29
         """
-        self.schema = schema
-        self.tenant_id = tenant_id
-        self.lettore = LettoreConversazioni(schema=schema, tenant_id=tenant_id)
+        
+        # 🔧 GESTIONE TENANT UUID CENTRALIZZATA
+        if tenant is not None:
+            # Architettura moderna - usa oggetto Tenant
+            self.tenant = tenant
+            self.schema = tenant.tenant_slug
+            self.tenant_id = tenant.tenant_id
+            print(f"🎯 [SESSION AGGREGATOR] Inizializzazione con oggetto Tenant: {tenant.tenant_name} ({tenant.tenant_id})")
+        elif schema is not None and tenant_id is not None:
+            # Retrocompatibilità - parametri separati
+            print(f"⚠️ [SESSION AGGREGATOR] DEPRECATO: uso parametri separati - convertendo")
+            self.tenant = Tenant.from_uuid(tenant_id) if Tenant._is_valid_uuid(tenant_id) else Tenant.from_slug(schema)
+            self.schema = schema
+            self.tenant_id = tenant_id
+            print(f"🔄 [SESSION AGGREGATOR] Conversione completata: {self.tenant.tenant_name}")
+        elif schema is not None:
+            # Retrocompatibilità - solo schema (legacy)
+            print(f"⚠️ [SESSION AGGREGATOR] LEGACY: solo schema '{schema}' - convertendo a Tenant")
+            self.tenant = Tenant.from_slug(schema)
+            self.schema = schema
+            self.tenant_id = self.tenant.tenant_id
+            print(f"🔄 [SESSION AGGREGATOR] Conversione legacy completata: {self.tenant.tenant_name}")
+        else:
+            # Fallback a humanitas
+            print(f"⚠️ [SESSION AGGREGATOR] Nessun parametro - fallback Humanitas")
+            self.tenant = Tenant.from_slug("humanitas")
+            self.schema = self.tenant.tenant_slug
+            self.tenant_id = self.tenant.tenant_id
+            print(f"🏥 [SESSION AGGREGATOR] Fallback completato: {self.tenant.tenant_name}")
+        
+        self.lettore = LettoreConversazioni(tenant=self.tenant, schema=self.schema)
         
         # 🆕 NUOVA LOGICA: Usa helper tenant se tenant_id è fornito
         if tenant_id:

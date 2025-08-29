@@ -1246,8 +1246,8 @@ class MongoClassificationReader:
             # Recupera info tenant per avere tenant_id univoco
             tenant_info = self.get_tenant_info_from_name(client_name)
             
-            # Usa la collection appropriata per il tenant
-            collection = self.db[self.get_collection_name(client_name)]
+            # Usa la collection appropriata per il tenant (ora usa l'oggetto tenant interno)
+            collection = self.db[self.get_collection_name()]
             
             # Prepara il documento base con tutti i campi necessari
             current_time = datetime.now().isoformat()
@@ -1661,7 +1661,7 @@ class MongoClassificationReader:
                 return []
             
             tenant_id = tenant_info['tenant_id']
-            collection_name = self.get_collection_name(tenant_slug)
+            collection_name = self.get_collection_name()
             
             print(f"🔍 Ricerca classificazioni in {collection_name}")
             print(f"   📅 Periodo: {start_date} -> {end_date}")
@@ -1905,8 +1905,8 @@ class MongoClassificationReader:
                     'deleted_count': 0
                 }
             
-            # Ottieni nome collection per il tenant
-            collection_name = self.get_collection_name(client_name)
+            # Ottieni nome collection per il tenant (ora usa l'oggetto tenant interno)
+            collection_name = self.get_collection_name()
             collection = self.db[collection_name]
             
             # Conta documenti prima della cancellazione

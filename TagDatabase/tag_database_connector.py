@@ -2,22 +2,57 @@ import yaml
 import mysql.connector
 from mysql.connector import Error
 import os
+import sys
+
+# Aggiungi path per importare Tenant
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Utils'))
+from tenant import Tenant
 
 class TagDatabaseConnector:
     """Connettore specifico per il database TAG locale con supporto multi-tenant"""
     
-    def __init__(self, tenant_id: str = "humanitas", tenant_name: str = "Humanitas"):
+    def __init__(self, tenant: Tenant):
         """
         Inizializza il connettore con supporto multi-tenant
         
+        PRINCIPIO UNIVERSALE: Accetta SOLO oggetto Tenant
+        
         Args:
-            tenant_id: ID del tenant (default: "humanitas")
-            tenant_name: Nome del tenant (default: "Humanitas")
+            tenant: Oggetto Tenant completo
         """
-        self.tenant_id = tenant_id
-        self.tenant_name = tenant_name
+        self.tenant = tenant
+        self.tenant_id = tenant.tenant_id  
+        self.tenant_name = tenant.tenant_name
+            
         self.config = self._load_config()
         self.connection = None
+        
+    @staticmethod
+    def create_for_tenant_resolution():
+        """
+        FUNZIONE BOOTSTRAP per risoluzione tenant
+        
+        Crea connettore senza oggetto Tenant per risolvere tenant dal database.
+        Da usare SOLO per bootstrap delle funzioni di risoluzione tenant.
+        
+        Returns:
+            TagDatabaseConnector con tenant fittizio per bootstrap
+        """
+        # Crea tenant fittizio per bootstrap
+        class BootstrapTenant:
+            def __init__(self):
+                self.tenant_id = "bootstrap"
+                self.tenant_name = "Bootstrap"
+                self.tenant_slug = "bootstrap"
+                
+        fake_tenant = BootstrapTenant()
+        instance = TagDatabaseConnector.__new__(TagDatabaseConnector)
+        instance.tenant = fake_tenant
+        instance.tenant_id = fake_tenant.tenant_id
+        instance.tenant_name = fake_tenant.tenant_name
+        instance.config = instance._load_config()
+        instance.connection = None
+        return instance
     
     def _load_config(self):
         """Carica i parametri di configurazione dal file config.yaml"""

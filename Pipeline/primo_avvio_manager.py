@@ -20,6 +20,7 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from TAGS.tag import IntelligentTagSuggestionManager
 from TagDatabase.tag_database_connector import TagDatabaseConnector
+from Utils.tenant import Tenant
 
 class PrimoAvvioManager:
     """
@@ -78,21 +79,24 @@ class PrimoAvvioManager:
             logger.setLevel(logging.INFO)
         return logger
     
-    def is_primo_avvio(self, tenant_name: str) -> bool:
+    def is_primo_avvio(self, tenant: Tenant) -> bool:
         """
         Determina se questo è il primo avvio per un tenant
         
         Args:
-            tenant_name: Nome del tenant
+            tenant: Oggetto Tenant completo
             
         Returns:
             bool: True se è primo avvio (nessun tag esistente)
         """
-        has_existing = self.tag_suggestion_manager.has_existing_classifications(tenant_name)
+        # Usa l'oggetto Tenant completo per has_existing_classifications
+        has_existing = self.tag_suggestion_manager.has_existing_classifications(tenant=tenant)
         existing_tags_count = len(self.tag_db_connector.get_all_tags())
         
         primo_avvio = not has_existing or existing_tags_count == 0
         
+        # Estrae tenant_name dall'oggetto Tenant per logging
+        tenant_name = tenant.tenant_name
         self.logger.info(f"🔍 CONTROLLO PRIMO AVVIO per '{tenant_name}':")
         self.logger.info(f"   - Classificazioni esistenti: {has_existing}")
         self.logger.info(f"   - Tag nel database: {existing_tags_count}")
@@ -101,7 +105,7 @@ class PrimoAvvioManager:
         return primo_avvio
     
     def prepare_tags_for_primo_avvio(self, 
-                                   tenant_name: str, 
+                                   tenant: Tenant, 
                                    session_texts: List[str],
                                    bertopic_model: Any,
                                    llm_classifier: Any) -> Dict[str, Any]:
@@ -109,7 +113,7 @@ class PrimoAvvioManager:
         Prepara i tag per il primo avvio usando BERTopic + LLM
         
         Args:
-            tenant_name: Nome del tenant
+            tenant: Oggetto Tenant completo
             session_texts: Lista dei testi delle sessioni
             bertopic_model: Modello BERTopic già addestrato
             llm_classifier: Classificatore LLM
@@ -117,6 +121,8 @@ class PrimoAvvioManager:
         Returns:
             Dict con risultati della preparazione
         """
+        # Estrae tenant_name dall'oggetto Tenant per logging
+        tenant_name = tenant.tenant_name
         self.logger.info(f"🚀 PREPARAZIONE TAG PRIMO AVVIO per '{tenant_name}'")
         self.logger.info(f"   - Sessioni da analizzare: {len(session_texts)}")
         
@@ -430,7 +436,7 @@ Rispondi SOLO con il JSON, senza altre spiegazioni.
                 return False
     
     def execute_primo_avvio_workflow(self, 
-                                   tenant_name: str,
+                                   tenant: Tenant,
                                    session_texts: List[str],
                                    bertopic_model: Any,
                                    llm_classifier: Any) -> Dict[str, Any]:
@@ -438,7 +444,7 @@ Rispondi SOLO con il JSON, senza altre spiegazioni.
         Esegue il workflow completo per il primo avvio
         
         Args:
-            tenant_name: Nome del tenant
+            tenant: Oggetto Tenant completo
             session_texts: Testi delle sessioni
             bertopic_model: Modello BERTopic
             llm_classifier: Classificatore LLM
@@ -454,8 +460,11 @@ Rispondi SOLO con il JSON, senza altre spiegazioni.
         }
         
         # 1. Controlla se è primo avvio
-        is_primo_avvio = self.is_primo_avvio(tenant_name)
+        is_primo_avvio = self.is_primo_avvio(tenant)
         workflow_results['is_primo_avvio'] = is_primo_avvio
+        
+        # Estrae tenant_name dall'oggetto Tenant per logging e messaggi
+        tenant_name = tenant.tenant_name
         
         if not is_primo_avvio:
             workflow_results['message'] = f"Tenant '{tenant_name}' non è al primo avvio. Procedure normali."
@@ -466,7 +475,7 @@ Rispondi SOLO con il JSON, senza altre spiegazioni.
         self.logger.info(f"🚀 WORKFLOW PRIMO AVVIO per '{tenant_name}'")
         
         tags_preparation = self.prepare_tags_for_primo_avvio(
-            tenant_name, 
+            tenant, 
             session_texts, 
             bertopic_model, 
             llm_classifier
@@ -492,13 +501,13 @@ Rispondi SOLO con il JSON, senza altre spiegazioni.
 
 
 # Funzioni di utilità per integrazione
-def integrate_primo_avvio_in_pipeline(pipeline_instance, tenant_name: str) -> bool:
+def integrate_primo_avvio_in_pipeline(pipeline_instance, tenant: Tenant) -> bool:
     """
     Integra il primo avvio manager nella pipeline esistente
     
     Args:
         pipeline_instance: Istanza della pipeline di training
-        tenant_name: Nome del tenant
+        tenant: Oggetto Tenant completo
         
     Returns:
         bool: True se primo avvio eseguito con successo
@@ -519,7 +528,7 @@ def integrate_primo_avvio_in_pipeline(pipeline_instance, tenant_name: str) -> bo
         
         # Esegui workflow primo avvio
         results = primo_avvio_manager.execute_primo_avvio_workflow(
-            tenant_name, session_texts, bertopic_model, llm_classifier
+            tenant, session_texts, bertopic_model, llm_classifier
         )
         
         return results['ready_for_training']
@@ -534,11 +543,21 @@ if __name__ == "__main__":
     
     manager = PrimoAvvioManager()
     
-    # Test controllo primo avvio
-    test_tenants = ["Humanitas", "NuovoTenant", "TestClient"]
+    # Test controllo primo avvio usando oggetti Tenant
+    test_tenant_names = ["Humanitas", "NuovoTenant", "TestClient"]
     
-    for tenant in test_tenants:
-        is_primo = manager.is_primo_avvio(tenant)
-        print(f"📊 {tenant}: {'Primo Avvio' if is_primo else 'Esistente'}")
+    for tenant_name in test_tenant_names:
+        try:
+            # Risolve il tenant dall'identificatore (se esiste)
+            from Utils.tenant import resolve_tenant_from_identifier
+            tenant = resolve_tenant_from_identifier(tenant_name)
+            
+            if tenant:
+                is_primo = manager.is_primo_avvio(tenant)
+                print(f"📊 {tenant.tenant_name}: {'Primo Avvio' if is_primo else 'Esistente'}")
+            else:
+                print(f"⚠️ {tenant_name}: Tenant non trovato")
+        except Exception as e:
+            print(f"❌ Errore test per {tenant_name}: {e}")
     
     print("\n✅ Test completato!")

@@ -21,6 +21,8 @@ import re
 # Import della classe Tenant
 sys.path.append(os.path.join(os.path.dirname(__file__), 'Utils'))
 from tenant import Tenant
+sys.path.append(os.path.join(os.path.dirname(__file__), 'Utils'))
+from tenant import Tenant
 
 # Aggiungi path per i moduli
 sys.path.append(os.path.join(os.path.dirname(__file__), 'Pipeline'))
@@ -227,7 +229,10 @@ class ClassificationService:
     
     def __init__(self):
         self.pipelines = {}  # Cache delle pipeline per cliente
-        self.tag_db = TagDatabaseConnector()
+        
+        # Usa bootstrap method per risolvere dipendenza circolare
+        self.tag_db = TagDatabaseConnector.create_for_tenant_resolution()
+        
         self.quality_gates = {}  # Cache dei QualityGateEngine per cliente
         self.shared_embedder = None  # Embedder condiviso per tutti i clienti per evitare CUDA OOM
         
@@ -499,16 +504,32 @@ class ClassificationService:
     
     # ==================== METODI FINE-TUNING ====================
     
-    def get_finetuning_manager(self):
+    def get_finetuning_manager(self, tenant: Optional[Tenant] = None):
         """
         Ottieni il fine-tuning manager (lazy loading)
+        
+        Args:
+            tenant: Oggetto tenant opzionale per manager tenant-aware
         """
         if not hasattr(self, '_finetuning_manager'):
             try:
                 sys.path.append(os.path.join(os.path.dirname(__file__), 'FineTuning'))
                 from mistral_finetuning_manager import MistralFineTuningManager
-                self._finetuning_manager = MistralFineTuningManager()
-                print("🎯 Fine-tuning manager inizializzato")
+                
+                if tenant:
+                    self._finetuning_manager = MistralFineTuningManager(tenant=tenant)
+                    print(f"🎯 Fine-tuning manager inizializzato per tenant: {tenant.tenant_name}")
+                else:
+                    # Fallback per compatibilità - usa tenant fake
+                    from Utils.tenant import Tenant
+                    fake_tenant = Tenant(
+                        tenant_id="fake-id",
+                        tenant_name="unknown",
+                        tenant_slug="unknown"
+                    )
+                    self._finetuning_manager = MistralFineTuningManager(tenant=fake_tenant)
+                    print("🎯 Fine-tuning manager inizializzato con tenant fake")
+                    
             except Exception as e:
                 print(f"⚠️ Errore inizializzazione fine-tuning manager: {e}")
                 self._finetuning_manager = None
@@ -2481,13 +2502,21 @@ def get_available_tenants():
         }), 500
 
 @app.route('/api/stats/labels/<tenant_name>', methods=['GET'])
-def get_label_statistics(tenant_name: str):
+def get_label_statistics(tenant_identifier: str):
     """
     Ottieni statistiche delle etichette per un tenant specifico
+    
+    PRINCIPIO UNIVERSALE: Usa tenant_identifier (UUID) e risolve internamente
+    
+    Args:
+        tenant_identifier: UUID del tenant
     """
     try:
+        # Risolve tenant_identifier in oggetto Tenant
+        tenant = resolve_tenant_from_identifier(tenant_identifier)
+        
         from TagDatabase.tag_database_connector import TagDatabaseConnector
-        tag_db = TagDatabaseConnector()
+        tag_db = TagDatabaseConnector(tenant=tenant)
         tag_db.connetti()
         
         # Query per ottenere le statistiche delle etichette
@@ -2504,7 +2533,7 @@ def get_label_statistics(tenant_name: str):
         ORDER BY count DESC
         """
         
-        results = tag_db.esegui_query(query, (tenant_name,))
+        results = tag_db.esegui_query(query, (tenant.tenant_name,))
         
         # Query per statistiche generali
         general_query = """
@@ -2517,7 +2546,7 @@ def get_label_statistics(tenant_name: str):
         WHERE tenant_name = %s
         """
         
-        general_results = tag_db.esegui_query(general_query, (tenant_name,))
+        general_results = tag_db.esegui_query(general_query, (tenant.tenant_name,))
         tag_db.disconnetti()
         
         # Organizza i dati per etichetta
@@ -2551,7 +2580,7 @@ def get_label_statistics(tenant_name: str):
         
         return jsonify({
             'success': True,
-            'tenant': tenant_name,
+            'tenant': tenant.tenant_name,
             'labels': list(label_stats.values()),
             'general_stats': general_stats
         }), 200
@@ -2560,7 +2589,7 @@ def get_label_statistics(tenant_name: str):
         return jsonify({
             'success': False,
             'error': str(e),
-            'tenant': tenant_name
+            'tenant': tenant.tenant_name if 'tenant' in locals() else tenant_identifier
         }), 500
 
 @app.route('/clients', methods=['GET'])
@@ -2666,24 +2695,29 @@ def get_ai_config_service():
         ai_config_service = AIConfigurationService()
     return ai_config_service
 
-@app.route('/api/ai-config/<tenant_id>/embedding-engines', methods=['GET'])
-def api_get_available_embedding_engines(tenant_id: str):
+@app.route('/api/ai-config/<tenant_identifier>/embedding-engines', methods=['GET'])
+def api_get_available_embedding_engines(tenant_identifier: str):
     """
     API per ottenere embedding engines disponibili
     
+    PRINCIPIO UNIVERSALE: Usa tenant_identifier (UUID) e risolve internamente
+    
     Args:
-        tenant_id: ID del tenant
+        tenant_identifier: UUID del tenant
         
     Returns:
         Lista embedding engines con dettagli disponibilità
     """
     try:
+        # Risolve tenant_identifier in oggetto Tenant
+        tenant = resolve_tenant_from_identifier(tenant_identifier)
+        
         service = get_ai_config_service()
         engines = service.get_available_embedding_engines()
         
         return jsonify({
             'success': True,
-            'tenant_id': tenant_id,
+            'tenant_id': tenant.tenant_id,
             'engines': engines
         })
         
@@ -2693,13 +2727,15 @@ def api_get_available_embedding_engines(tenant_id: str):
             'error': f'Errore recupero embedding engines: {str(e)}'
         }), 500
 
-@app.route('/api/ai-config/<tenant_id>/embedding-engines', methods=['POST'])
-def api_set_embedding_engine(tenant_id: str):
+@app.route('/api/ai-config/<tenant_identifier>/embedding-engines', methods=['POST'])
+def api_set_embedding_engine(tenant_identifier: str):
     """
     API per impostare embedding engine per tenant
     
+    PRINCIPIO UNIVERSALE: Usa tenant_identifier (UUID) e risolve internamente
+    
     Args:
-        tenant_id: ID del tenant
+        tenant_identifier: UUID del tenant
         
     Body:
         {
@@ -2711,6 +2747,9 @@ def api_set_embedding_engine(tenant_id: str):
         Risultato dell'operazione
     """
     try:
+        # Risolve tenant_identifier in oggetto Tenant
+        tenant = resolve_tenant_from_identifier(tenant_identifier)
+        
         data = request.get_json()
         if not data:
             return jsonify({
@@ -2728,7 +2767,7 @@ def api_set_embedding_engine(tenant_id: str):
         config = data.get('config', {})
         
         service = get_ai_config_service()
-        result = service.set_embedding_engine(tenant_id, engine_type, **config)
+        result = service.set_embedding_engine(tenant.tenant_id, engine_type, **config)
         
         # INVALIDAZIONE CACHE: Quando configurazione cambia, invalida cache embedder
         if result['success']:
@@ -2736,14 +2775,14 @@ def api_set_embedding_engine(tenant_id: str):
                 from EmbeddingEngine.embedding_engine_factory import embedding_factory
                 from EmbeddingEngine.embedding_manager import embedding_manager
                 
-                print(f"🔄 Configurazione embedding cambiata - invalidazione cache per tenant {tenant_id}")
+                print(f"🔄 Configurazione embedding cambiata - invalidazione cache per tenant {tenant.tenant_id}")
                 
                 # PRIMA: Pulisci cache AIConfigurationService per leggere configurazione fresca
-                print(f"🧹 Pulizia cache AIConfigurationService per tenant {tenant_id}")
-                service.clear_tenant_cache(tenant_id)
+                print(f"🧹 Pulizia cache AIConfigurationService per tenant {tenant.tenant_id}")
+                service.clear_tenant_cache(tenant.tenant_id)
                 
                 # SECONDA: Invalida cache factory
-                embedding_factory.invalidate_tenant_cache(tenant_id)
+                embedding_factory.invalidate_tenant_cache(tenant.tenant_id)
                 
                 # Risolvi tenant UUID -> tenant slug per confronto con manager
                 def _resolve_tenant_slug_from_id_local(tenant_uuid: str) -> str:
@@ -2768,30 +2807,30 @@ def api_set_embedding_engine(tenant_id: str):
                         print(f"⚠️ Errore risoluzione tenant slug: {e}")
                         return tenant_uuid
                 
-                tenant_slug = _resolve_tenant_slug_from_id_local(tenant_id)
+                tenant_slug = tenant.tenant_slug
                 
                 # FORCE RELOAD SEMPRE quando c'è cambio configurazione - come all'avvio server
                 # NON FARE CONFRONTI, NON FARE LOGICHE COMPLICATE
                 # CONFIGURAZIONE CAMBIATA = FORCE RELOAD, PUNTO!
                 
-                print(f"� CONFIGURAZIONE EMBEDDING CAMBIATA - FORCE RELOAD TASSATIVO per tenant {tenant_slug} (UUID: {tenant_id})")
+                print(f"🔄 CONFIGURAZIONE EMBEDDING CAMBIATA - FORCE RELOAD TASSATIVO per tenant {tenant_slug} (UUID: {tenant.tenant_id})")
                 print(f"🔥 Ricarico embedder come all'avvio del server - NESSUNA ECCEZIONE!")
                 
                 # SEMPRE force_reload=True quando cambio configurazione
-                embedding_manager.switch_tenant_embedder(tenant_id, force_reload=True)
+                embedding_manager.switch_tenant_embedder(tenant.tenant_id, force_reload=True)
                 
                 # FIXBUG: Invalida anche la cache delle pipeline per evitare embedder morti
                 print(f"🧹 Pulizia cache pipeline per evitare embedder obsoleti...")
                 try:
                     from Clustering.clustering_test_service import ClusteringTestService
                     clustering_service = ClusteringTestService()
-                    clustering_service.clear_pipeline_for_tenant(tenant_id)
-                    print(f"✅ Cache pipeline invalidata per tenant {tenant_id}")
+                    clustering_service.clear_pipeline_for_tenant(tenant.tenant_id)
+                    print(f"✅ Cache pipeline invalidata per tenant {tenant.tenant_id}")
                 except Exception as cache_error:
                     print(f"⚠️ Errore pulizia cache pipeline: {cache_error}")
                     # Non bloccare l'operazione principale
                 
-                print(f"✅ Cache invalidata con successo per tenant {tenant_id}")
+                print(f"✅ Cache invalidata con successo per tenant {tenant.tenant_id}")
                 
             except Exception as e:
                 print(f"⚠️ Errore invalidazione cache embedder: {e}")
@@ -5872,7 +5911,7 @@ def get_clustering_statistics(tenant_id):
                 print("🎨 [API] Generazione dati visualizzazione...")
                 
                 # Inizializza pipeline per ottenere embeddings
-                pipeline = EndToEndPipeline(config_path='config.yaml', tenant_slug=tenant.tenant_slug)
+                pipeline = EndToEndPipeline(config_path='config.yaml', tenant=tenant)
                 embedder = pipeline._get_embedder()
                 
                 # Genera embeddings (campione se troppi)

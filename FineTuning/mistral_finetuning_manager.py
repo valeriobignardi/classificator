@@ -18,6 +18,7 @@ Data: 20 Luglio 2025
 
 import json
 import os
+import sys
 import yaml
 import logging
 import subprocess
@@ -27,6 +28,10 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, asdict
 import requests
+
+# Aggiungi path per importare Tenant
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Utils'))
+from tenant import Tenant
 
 # Import del sistema esistente
 import sys
@@ -84,19 +89,22 @@ class MistralFineTuningManager:
     """
     
     def __init__(self, 
+                 tenant: Tenant,
                  config_path: Optional[str] = None,
-                 ollama_url: str = None,
-                 tenant_slug: Optional[str] = None):
+                 ollama_url: str = None):
         """
         Inizializza il manager per fine-tuning
         
+        PRINCIPIO UNIVERSALE: Accetta oggetto Tenant
+        
         Args:
+            tenant: Oggetto Tenant completo
             config_path: Percorso file configurazione (opzionale)
             ollama_url: URL server Ollama (se None, legge da config)
-            tenant_slug: Nome tenant per naming convention
         """
+        self.tenant = tenant
+        self.tenant_slug = tenant.tenant_slug  # Estrae tenant_slug dall'oggetto Tenant
         self.config_path = config_path or os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
-        self.tenant_slug = tenant_slug
         
         # Carica configurazione PRIMA di tutto
         with open(self.config_path, 'r', encoding='utf-8') as file:
@@ -114,45 +122,43 @@ class MistralFineTuningManager:
         self.logger = self._setup_logger()
         
         # Initialize MongoClassificationReader for tenant-aware naming
-        if tenant_slug:
+        if self.tenant_slug:
             sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
             from mongo_classification_reader import MongoClassificationReader
-            from Utils.tenant import Tenant
             
-            # Crea oggetto Tenant dal tenant_slug per il MongoClassificationReader
+            # Usa il tenant object già disponibile per il MongoClassificationReader
             try:
-                tenant_obj = Tenant.from_slug(tenant_slug)
-                self.mongo_reader = MongoClassificationReader(tenant=tenant_obj)
-                print(f"🗄️ MongoClassificationReader inizializzato per tenant: {tenant_obj.tenant_name}")
+                self.mongo_reader = MongoClassificationReader(tenant=self.tenant)
+                print(f"🗄️ MongoClassificationReader inizializzato per tenant: {self.tenant.tenant_name}")
             except Exception as e:
-                print(f"⚠️ Errore creazione tenant da slug '{tenant_slug}': {e}")
+                print(f"⚠️ Errore creazione MongoClassificationReader per tenant '{self.tenant_slug}': {e}")
                 self.mongo_reader = None
         else:
             self.mongo_reader = None
         
         # Database connector
-        self.tag_db = TagDatabaseConnector()
+        self.tag_db = TagDatabaseConnector(tenant=self.tenant)
         
         # Directory per modelli fine-tuned (tenant-aware)
-        if tenant_slug and self.mongo_reader:
+        if self.tenant_slug and self.mongo_reader:
             # Use tenant-aware model directory structure
             base_models_dir = os.path.join(os.path.dirname(__file__), '..', 'finetuned_models')
-            tenant_id_short = self.mongo_reader.get_tenant_id_from_name(tenant_slug)[:8] if self.mongo_reader.get_tenant_id_from_name(tenant_slug) else 'unknown'
-            self.models_dir = os.path.join(base_models_dir, f"{tenant_slug.lower()}_{tenant_id_short}_models")
+            tenant_id_short = self.tenant.tenant_id[:8] if self.tenant.tenant_id else 'unknown'
+            self.models_dir = os.path.join(base_models_dir, f"{self.tenant_slug.lower()}_{tenant_id_short}_models")
         else:
             self.models_dir = os.path.join(os.path.dirname(__file__), '..', 'finetuned_models')
         
         os.makedirs(self.models_dir, exist_ok=True)
         
         # Registry dei modelli per cliente (tenant-aware)
-        registry_name = f"model_registry_{tenant_slug.lower()}.json" if tenant_slug else "model_registry.json"
+        registry_name = f"model_registry_{self.tenant_slug.lower()}.json" if self.tenant_slug else "model_registry.json"
         self.model_registry_path = os.path.join(self.models_dir, registry_name)
         self.model_registry = self._load_model_registry()
         
         self.logger.info(f"MistralFineTuningManager inizializzato - Ollama: {self.ollama_url}")
         self.logger.info(f"Models directory: {self.models_dir}")
-        if tenant_slug:
-            self.logger.info(f"Tenant-aware mode: {tenant_slug}")
+        if self.tenant_slug:
+            self.logger.info(f"Tenant-aware mode: {self.tenant_slug}")
     
     def generate_model_name(self, 
                            client_name: str, 
@@ -1456,7 +1462,14 @@ def test_finetuning_manager():
     """Test di base del fine-tuning manager"""
     print("🧪 Test MistralFineTuningManager")
     
-    manager = MistralFineTuningManager()
+    # Crea tenant fake per test
+    fake_tenant = Tenant(
+        tenant_id="test-id",
+        tenant_name="test-tenant", 
+        tenant_slug="test"
+    )
+    
+    manager = MistralFineTuningManager(tenant=fake_tenant)
     
     # Test info modelli
     print("\n📊 Modelli esistenti:")

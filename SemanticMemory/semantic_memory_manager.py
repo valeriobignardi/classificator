@@ -84,7 +84,7 @@ class SemanticMemoryManager:
         
         # Componenti
         self.embedder = embedder or LaBSEEmbedder()
-        self.db_connector = TagDatabaseConnector()
+        self.db_connector = TagDatabaseConnector(tenant=self.tenant)
         
         # MongoDB reader per classificazioni con OGGETTO TENANT
         self.mongo_reader = MongoClassificationReader(tenant=self.tenant)

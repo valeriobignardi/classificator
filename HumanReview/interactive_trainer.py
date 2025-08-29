@@ -12,6 +12,10 @@ from datetime import datetime
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'LLMClassifier'))
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'EmbeddingEngine'))
 
+# Import Tenant per principio universale
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
+from tenant import Tenant
+
 # Import per validatore ALTRO
 from altro_tag_validator import AltroTagValidator
 
@@ -23,28 +27,35 @@ class InteractiveTrainer:
     Gestisce il training supervisionato interattivo con feedback umano
     """
     
-    def __init__(self, llm_classifier: Optional[Any] = None, auto_mode: bool = False, tenant_id: str = None, bertopic_model: Optional[Any] = None):
+    def __init__(self, 
+                 tenant: Optional[Tenant] = None,
+                 llm_classifier: Optional[Any] = None, 
+                 auto_mode: bool = False, 
+                 bertopic_model: Optional[Any] = None):
         """
         Inizializza il trainer interattivo
         
+        PRINCIPIO UNIVERSALE: Accetta oggetto Tenant completo
+        
         Args:
+            tenant: Oggetto Tenant completo (None per compatibilità)
             llm_classifier: Classificatore LLM per proposte automatiche
             auto_mode: Se True, utilizza solo proposte automatiche senza input umano
-            tenant_id: ID del tenant per validazione tag "altro"
             bertopic_model: Modello BERTopic per validazione incrociata
         """
+        self.tenant = tenant
+        self.tenant_id = tenant.tenant_id if tenant else None  # Estrae tenant_id dall'oggetto
         self.llm_classifier = llm_classifier
         self.auto_mode = auto_mode
-        self.tenant_id = tenant_id
         self.bertopic_model = bertopic_model
         self.human_feedback = []  # Storico feedback umano
         self.approved_labels = {}  # Etichette approvate dall'umano
         
-        # Inizializza validatore per tag "altro" se abbiamo tenant_id
+        # Inizializza validatore per tag "altro" se abbiamo tenant
         self.altro_validator = None
-        if tenant_id:
+        if self.tenant:
             try:
-                self.altro_validator = AltroTagValidator(tenant_id)
+                self.altro_validator = AltroTagValidator(tenant=self.tenant)
             except Exception as e:
                 print(f"⚠️ Warning: Impossibile inizializzare AltroTagValidator: {e}")
                 self.altro_validator = None

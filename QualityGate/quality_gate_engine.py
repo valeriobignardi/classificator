@@ -155,17 +155,15 @@ class QualityGateEngine:
                         f"uncertainty={self.uncertainty_threshold}")
         self.logger.info(f"Log training: {self.training_log_path}")
 
-    def _get_dynamic_embedder(self, tenant_name: str = None):
+    def _get_dynamic_embedder(self):
         """
         Ottiene embedder dinamico configurato per il tenant
         
-        Args:
-            tenant_name: Nome del tenant (fallback a self.tenant_name se None)
-            
         Returns:
             Embedder configurato per il tenant
         """
-        effective_tenant = tenant_name or self.tenant_name or "humanitas"
+        # Usa l'oggetto Tenant della classe per estrarre tenant_name
+        effective_tenant = self.tenant.tenant_name if self.tenant else "humanitas"
         
         try:
             from EmbeddingEngine.simple_embedding_manager import simple_embedding_manager
@@ -1129,7 +1127,7 @@ class QualityGateEngine:
                 self.logger.info(f"Solo nuovi esempi: {len(X_new)}")
             
             # 4. Riaddestra il modello con modalità Mistral corretta
-            classifier = self._create_ensemble_classifier_with_correct_mistral_mode(self.tenant_name)
+            classifier = self._create_ensemble_classifier_with_correct_mistral_mode()
             classifier.ml_ensemble = ml_ensemble
             
             # Riallena con tutti i dati
@@ -1204,7 +1202,7 @@ class QualityGateEngine:
             
             from Classification.advanced_ensemble_classifier import AdvancedEnsembleClassifier
             
-            classifier = self._create_ensemble_classifier_with_correct_mistral_mode(self.tenant_name)
+            classifier = self._create_ensemble_classifier_with_correct_mistral_mode()
             training_result = classifier.train_ml_ensemble(X, y)
             
             # Salva il nuovo modello
@@ -1297,8 +1295,8 @@ class QualityGateEngine:
             # Controlla se esiste un modello Mistral fine-tuned per questo cliente
             from FineTuning.mistral_finetuning_manager import MistralFineTuningManager
             
-            finetuning_manager = MistralFineTuningManager()
-            has_finetuned_mistral = finetuning_manager.has_finetuned_model(self.tenant_name)
+            finetuning_manager = MistralFineTuningManager(tenant=self.tenant)
+            has_finetuned_mistral = finetuning_manager.has_finetuned_model(self.tenant.tenant_name)
             
             # Controlla se esistono decisioni umane precedenti
             decision_count = self._count_human_decisions()
@@ -1320,7 +1318,7 @@ class QualityGateEngine:
             # Default: considera come primo training se in dubbio
             return True
 
-    def _create_ensemble_classifier_with_correct_mistral_mode(self, tenant_name: str, force_base_model: bool = False):
+    def _create_ensemble_classifier_with_correct_mistral_mode(self, force_base_model: bool = False):
         """
         Crea AdvancedEnsembleClassifier con la modalità Mistral corretta.
         
@@ -1329,12 +1327,13 @@ class QualityGateEngine:
         - Training successivi/classificazione automatica → Mistral FINE-TUNED
         
         Args:
-            tenant_name: Nome del tenant
             force_base_model: Se True, forza l'uso del modello base
             
         Returns:
             AdvancedEnsembleClassifier configurato correttamente
         """
+        # Estrae tenant_name dall'oggetto Tenant della classe
+        tenant_name = self.tenant.tenant_name if self.tenant else "humanitas"
         try:
             from Classification.advanced_ensemble_classifier import AdvancedEnsembleClassifier
             
@@ -1633,7 +1632,7 @@ class QualityGateEngine:
         import numpy as np
 
         # Estrai TUTTE le sessioni (senza limite per analisi rappresentanti)
-        aggregator = SessionAggregator(schema=self.tenant_name)
+        aggregator = SessionAggregator(tenant=self.tenant)
         sessioni_aggregate = aggregator.estrai_sessioni_aggregate(limit=None)  # TUTTE
         if not sessioni_aggregate:
             return {
@@ -1651,10 +1650,9 @@ class QualityGateEngine:
                 sessioni_filtrate[session_id] = dati
 
         self.logger.info(f"📊 ANALISI RAPPRESENTANTI: {len(sessioni_filtrate)} sessioni totali per clustering")
-
         # 1. CLUSTERING con modalità Mistral corretta
         embedder = self._get_dynamic_embedder()
-        classifier = self._create_ensemble_classifier_with_correct_mistral_mode(self.tenant_name)
+        classifier = self._create_ensemble_classifier_with_correct_mistral_mode()
         
         # Se abbiamo un modello ML esistente, caricalo nell'ensemble
         if has_ml_model and model_files:
@@ -1886,7 +1884,7 @@ class QualityGateEngine:
         from Classification.advanced_ensemble_classifier import AdvancedEnsembleClassifier
         from Preprocessing.session_aggregator import SessionAggregator
         
-        aggregator = SessionAggregator(schema=self.tenant_name)
+        aggregator = SessionAggregator(tenant=self.tenant)
         
         # Per analisi completa, processa tutte le sessioni senza limite
         if max_review_cases is None:
@@ -1917,7 +1915,7 @@ class QualityGateEngine:
 
         # Inizializza ensemble con modalità Mistral corretta
         embedder = self._get_dynamic_embedder()
-        ensemble = self._create_ensemble_classifier_with_correct_mistral_mode(self.tenant_name)
+        ensemble = self._create_ensemble_classifier_with_correct_mistral_mode()
         
         # Carica modello ML se disponibile
         if has_ml_model and model_files:
@@ -2088,8 +2086,8 @@ class QualityGateEngine:
         # TODO: Implementare logica reale per identificare sessioni non classificate
         # Per ora, usa un filtro basato su presenza nel database delle classificazioni
         
-        aggregator = SessionAggregator(schema=self.tenant_name)
-        tag_db = TagDatabaseConnector()
+        aggregator = SessionAggregator(tenant=self.tenant)
+        tag_db = TagDatabaseConnector(tenant=self.tenant)
         
         # Estrai tutte le sessioni disponibili
         sessioni_aggregate = aggregator.estrai_sessioni_aggregate(limit=None)
@@ -2163,7 +2161,7 @@ class QualityGateEngine:
 
         # Inizializza ensemble con modalità Mistral corretta
         embedder = self._get_dynamic_embedder()
-        ensemble = self._create_ensemble_classifier_with_correct_mistral_mode(self.tenant_name)
+        ensemble = self._create_ensemble_classifier_with_correct_mistral_mode()
         
         # Carica modello ML se disponibile
         if has_ml_model and model_files:
@@ -2413,7 +2411,7 @@ class QualityGateEngine:
         saved_count = 0
         errors = []
         
-        tag_db = TagDatabaseConnector()
+        tag_db = TagDatabaseConnector(tenant=self.tenant)
         tag_db.connetti()
         
         try:
@@ -2645,7 +2643,7 @@ class QualityGateEngine:
             try:
                 from TagDatabase.tag_database_connector import TagDatabaseConnector
                 
-                tag_db = TagDatabaseConnector()
+                tag_db = TagDatabaseConnector(tenant=self.tenant)
                 if tag_db.connetti():
                     # Query per ottenere i tag utilizzati nelle classificazioni manuali per questo tenant
                     query = """

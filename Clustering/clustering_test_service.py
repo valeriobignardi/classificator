@@ -136,6 +136,19 @@ class ClusteringTestService:
         Returns:
             Istanza EndToEndPipeline configurata per tenant
         """
+        # 🔧 NORMALIZZAZIONE INPUT: assicura che tenant_or_id sia sempre UUID
+        if isinstance(tenant_or_id, str) and TENANT_AVAILABLE:
+            # Verifica se è UUID o slug e normalizza a UUID
+            if not Tenant._is_valid_uuid(tenant_or_id):
+                # È uno slug - convertilo a UUID
+                try:
+                    resolved_uuid = self._resolve_uuid_from_tenant_slug(tenant_or_id)
+                    tenant_or_id = resolved_uuid
+                    print(f"🔧 [NORMALIZZAZIONE] Slug '{tenant_or_id}' convertito a UUID: {resolved_uuid}")
+                except Exception as e:
+                    print(f"❌ [NORMALIZZAZIONE] Impossibile convertire slug '{tenant_or_id}' a UUID: {e}")
+                    raise RuntimeError(f"Slug '{tenant_or_id}' non valido: {e}")
+        
         # Gestione compatibilità Tenant vs tenant_id string
         if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
             # Oggetto Tenant - usa direttamente i suoi dati
@@ -151,21 +164,38 @@ class ClusteringTestService:
             
         if tenant_id not in self.pipeline_cache:
             try:
-                # 🔧 RISOLVI UUID -> SLUG per logging/debug
-                tenant_slug = self._resolve_tenant_slug_from_uuid(tenant_id)
-                print(f"🔄 Risoluzione tenant: UUID {tenant_id} -> slug '{tenant_slug}'")
+                # 🔧 CREA OGGETTO TENANT per architettura moderna
+                if TENANT_AVAILABLE:
+                    # Crea oggetto Tenant da UUID
+                    tenant_obj = Tenant.from_uuid(tenant_id)
+                    tenant_slug = tenant_obj.tenant_slug
+                    print(f"🔄 Risoluzione tenant: UUID {tenant_id} -> slug '{tenant_slug}' -> Tenant object")
+                else:
+                    # Fallback: risolvi solo UUID -> slug 
+                    tenant_obj = None
+                    tenant_slug = self._resolve_tenant_slug_from_uuid(tenant_id)
+                    print(f"🔄 Risoluzione tenant: UUID {tenant_id} -> slug '{tenant_slug}' (no Tenant obj)")
                 
                 # NUOVO SISTEMA: SimpleEmbeddingManager con reset automatico
                 from EmbeddingEngine.simple_embedding_manager import simple_embedding_manager
                 shared_embedder = simple_embedding_manager.get_embedder_for_tenant(tenant_id)
                 
-                # ✅ USA TENANT_UUID per pipeline (che risolverà internamente UUID -> slug)
-                pipeline = EndToEndPipeline(
-                    tenant_slug=tenant_id,  # ✅ PASSA UUID - pipeline risolverà internamente
-                    confidence_threshold=0.7,
-                    auto_mode=True,
-                    shared_embedder=shared_embedder  # Passa embedder con UUID
-                )
+                # 🆕 ARCHITETTURA MODERNA: passa oggetto Tenant completo
+                if TENANT_AVAILABLE and tenant_obj:
+                    pipeline = EndToEndPipeline(
+                        tenant=tenant_obj,  # 🆕 PASSA OGGETTO TENANT COMPLETO
+                        confidence_threshold=0.7,
+                        auto_mode=True,
+                        shared_embedder=shared_embedder  # Passa embedder con UUID
+                    )
+                else:
+                    # Fallback retrocompatibilità
+                    pipeline = EndToEndPipeline(
+                        tenant_slug=tenant_id,  # Fallback: passa UUID come tenant_slug
+                        confidence_threshold=0.7,
+                        auto_mode=True,
+                        shared_embedder=shared_embedder  # Passa embedder con UUID
+                    )
                 self.pipeline_cache[tenant_id] = pipeline  # Cache con UUID come key
                 logging.info(f"✅ Pipeline {tenant_id} inizializzata con slug '{tenant_slug}' e cached")
             except Exception as e:
@@ -223,7 +253,7 @@ class ClusteringTestService:
         try:
             from TagDatabase.tag_database_connector import TagDatabaseConnector
             
-            tag_connector = TagDatabaseConnector()
+            tag_connector = TagDatabaseConnector.create_for_tenant_resolution()
             tag_connector.connetti()
             
             query = "SELECT tenant_slug FROM tenants WHERE tenant_id = %s"
@@ -253,7 +283,7 @@ class ClusteringTestService:
         try:
             from TagDatabase.tag_database_connector import TagDatabaseConnector
             
-            tag_connector = TagDatabaseConnector()
+            tag_connector = TagDatabaseConnector.create_for_tenant_resolution()
             tag_connector.connetti()
             
             query = """
@@ -599,8 +629,8 @@ class ClusteringTestService:
             # 4. Genera embeddings
             print(f"🔍 Generazione embeddings per {len(texts)} conversazioni...")
             try:
-                # 🔧 [FIX] Usa tenant_slug per pipeline (schema DB)
-                pipeline = self._get_pipeline(tenant_slug)
+                # 🔧 [FIX] Usa tenant_id (UUID) per pipeline, non tenant_slug!
+                pipeline = self._get_pipeline(tenant_id)
                 embeddings = pipeline.embedder.encode(texts, show_progress_bar=True)
                 print(f"✅ Embeddings generati: {embeddings.shape}")
             except Exception as e:

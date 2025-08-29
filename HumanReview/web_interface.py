@@ -20,6 +20,10 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'QualityGate'))
 from quality_gate_engine import QualityGateEngine, ReviewCase
 
+# Importa Tenant object per architettura centralizzata
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Database'))
+from tenant_manager import Tenant, resolve_tenant_from_identifier
+
 # Blueprint per le route della review interface
 review_bp = Blueprint('review', __name__, url_prefix='/review')
 
@@ -34,35 +38,41 @@ class HumanReviewWebInterface:
     def __init__(self):
         self.quality_gates: Dict[str, QualityGateEngine] = {}
     
-    def get_quality_gate(self, tenant_name: str) -> QualityGateEngine:
+    def get_quality_gate(self, tenant: Tenant) -> QualityGateEngine:
         """
         Ottieni o crea il QualityGateEngine per un tenant.
         
         Args:
-            tenant_name: Nome del tenant
+            tenant: Oggetto Tenant completo
             
         Returns:
             QualityGateEngine per il tenant
         """
+        # Estrae tenant_name dall'oggetto Tenant
+        tenant_name = tenant.tenant_name
+        
         if tenant_name not in self.quality_gates:
+            # Passa l'oggetto Tenant completo a QualityGateEngine
             self.quality_gates[tenant_name] = QualityGateEngine(
-                tenant_name=tenant_name,
+                tenant=tenant,
                 training_log_path=f"training_decisions_{tenant_name}.jsonl"
             )
         return self.quality_gates[tenant_name]
     
-    def get_pending_cases(self, tenant_name: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_pending_cases(self, tenant: Tenant, limit: int = 10) -> List[Dict[str, Any]]:
         """
         Recupera i casi pending per un tenant.
         
         Args:
-            tenant_name: Nome del tenant
+            tenant: Oggetto Tenant completo
             limit: Numero massimo di casi da recuperare
             
         Returns:
             Lista di casi in attesa di revisione
         """
-        quality_gate = self.get_quality_gate(tenant_name)
+        quality_gate = self.get_quality_gate(tenant)
+        # Estrae tenant_name dall'oggetto Tenant per chiamare get_pending_reviews
+        tenant_name = tenant.tenant_name
         pending_cases = quality_gate.get_pending_reviews(tenant=tenant_name, limit=limit)
         
         # Converti ReviewCase in dict per il template
@@ -88,13 +98,13 @@ class HumanReviewWebInterface:
         
         return cases_data
     
-    def resolve_case(self, tenant_name: str, case_id: str, human_decision: str, 
+    def resolve_case(self, tenant: Tenant, case_id: str, human_decision: str, 
                      confidence: float, notes: str = "") -> Dict[str, Any]:
         """
         Risolvi un caso di revisione con la decisione umana.
         
         Args:
-            tenant_name: Nome del tenant
+            tenant: Oggetto Tenant completo
             case_id: ID del caso
             human_decision: Decisione dell'operatore umano
             confidence: Confidenza dell'operatore nella decisione
@@ -103,7 +113,9 @@ class HumanReviewWebInterface:
         Returns:
             Risultato dell'operazione
         """
-        quality_gate = self.get_quality_gate(tenant_name)
+        quality_gate = self.get_quality_gate(tenant)
+        # Estrae tenant_name dall'oggetto Tenant per il messaggio
+        tenant_name = tenant.tenant_name
         
         try:
             quality_gate.resolve_review_case(
@@ -128,40 +140,56 @@ class HumanReviewWebInterface:
 # Istanza globale dell'interfaccia
 review_interface = HumanReviewWebInterface()
 
-@review_bp.route('/<tenant_name>')
-def review_dashboard(tenant_name: str):
+@review_bp.route('/<tenant_identifier>')
+def review_dashboard(tenant_identifier: str):
     """
     Dashboard principale per la revisione di un tenant.
     
     Mostra una panoramica dei casi pending e statistiche.
     """
     try:
-        # Recupera casi pending
-        pending_cases = review_interface.get_pending_cases(tenant_name, limit=20)
+        # Risolve l'oggetto Tenant dall'identificatore
+        tenant = resolve_tenant_from_identifier(tenant_identifier)
+        if not tenant:
+            return render_template('error.html', 
+                                 error=f"Tenant {tenant_identifier} non trovato",
+                                 tenant=tenant_identifier)
         
-        # Recupera statistiche
-        quality_gate = review_interface.get_quality_gate(tenant_name)
+        # Recupera casi pending usando l'oggetto Tenant
+        pending_cases = review_interface.get_pending_cases(tenant, limit=20)
+        
+        # Recupera statistiche usando l'oggetto Tenant  
+        quality_gate = review_interface.get_quality_gate(tenant)
+        tenant_name = tenant.tenant_name  # Estrae tenant_name per get_statistics
         stats = quality_gate.get_statistics(tenant=tenant_name)
         
         return render_template('review_dashboard.html', 
-                             tenant=tenant_name,
+                             tenant=tenant.tenant_name,
                              pending_cases=pending_cases,
                              stats=stats)
     
     except Exception as e:
         return render_template('error.html', 
                              error=f"Errore nel caricamento dashboard: {str(e)}",
-                             tenant=tenant_name)
+                             tenant=tenant_identifier)
 
-@review_bp.route('/<tenant_name>/case/<case_id>')
-def review_case_detail(tenant_name: str, case_id: str):
+@review_bp.route('/<tenant_identifier>/case/<case_id>')
+def review_case_detail(tenant_identifier: str, case_id: str):
     """
     Pagina di dettaglio per la revisione di un caso specifico.
     
     Mostra tutti i dettagli del caso e l'interfaccia per la decisione.
     """
     try:
-        quality_gate = review_interface.get_quality_gate(tenant_name)
+        # Risolve l'oggetto Tenant dall'identificatore
+        tenant = resolve_tenant_from_identifier(tenant_identifier)
+        if not tenant:
+            return render_template('error.html', 
+                                 error=f"Tenant {tenant_identifier} non trovato",
+                                 tenant=tenant_identifier)
+        
+        quality_gate = review_interface.get_quality_gate(tenant)
+        tenant_name = tenant.tenant_name  # Estrae tenant_name per get_pending_reviews
         pending_cases = quality_gate.get_pending_reviews(tenant=tenant_name, limit=100)
         
         # Trova il caso specifico
@@ -174,7 +202,7 @@ def review_case_detail(tenant_name: str, case_id: str):
         if not target_case:
             return render_template('error.html', 
                                  error=f"Caso {case_id} non trovato",
-                                 tenant=tenant_name)
+                                 tenant=tenant.tenant_name)
         
         # Converti in dict per il template
         case_data = {
@@ -194,22 +222,30 @@ def review_case_detail(tenant_name: str, case_id: str):
         }
         
         return render_template('case_detail.html', 
-                             tenant=tenant_name,
+                             tenant=tenant.tenant_name,
                              case=case_data)
     
     except Exception as e:
         return render_template('error.html', 
                              error=f"Errore nel caricamento caso: {str(e)}",
-                             tenant=tenant_name)
+                             tenant=tenant.tenant_name)
 
-@review_bp.route('/<tenant_name>/resolve', methods=['POST'])
-def resolve_case_endpoint(tenant_name: str):
+@review_bp.route('/<tenant_identifier>/resolve', methods=['POST'])
+def resolve_case_endpoint(tenant_identifier: str):
     """
     Endpoint per risolvere un caso con la decisione umana.
     
     Accetta dati del form e aggiorna il caso.
     """
     try:
+        # Risolve l'oggetto Tenant dall'identificatore
+        tenant = resolve_tenant_from_identifier(tenant_identifier)
+        if not tenant:
+            return jsonify({
+                'success': False,
+                'error': f'Tenant {tenant_identifier} non trovato'
+            })
+        
         # Recupera dati dal form
         case_id = request.form.get('case_id')
         human_decision = request.form.get('human_decision')
@@ -222,9 +258,9 @@ def resolve_case_endpoint(tenant_name: str):
                 'error': 'Case ID e decisione umana sono richiesti'
             }), 400
         
-        # Risolvi il caso
+        # Risolvi il caso usando l'oggetto Tenant
         result = review_interface.resolve_case(
-            tenant_name=tenant_name,
+            tenant=tenant,
             case_id=case_id,
             human_decision=human_decision,
             confidence=confidence,
@@ -232,8 +268,8 @@ def resolve_case_endpoint(tenant_name: str):
         )
         
         if result['success']:
-            # Redirect alla dashboard dopo successo
-            return redirect(url_for('review.review_dashboard', tenant_name=tenant_name))
+            # Redirect alla dashboard dopo successo usando tenant_identifier
+            return redirect(url_for('review.review_dashboard', tenant_identifier=tenant_identifier))
         else:
             return jsonify(result), 500
     
@@ -243,16 +279,24 @@ def resolve_case_endpoint(tenant_name: str):
             'error': f'Errore nella risoluzione del caso: {str(e)}'
         }), 500
 
-@review_bp.route('/<tenant_name>/api/cases')
-def api_get_cases(tenant_name: str):
+@review_bp.route('/<tenant_identifier>/api/cases')
+def api_get_cases(tenant_identifier: str):
     """
     API endpoint per recuperare i casi pending (per AJAX).
     
     Restituisce JSON con i casi in attesa di revisione.
     """
     try:
+        # Risolve l'oggetto Tenant dall'identificatore
+        tenant = resolve_tenant_from_identifier(tenant_identifier)
+        if not tenant:
+            return jsonify({
+                'success': False,
+                'error': f'Tenant {tenant_identifier} non trovato'
+            }), 404
+        
         limit = int(request.args.get('limit', 10))
-        pending_cases = review_interface.get_pending_cases(tenant_name, limit=limit)
+        pending_cases = review_interface.get_pending_cases(tenant, limit=limit)
         
         return jsonify({
             'success': True,
@@ -266,15 +310,24 @@ def api_get_cases(tenant_name: str):
             'error': str(e)
         }), 500
 
-@review_bp.route('/<tenant_name>/api/stats')
-def api_get_stats(tenant_name: str):
+@review_bp.route('/<tenant_identifier>/api/stats')
+def api_get_stats(tenant_identifier: str):
     """
     API endpoint per recuperare le statistiche (per AJAX).
     
     Restituisce JSON con statistiche aggiornate.
     """
     try:
-        quality_gate = review_interface.get_quality_gate(tenant_name)
+        # Risolve l'oggetto Tenant dall'identificatore
+        tenant = resolve_tenant_from_identifier(tenant_identifier)
+        if not tenant:
+            return jsonify({
+                'success': False,
+                'error': f'Tenant {tenant_identifier} non trovato'
+            }), 404
+        
+        quality_gate = review_interface.get_quality_gate(tenant)
+        tenant_name = tenant.tenant_name  # Estrae tenant_name per get_statistics
         stats = quality_gate.get_statistics(tenant=tenant_name)
         
         return jsonify({

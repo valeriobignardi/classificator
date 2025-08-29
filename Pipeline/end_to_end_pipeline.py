@@ -34,6 +34,9 @@ from hdbscan_clusterer import HDBSCANClusterer
 # RIMOSSO: from intent_clusterer import IntentBasedClusterer  # Sistema legacy eliminato
 from intelligent_intent_clusterer import IntelligentIntentClusterer
 from Clustering.hierarchical_adaptive_clusterer import HierarchicalAdaptiveClusterer  # Nuovo sistema gerarchico
+
+# Import per architettura UUID centralizzata
+from Utils.tenant import Tenant
 # Aggiungi percorsi per gli import
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'MySql'))
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'TagDatabase'))
@@ -77,7 +80,8 @@ class EndToEndPipeline:
     """
     
     def __init__(self,
-                 tenant_slug: str = "humanitas",
+                 tenant: Tenant = None,
+                 tenant_slug: str = None,  # Retrocompatibilità - DEPRECATO
                  confidence_threshold: float = None,
                  min_cluster_size: int = None,
                  min_samples: int = None,
@@ -88,7 +92,8 @@ class EndToEndPipeline:
         Inizializza la pipeline
         
         Args:
-            tenant_slug: Slug del tenant da processare
+            tenant: Oggetto Tenant (NUOVO - architettura UUID)
+            tenant_slug: Slug del tenant (DEPRECATO - solo retrocompatibilità)
             confidence_threshold: Soglia di confidenza (None = legge da config)
             min_cluster_size: Dimensione minima del cluster (None = legge da config)
             min_samples: Numero minimo di campioni (None = legge da config)
@@ -100,11 +105,25 @@ class EndToEndPipeline:
         # 🎯 NUOVO SISTEMA: Crea oggetto Tenant UNA VOLTA con TUTTE le info
         from Utils.tenant import Tenant
         
-        # Determina se il parametro è UUID o slug e crea oggetto Tenant
-        if Tenant._is_valid_uuid(tenant_slug):
-            self.tenant = Tenant.from_uuid(tenant_slug)
+        # GESTIONE TENANT UUID CENTRALIZZATA
+        if tenant is not None:
+            # Architettura moderna - usa oggetto Tenant diretto
+            self.tenant = tenant
+            print(f"🎯 [PIPELINE] Inizializzazione con oggetto Tenant: {tenant.tenant_name} ({tenant.tenant_id})")
+        elif tenant_slug is not None:
+            # Retrocompatibilità - converte parametro a oggetto Tenant
+            print(f"⚠️ [PIPELINE] DEPRECATO: uso di tenant_slug '{tenant_slug}' - convertendo a oggetto Tenant")
+            # Determina se il parametro è UUID o slug e crea oggetto Tenant
+            if Tenant._is_valid_uuid(tenant_slug):
+                self.tenant = Tenant.from_uuid(tenant_slug)
+            else:
+                self.tenant = Tenant.from_slug(tenant_slug)
+            print(f"🔄 [PIPELINE] Conversione completata: {self.tenant.tenant_name} ({self.tenant.tenant_id})")
         else:
-            self.tenant = Tenant.from_slug(tenant_slug)
+            # Fallback a humanitas default
+            print(f"⚠️ [PIPELINE] Nessun tenant specificato - usando Humanitas default")
+            self.tenant = Tenant.from_slug("humanitas")
+            print(f"🏥 [PIPELINE] Fallback completato: {self.tenant.tenant_name} ({self.tenant.tenant_id})")
         
         # Mantieni retrocompatibilità per codice esistente
         self.tenant_id = self.tenant.tenant_id
@@ -184,13 +203,13 @@ class EndToEndPipeline:
         
         # Inizializza componenti base
         print(f"� [FASE 1: INIZIALIZZAZIONE] Inizializzazione lettore conversazioni...")
-        self.lettore = LettoreConversazioni()
+        self.lettore = LettoreConversazioni(tenant=self.tenant)
         
         print(f"� [FASE 1: INIZIALIZZAZIONE] Inizializzazione aggregator...")
         print(f"   🔍 Schema: '{self.tenant_slug}'")
         print(f"   🆔 Tenant ID: '{self.tenant_id}'")
         
-        self.aggregator = SessionAggregator(schema=self.tenant_slug, tenant_id=self.tenant_id)
+        self.aggregator = SessionAggregator(tenant=self.tenant)
         
         # Gestione embedder
         if shared_embedder is not None:
@@ -213,12 +232,29 @@ class EndToEndPipeline:
         print(f"   📊 Min samples: {cluster_min_samples}")
         
         # 🔧 [FIX] Passa TUTTI i parametri tenant-specific all'HDBSCANClusterer
-        cluster_alpha = clustering_config.get('alpha', 1.0)
+        print(f"🐛 DEBUG CLUSTER_ALPHA - PRIMA:")
+        print(f"   📋 clustering_config.get('alpha', 1.0): {clustering_config.get('alpha', 1.0)}")
+        print(f"   📋 Type: {type(clustering_config.get('alpha', 1.0))}")
+        
+        cluster_alpha = float(clustering_config.get('alpha', 1.0))
+        
+        print(f"🐛 DEBUG CLUSTER_ALPHA - DOPO CONVERSIONE:")
+        print(f"   📋 cluster_alpha: {cluster_alpha}")
+        print(f"   📋 Type: {type(cluster_alpha)}")
+        
+        if cluster_alpha <= 0:
+            print(f"⚠️ Alpha non valido ({cluster_alpha}), uso default 1.0")
+            cluster_alpha = 1.0
+            
+        print(f"🐛 DEBUG CLUSTER_ALPHA - FINALE:")
+        print(f"   📋 cluster_alpha finale: {cluster_alpha}")
+        print(f"   📋 Type finale: {type(cluster_alpha)}")
+        print(f"   📋 Alpha > 0: {cluster_alpha > 0}")
         cluster_selection_method = clustering_config.get('cluster_selection_method', 'eom')
-        cluster_selection_epsilon = clustering_config.get('cluster_selection_epsilon', 0.05)
+        cluster_selection_epsilon = float(clustering_config.get('cluster_selection_epsilon', 0.05))
         cluster_metric = clustering_config.get('metric', 'cosine')
         cluster_allow_single = clustering_config.get('allow_single_cluster', False)
-        cluster_max_size = clustering_config.get('max_cluster_size', 0)
+        cluster_max_size = int(clustering_config.get('max_cluster_size', 0))
         
         # 🆕 PARAMETRI UMAP da tenant config
         umap_params = self.config_helper.get_umap_parameters(self.tenant_id)
@@ -297,10 +333,7 @@ class EndToEndPipeline:
         )
         # Non serve più classifier separato - tutto nell'ensemble
         # self.classifier = rimosso, ora tutto in ensemble_classifier
-        self.tag_db = TagDatabaseConnector(
-            tenant_id=self.tenant_id,
-            tenant_name=self.tenant_slug.title()
-        )
+        self.tag_db = TagDatabaseConnector(tenant=self.tenant)
         
         # Inizializza il gestore della memoria semantica
         print("🧠 Inizializzazione memoria semantica...")
@@ -351,9 +384,9 @@ class EndToEndPipeline:
         # Inizializza il trainer interattivo
         print("👤 Inizializzazione trainer interattivo...")
         self.interactive_trainer = InteractiveTrainer(
+            tenant=self.tenant,  # Passa oggetto Tenant completo
             llm_classifier=llm_classifier, 
             auto_mode=self.auto_mode,
-            tenant_id=self.tenant_id,  # Usa tenant_id UUID corretto
             bertopic_model=None  # Sarà inizializzato dopo il clustering
         )
         
@@ -955,9 +988,9 @@ class EndToEndPipeline:
             
             # USA SOLO IL SISTEMA INTELLIGENTE PURO
             intelligent_clusterer = IntelligentIntentClusterer(
+                tenant=self.tenant,  # Passa oggetto Tenant completo
                 config_path=self.clusterer.config_path,
-                llm_classifier=self.ensemble_classifier.llm_classifier if self.ensemble_classifier else None,
-                tenant_id=self.tenant_id  # 🗂️  [NEW] Passa tenant_id per config specifica
+                llm_classifier=self.ensemble_classifier.llm_classifier if self.ensemble_classifier else None
             )
             cluster_labels, cluster_info = intelligent_clusterer.cluster_intelligently(testi, embeddings)
             cluster_labels = np.array(cluster_labels)

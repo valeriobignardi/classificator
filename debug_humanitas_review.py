@@ -55,7 +55,7 @@ def main():
     try:
         # 1. Verifico se esiste la collezione
         reader.set_tenant(client_name)  # Imposta il tenant
-        collection_name = reader.get_collection_name(client_name)
+        collection_name = reader.get_collection_name()  # Ora usa l'oggetto tenant interno
         print(f"📁 Nome collezione: {collection_name}")
         
         # Accedo alla collezione tramite il database

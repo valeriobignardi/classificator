@@ -13,6 +13,11 @@ from collections import defaultdict, Counter
 # 🔧 [REMOVED] from sklearn.cluster import HDBSCAN  # Ora usiamo HDBSCANClusterer custom
 from sklearn.metrics import silhouette_score
 import logging
+import sys
+
+# Import Tenant per principio universale
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
+from tenant import Tenant
 
 # 🔧 [FIX] Import HDBSCANClusterer all'inizio per evitare problemi di contesto
 try:
@@ -29,21 +34,24 @@ class IntelligentIntentClusterer:
     senza bisogno di pattern predefiniti. Approccio completamente ML-driven.
     """
     
-    def __init__(self, config_path: str = None, llm_classifier=None, tenant_id: str = None):
+    def __init__(self, tenant: Optional[Tenant] = None, config_path: str = None, llm_classifier=None):
         """
         Inizializza il clusterer intelligente
         
+        PRINCIPIO UNIVERSALE: Accetta oggetto Tenant completo
+        
         Args:
+            tenant: Oggetto Tenant completo (None per compatibilità)
             config_path: Percorso del file di configurazione globale
             llm_classifier: Classificatore LLM per analisi intent
-            tenant_id: ID del tenant per configurazione specifica
         """
         if config_path is None:
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
         
+        self.tenant = tenant
+        self.tenant_id = tenant.tenant_id if tenant else None  # Estrae tenant_id dall'oggetto
         self.config_path = config_path
         self.llm_classifier = llm_classifier
-        self.tenant_id = tenant_id  # 🗂️  [NEW] Memorizza tenant_id
         self.load_intelligent_config()
         
         # Setup logging

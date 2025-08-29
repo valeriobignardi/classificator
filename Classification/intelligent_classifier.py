@@ -2038,6 +2038,104 @@ Ragionamento: {ex["motivation"]}"""
         
         return previous_row[-1]
     
+    def _call_ollama_api_structured(self, conversation_text: str) -> Dict[str, Any]:
+        """
+        Nuova implementazione con Ollama Structured Outputs - elimina parsing manuale
+        
+        Args:
+            conversation_text: Testo della conversazione da classificare
+            
+        Returns:
+            Dict con predicted_label, confidence, motivation (JSON garantito)
+        """
+        # Schema JSON che garantisce la struttura della risposta
+        json_schema = {
+            "type": "object",
+            "properties": {
+                "predicted_label": {
+                    "type": "string",
+                    "description": "L'etichetta di classificazione predetta dalle etichette disponibili"
+                },
+                "confidence": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "description": "Livello di confidenza della classificazione (0.0-1.0)"
+                },
+                "motivation": {
+                    "type": "string",
+                    "description": "Breve spiegazione della classificazione (massimo 100 parole)"
+                }
+            },
+            "required": ["predicted_label", "confidence", "motivation"]
+        }
+        
+        # Costruisci il messaggio del sistema con etichette disponibili
+        system_prompt = f"""
+        Sei un classificatore esperto di conversazioni mediche per l'ospedale Humanitas.
+        
+        Analizza la conversazione e classifica in una di queste categorie:
+        {', '.join(self.domain_labels)}
+        
+        Regole:
+        - predicted_label DEVE essere esattamente una delle etichette elencate sopra
+        - confidence: 0.0-1.0 basato sulla chiarezza del contenuto
+        - motivation: spiegazione breve e specifica (massimo 100 parole)
+        
+        Rispondi SOLO con il JSON richiesto, senza altro testo.
+        """
+        
+        # Payload per structured outputs
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user", 
+                    "content": f"Classifica questa conversazione:\n\n{conversation_text}"
+                }
+            ],
+            "stream": False,
+            "format": json_schema,  # 🔑 SCHEMA OBBLIGATORIO - elimina parsing manuale!
+            "options": {
+                "temperature": 0.01,  # Molto deterministico
+                "num_predict": 200,   # Spazio per JSON completo
+                "top_p": 0.8,
+                "top_k": 20
+            }
+        }
+        
+        try:
+            response = self.session.post(
+                f"{self.ollama_url}/api/chat",  # 🔑 USA /api/chat per structured outputs
+                json=payload,
+                timeout=self.timeout
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            if 'message' not in result or 'content' not in result['message']:
+                raise ValueError(f"Risposta API Ollama malformata: {result}")
+            
+            # Il JSON è già valido grazie allo schema!
+            json_response = json.loads(result['message']['content'])
+            
+            self.logger.debug(f"✅ Structured Output ricevuto: {json_response}")
+            return json_response
+            
+        except (requests.RequestException, json.JSONDecodeError, KeyError) as e:
+            self.logger.error(f"❌ Errore Ollama Structured API: {e}")
+            # Fallback solo per errori di connessione, non di parsing
+            return {
+                "predicted_label": "altro",
+                "confidence": 0.1,
+                "motivation": f"Errore tecnico API: {str(e)}"
+            }
+
     def _call_ollama_api(self, prompt: str) -> str:
         """
         Chiama l'API Ollama con parametri ottimizzati per classificazione JSON
@@ -2151,10 +2249,23 @@ Ragionamento: {ex["motivation"]}"""
                 'timeout': self.timeout
             }
             
-            raw_response = self._call_ollama_api_with_retry(prompt)
-            
-            # Parsa la risposta con testo per risoluzione semantica
-            predicted_label, confidence, motivation, original_llm_label = self._parse_llm_response(raw_response, conversation_text)
+            # 🚀 NUOVO: Usa Structured Outputs invece del parsing manuale
+            try:
+                structured_result = self._call_ollama_api_structured(conversation_text)
+                
+                # Estrai i risultati dal JSON strutturato (garantito valido)
+                predicted_label = structured_result["predicted_label"]
+                confidence = float(structured_result["confidence"])
+                motivation = structured_result["motivation"]
+                original_llm_label = predicted_label  # È già l'etichetta originale
+                
+                self.logger.info(f"✅ Structured Output: {predicted_label} (conf: {confidence:.3f})")
+                
+            except Exception as e:
+                # Fallback solo per errori critici di connessione
+                self.logger.error(f"❌ Structured Outputs fallito, uso metodo tradizionale: {e}")
+                raw_response = self._call_ollama_api_with_retry(prompt)
+                predicted_label, confidence, motivation, original_llm_label = self._parse_llm_response(raw_response, conversation_text)
             
             processing_time = time.time() - start_time
             
@@ -2163,8 +2274,8 @@ Ragionamento: {ex["motivation"]}"""
                 predicted_label=predicted_label,
                 confidence=confidence,
                 motivation=motivation,
-                method="LLM",
-                raw_response=raw_response,
+                method="LLM_STRUCTURED" if 'structured_result' in locals() else "LLM",
+                raw_response=str(structured_result) if 'structured_result' in locals() else raw_response,
                 processing_time=processing_time,
                 timestamp=datetime.now().isoformat()
             )

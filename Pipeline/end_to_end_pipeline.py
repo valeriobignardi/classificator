@@ -3764,6 +3764,8 @@ class EndToEndPipeline:
             print(f"   👤 Richiedono review: {needs_review} cluster (<70% consenso)")
             
             # STEP 5: Costruzione predizioni finali per tutte le sessioni
+            # ✅ CORREZIONE BUG 2025-08-29: Aggiunta cluster_metadata a tutte le predizioni
+            # per garantire corretta classificazione tipo (RAPPRESENTANTE/PROPAGATO/OUTLIER vs NORMALE)
             print(f"🏗️  STEP 5: Costruzione predizioni finali...")
             all_predictions = []
             
@@ -3803,6 +3805,17 @@ class EndToEndPipeline:
                                 'llm_prediction': None,
                                 'ml_prediction': {'predicted_label': cluster_label_info['label'], 'confidence': cluster_label_info['confidence']}
                             }
+                        
+                        # ✅ CORREZIONE BUG: Aggiungi cluster_metadata per RAPPRESENTANTE
+                        prediction['cluster_metadata'] = {
+                            'cluster_id': cluster_id,
+                            'selection_reason': 'rappresentante',
+                            'is_representative': True,
+                            'cluster_size': len(cluster_sessions.get(cluster_id, [])),
+                            'consensus_ratio': cluster_label_info.get('consensus_ratio', 1.0),
+                            'total_representatives': cluster_label_info.get('total_representatives', 1)
+                        }
+                        
                     else:
                         # Sessione normale: usa etichetta propagata
                         prediction = {
@@ -3814,6 +3827,17 @@ class EndToEndPipeline:
                             'source_representative': cluster_label_info['source_representative'],
                             'llm_prediction': None,
                             'ml_prediction': {'predicted_label': cluster_label_info['label'], 'confidence': cluster_label_info['confidence']}
+                        }
+                        
+                        # ✅ CORREZIONE BUG: Aggiungi cluster_metadata per PROPAGATO
+                        prediction['cluster_metadata'] = {
+                            'cluster_id': cluster_id,
+                            'selection_reason': 'propagato',
+                            'is_representative': False,
+                            'propagated_from': cluster_label_info['source_representative'],
+                            'cluster_size': len(cluster_sessions.get(cluster_id, [])),
+                            'consensus_ratio': cluster_label_info.get('consensus_ratio', 1.0),
+                            'needs_review': cluster_label_info.get('needs_review', False)
                         }
                 
                 else:
@@ -3839,6 +3863,15 @@ class EndToEndPipeline:
                             'llm_prediction': None,
                             'ml_prediction': {'predicted_label': 'altro', 'confidence': 0.2}
                         }
+                    
+                    # ✅ CORREZIONE BUG: Aggiungi cluster_metadata per OUTLIER
+                    prediction['cluster_metadata'] = {
+                        'cluster_id': -1,
+                        'selection_reason': 'outlier',
+                        'is_outlier': True,
+                        'is_representative': False,
+                        'classified_individually': True
+                    }
                 
                 all_predictions.append(prediction)
             

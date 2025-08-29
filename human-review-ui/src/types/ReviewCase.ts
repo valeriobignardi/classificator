@@ -12,6 +12,7 @@ export interface ReviewCase {
   created_at: string;
   tenant: string;
   cluster_id?: string;
+  classification_type?: string; // 🆕 RAPPRESENTANTE, OUTLIER, PROPAGATO, NORMALE
   // 🆕 Nuovi campi per cluster organization
   is_representative?: boolean;
   propagated_from?: string;

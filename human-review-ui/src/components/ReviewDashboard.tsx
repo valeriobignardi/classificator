@@ -1048,6 +1048,32 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
                             ))}
                           </Box>
 
+                          {/* Classification Type Indicator */}
+                          <Box 
+                            sx={{ 
+                              border: '1px solid',
+                              borderColor: 'info.main',
+                              borderRadius: 1,
+                              p: 1,
+                              mb: 2,
+                              backgroundColor: 'info.light',
+                              color: 'info.contrastText'
+                            }}
+                          >
+                            <Typography variant="subtitle2" fontWeight="bold">
+                              🏷️  Tipo: <Chip 
+                                label={caseItem.classification_type || 'NORMALE'} 
+                                color={
+                                  caseItem.classification_type === 'RAPPRESENTANTE' ? 'primary' :
+                                  caseItem.classification_type === 'PROPAGATO' ? 'success' :
+                                  caseItem.classification_type === 'OUTLIER' ? 'warning' : 'default'
+                                }
+                                size="small" 
+                                sx={{ ml: 1, fontWeight: 'bold' }}
+                              />
+                            </Typography>
+                          </Box>
+
                           {/* Predictions Comparison - ENHANCED */}
                           <Box 
                             sx={{ 

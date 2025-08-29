@@ -1473,6 +1473,12 @@ class MongoClassificationReader:
                 
                 # Log per debug
                 print(f"🏷️  Salvati metadati cluster per sessione {session_id}: cluster_id={cluster_metadata.get('cluster_id', 'N/A')}, is_representative={cluster_metadata.get('is_representative', False)}")
+                
+                # 🆕 DETERMINA CLASSIFICATION_TYPE per Review Queue
+                classification_type = self._determine_classification_type(cluster_metadata)
+                doc["classification_type"] = classification_type
+                print(f"🎯 Classification type determinato: {classification_type}")
+                
             else:
                 # 🔧 FIX CRITICO: cluster_metadata None può significare:
                 # 1. Classificazione normale (senza clustering) - NON è outlier
@@ -1498,10 +1504,12 @@ class MongoClassificationReader:
                     doc["metadata"]["outlier_score"] = 1.0
                     doc["metadata"]["method"] = "auto_outlier_assignment"
                     doc["session_type"] = "outlier"
+                    doc["classification_type"] = "OUTLIER"  # 🆕 EXPLICIT TYPE
                     
                     print(f"🔍 OUTLIER ASSIGNMENT: Sessione {session_id} assegnata a cluster {outlier_cluster_id}")
                 else:
                     # Classificazione normale senza clustering - non assegnare cluster metadata
+                    doc["classification_type"] = "NORMALE"  # 🆕 EXPLICIT TYPE
                     print(f"� NORMAL CLASSIFICATION: Sessione {session_id} classificata senza clustering")
                     # Non aggiungere cluster_id per classificazioni normali
             
@@ -1611,49 +1619,25 @@ class MongoClassificationReader:
             # Usa la collection appropriata per il tenant
             collection = self.db[self.get_collection_name()]
             
-            # Costruisci query complessa per i 3 livelli
+            # 🆕 NUOVA LOGICA: Usa il campo classification_type
             or_conditions = []
             
-            # 1. RAPPRESENTANTI: review_status = "pending" E is_representative = true
+            # 1. RAPPRESENTANTI: classification_type = "RAPPRESENTANTE"
             if show_representatives:
                 or_conditions.append({
-                    "review_status": "pending",
-                    "$or": [
-                        {"cluster_metadata.is_representative": True},
-                        {"metadata.is_representative": True},  # Fallback legacy
-                        {"metadata.is_representative": {"$exists": False}}  # Fallback per dati legacy
-                    ]
+                    "classification_type": "RAPPRESENTANTE"
                 })
             
-            # 2. PROPAGATE: propagated_from esiste E non sono rappresentanti
+            # 2. PROPAGATE: classification_type = "PROPAGATO"
             if show_propagated:
                 or_conditions.append({
-                    "$or": [
-                        {
-                            "cluster_metadata.session_type": "propagated",
-                            "cluster_metadata.is_representative": {"$ne": True}
-                        },
-                        {  # Fallback legacy
-                            "metadata.propagated_from": {"$exists": True, "$ne": None},
-                            "metadata.is_representative": {"$ne": True}
-                        }
-                    ]
+                    "classification_type": "PROPAGATO"
                 })
             
-            # 3. OUTLIERS: cluster_id inizia con "outlier_" O valori legacy
+            # 3. OUTLIERS: classification_type = "OUTLIER"
             if show_outliers:
                 or_conditions.append({
-                    "$or": [
-                        # 🆕 NUOVO: outliers con session_type
-                        {"cluster_metadata.session_type": "outlier"},
-                        # NUOVO: outliers con formato outlier_X
-                        {"cluster_metadata.cluster_id": {"$regex": "^outlier_"}},
-                        {"metadata.cluster_id": {"$regex": "^outlier_"}},
-                        # Legacy: outliers con cluster_id = -1
-                        {"metadata.cluster_id": -1},
-                        {"metadata.cluster_id": "-1"},  # Fallback string
-                        {"metadata.cluster_id": {"$exists": False}}  # Legacy senza cluster
-                    ]
+                    "classification_type": "OUTLIER"
                 })
             
             # Query base per tenant
@@ -2228,6 +2212,41 @@ def main():
         print("✅ Disconnesso da MongoDB")
     else:
         print("❌ Impossibile connettersi a MongoDB")
+
+    def _determine_classification_type(self, cluster_metadata: dict) -> str:
+        """
+        Scopo: Determina il tipo di classificazione basato sui metadati cluster
+        
+        Parametri input:
+            - cluster_metadata: Metadati del clustering
+            
+        Output:
+            - Stringa che indica il tipo: RAPPRESENTANTE, OUTLIER, PROPAGATO, NORMALE
+            
+        Ultimo aggiornamento: 2025-08-29
+        """
+        if not cluster_metadata:
+            return "NORMALE"
+            
+        # RAPPRESENTANTE: è esplicitamente marcato come rappresentativo
+        if cluster_metadata.get('is_representative', False):
+            return "RAPPRESENTANTE"
+            
+        # PROPAGATO: ha propagated_from (è stato propagato da un rappresentante)
+        if 'propagated_from' in cluster_metadata:
+            return "PROPAGATO"
+            
+        # OUTLIER: cluster_id è -1 o contiene "outlier" o ha outlier_score > 0.5
+        cluster_id = cluster_metadata.get('cluster_id')
+        outlier_score = cluster_metadata.get('outlier_score', 0.0)
+        
+        if (cluster_id == -1 or 
+            (isinstance(cluster_id, str) and 'outlier' in cluster_id.lower()) or
+            outlier_score > 0.5):
+            return "OUTLIER"
+            
+        # DEFAULT: Se ha cluster_metadata ma non rientra nelle categorie sopra
+        return "CLUSTER_MEMBER"
 
 
 if __name__ == "__main__":

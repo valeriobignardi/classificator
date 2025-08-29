@@ -1769,19 +1769,21 @@ def api_get_review_cases(client_name: str):
                 'case_id': session.get('id', session.get('session_id', '')),
                 'session_id': session.get('session_id', ''),
                 'conversation_text': session.get('conversation_text', session.get('testo_completo', '')),
-                'ml_prediction': session.get('ml_prediction', session.get('classification_ML', session.get('classification', 'non_classificata'))),
-                'ml_confidence': float(session.get('ml_confidence', session.get('precision_ML', session.get('confidence', 0.0)))),
-                'llm_prediction': session.get('llm_prediction', session.get('classification_LLM', session.get('classification', 'non_classificata'))),
-                'llm_confidence': float(session.get('llm_confidence', session.get('precision_LLM', session.get('confidence', 0.0)))),
+                # 🔧 FIX: Gestione corretta dei campi predizione
+                'ml_prediction': session.get('ml_prediction', session.get('classification_ML', session.get('classification', 'N/A'))),
+                'ml_confidence': float(session.get('ml_confidence', session.get('precision_ML', session.get('confidence', 0.0) if session.get('classification_method') == 'ML' else 0.0))),
+                'llm_prediction': session.get('llm_prediction', session.get('classification_LLM', session.get('classification', 'N/A'))),
+                'llm_confidence': float(session.get('llm_confidence', session.get('precision_LLM', session.get('confidence', 0.0) if session.get('classification_method') == 'LLM' else 0.0))),
                 'uncertainty_score': 1.0 - float(session.get('confidence', 0.0)),
                 'novelty_score': 0.0,  # Non disponibile da MongoDB
                 'reason': session.get('motivation', session.get('motivazione', '')),
                 'notes': session.get('notes', session.get('motivation', session.get('motivazione', ''))),  # Campo notes per UI
-                'created_at': str(session.get('timestamp', '')),
+                'created_at': str(session.get('timestamp', session.get('classified_at', ''))),
                 'tenant': client_name,
                 'cluster_id': str(session.get('cluster_id', session.get('metadata', {}).get('cluster_id', ''))) if session.get('cluster_id') or session.get('metadata', {}).get('cluster_id') else None,
                 
                 # 🆕 NUOVI CAMPI REVIEW QUEUE
+                'classification_type': session.get('classification_type', 'NORMALE'),  # 🆕 CRITICAL FIELD
                 'session_type': session.get('session_type', 'unknown'),  # representative/propagated/outlier
                 'is_representative': session.get('is_representative', False),
                 'propagated_from': session.get('propagated_from'),

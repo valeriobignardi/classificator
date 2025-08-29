@@ -750,13 +750,63 @@ class EndToEndPipeline:
         n_outliers = list(cluster_labels).count(-1)
         n_representatives = sum(len(reps) for reps in representatives.values())
         
+        # 🆕 DEBUG DETTAGLIATO RISULTATI CLUSTERING
+        total_sessions = len(cluster_labels)
+        unique_clusters = set(cluster_labels)
+        
+        print(f"\n🔍 [FASE 4: DEBUG] ANALISI DETTAGLIATA CLUSTERING:")
+        print(f"   📊 Sessioni totali processate: {total_sessions}")
+        print(f"   🎯 Cluster identificati: {unique_clusters}")
+        print(f"   📈 Cluster validi (>= 0): {n_clusters}")
+        print(f"   🔍 Outliers (-1): {n_outliers}")
+        print(f"   📋 Representatives generati: {n_representatives}")
+        print(f"   🏷️ Suggested labels: {len(suggested_labels)}")
+        
+        # Debug distribuzione cluster
+        if total_sessions > 0:
+            outlier_percentage = (n_outliers / total_sessions * 100)
+            clustered_percentage = ((total_sessions - n_outliers) / total_sessions * 100)
+            
+            print(f"   📊 Distribuzione clustering:")
+            print(f"     ✅ Clusterizzate: {total_sessions - n_outliers} ({clustered_percentage:.1f}%)")
+            print(f"     🔍 Outliers: {n_outliers} ({outlier_percentage:.1f}%)")
+            
+            # Analisi per cluster specifico
+            if n_clusters > 0:
+                cluster_sizes = {}
+                for label in cluster_labels:
+                    if label != -1:
+                        cluster_sizes[label] = cluster_sizes.get(label, 0) + 1
+                
+                print(f"   📈 Dimensioni cluster:")
+                for cluster_id, size in sorted(cluster_sizes.items()):
+                    print(f"     🎯 Cluster {cluster_id}: {size} sessioni")
+            
+            # 🚨 ANALISI QUALITÀ CLUSTERING
+            if outlier_percentage > 80:
+                print(f"   ⚠️ WARNING: {outlier_percentage:.1f}% outliers - clustering potrebbe fallire!")
+            elif outlier_percentage > 60:
+                print(f"   ⚠️ ATTENZIONE: {outlier_percentage:.1f}% outliers - qualità clustering bassa")
+            else:
+                print(f"   ✅ BUONO: {outlier_percentage:.1f}% outliers - clustering accettabile")
+        
         elapsed_time = time.time() - start_time
         print(f"✅ [FASE 4: CLUSTERING] Completata in {elapsed_time:.2f}s")
-        print(f"📈 [FASE 4: CLUSTERING] Risultati:")
+        print(f"📈 [FASE 4: CLUSTERING] Risultati finali:")
         print(f"   🎯 Cluster trovati: {n_clusters}")
         print(f"   🔍 Outliers: {n_outliers}")
         print(f"   👥 Rappresentanti: {n_representatives}")
         print(f"   🏷️ Etichette generate: {len(suggested_labels)}")
+        
+        # 🚨 EARLY WARNING se clustering sembra fragile
+        if n_clusters == 0:
+            print(f"\n❌ [FASE 4: WARNING] CLUSTERING POTENZIALMENTE FALLITO!")
+            print(f"   🔍 Tutti i {total_sessions} punti sono outlier")
+            print(f"   💡 Il training supervisionato verrà interrotto")
+        elif n_clusters < 2:
+            print(f"\n⚠️ [FASE 4: WARNING] CLUSTERING DEBOLE!")
+            print(f"   🎯 Solo {n_clusters} cluster trovato")
+            print(f"   💡 Diversità limitata per training ML")
         
         return result
     
@@ -1478,13 +1528,47 @@ class EndToEndPipeline:
         print(f"🏷️  Etichette suggerite: {len(suggested_labels)}")
         print(f"👤 Modalità interattiva: {interactive_mode}")
         
-        # Verifica se ci sono cluster validi
+        # 🆕 DEBUG MIGLIORATO: Analizza risultati clustering
         n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
-        print(f"📈 Cluster validi trovati: {n_clusters}")
+        n_outliers = list(cluster_labels).count(-1)
+        total_sessions = len(cluster_labels)
         
+        print(f"\n� ANALISI RISULTATI CLUSTERING:")
+        print(f"   📊 Sessioni totali: {total_sessions}")
+        print(f"   🎯 Cluster validi trovati: {n_clusters}")
+        print(f"   🔍 Outliers: {n_outliers}")
+        print(f"   📈 Percentuale clusterizzata: {((total_sessions - n_outliers) / total_sessions * 100):.1f}%")
+        
+        # 🚨 CONTROLLO CRITICO: Fallimento clustering = Errore fatale
         if n_clusters == 0:
-            print("⚠️ Nessun cluster trovato. Uso classificazione basata su tag predefiniti...")
-            return self._allena_classificatore_fallback(sessioni)
+            outlier_percentage = (n_outliers / total_sessions * 100) if total_sessions > 0 else 100
+            error_msg = f"""
+❌ CLUSTERING FALLITO - TRAINING INTERROTTO
+📊 Analisi fallimento:
+   • Sessioni processate: {total_sessions}
+   • Cluster formati: 0
+   • Outliers: {n_outliers} (100% delle sessioni)
+   
+🔍 Possibili cause:
+   • Dataset troppo piccolo (minimo raccomandato: 50+ sessioni)
+   • Dati troppo omogenei (tutte le conversazioni identiche)
+   • Parametri clustering troppo restrittivi (min_cluster_size, min_samples)
+   • Embeddings di scarsa qualità
+   
+💡 Soluzioni suggerite:
+   • Aumentare il dataset di training
+   • Verificare diversità delle conversazioni
+   • Ridurre min_cluster_size in config.yaml
+   • Controllare configurazione embedding
+            """
+            print(error_msg)
+            
+            # 🚨 RITORNA ERRORE INVECE DI FALLBACK
+            raise ValueError(f"Clustering fallito: 0 cluster formati su {total_sessions} sessioni. Il training supervisionato richiede almeno 1 cluster valido per funzionare correttamente. Verificare dataset e configurazione clustering.")
+        
+        # ✅ SUCCESSO CLUSTERING
+        print(f"\n✅ CLUSTERING RIUSCITO - SCENARIO CON CLUSTER")
+        print(f"🎯 Procedendo con training basato su {n_clusters} cluster validi")
         
         # Se modalità interattiva è abilitata, esegui review umano
         if interactive_mode and n_clusters > 0:
@@ -1608,8 +1692,25 @@ class EndToEndPipeline:
             }
         
         if len(train_embeddings) < 5:
-            print("⚠️ Troppo pochi dati dal clustering. Uso classificazione basata su tag predefiniti...")
-            return self._allena_classificatore_fallback(sessioni)
+            # 🚨 ERRORE: Troppo pochi embeddings per training ML
+            error_msg = f"""
+❌ TRAINING ML FALLITO - DATI INSUFFICIENTI
+📊 Analisi problema:
+   • Embeddings disponibili: {len(train_embeddings)}
+   • Minimum richiesto: 5
+   
+🔍 Possibili cause:
+   • Dataset troppo piccolo dopo clustering
+   • Troppi outliers, pochi dati nei cluster
+   • Errori nella generazione embeddings
+   
+💡 Soluzioni:
+   • Aumentare dimensione dataset
+   • Ridurre parametri clustering (min_cluster_size)
+   • Verificare qualità dati input
+            """
+            print(error_msg)
+            raise ValueError(f"Training ML impossibile: solo {len(train_embeddings)} embeddings disponibili (minimo: 5). Aumentare il dataset o modificare i parametri di clustering.")
         
         # 🆕 NUOVO FLUSSO: Usa BERTopic pre-addestrato per feature augmentation
         ml_features = train_embeddings
@@ -1808,204 +1909,146 @@ class EndToEndPipeline:
         print(f"✅ Classificatore allenato e salvato come '{model_name}'")
         return metrics
     
-    def _allena_classificatore_fallback(self, sessioni: Dict[str, Dict]) -> Dict[str, Any]:
-        """
-        Allena il classificatore usando tag predefiniti come fallback
-        """
-        print("🔄 Uso approccio fallback con tag predefiniti...")
-        
-        # Tag predefiniti e parole chiave associate (già normalizzati)
-        tag_keywords = {
-            'accesso_portale': ['accesso', 'login', 'password', 'entrare', 'portale', 'app'],
-            'prenotazione_esami': ['prenota', 'prenotazione', 'visita', 'esame', 'appuntamento'],
-            'ritiro_referti': ['referto', 'risultato', 'ritiro', 'ritirar', 'analisi'],
-            'problemi_prenotazione': ['problema', 'errore', 'cancella', 'modificar', 'disdire'],
-            'fatturazione': ['fattura', 'pagamento', 'ricevuta', 'costo', 'prezzo'],
-            'orari_strutture': ['orari', 'orario', 'aperto', 'chiuso', 'quando', 'apertura'],
-            'contatti_info': ['telefono', 'contatto', 'numero', 'chiamare', 'email'],
-            'altro': []  # Default per tutto il resto
-        }
-        
-        # Assegna etichette basate su parole chiave
-        session_texts = []
-        session_labels = []
-        session_ids = []
-        
-        for session_id, dati in sessioni.items():
-            testo = dati['testo_completo'].lower()
-            # Trova il tag più appropriato
-            best_tag = 'altro'
-            max_matches = 0
-            
-            for tag, keywords in tag_keywords.items():
-                if tag == 'altro':
-                    continue
-                    
-                matches = sum(1 for keyword in keywords if keyword in testo)
-                if matches > max_matches:
-                    max_matches = matches
-                    best_tag = tag
-            
-            # Se nessun match significativo, usa classificazione avanzata
-            if max_matches == 0:
-                # Fallback: assegna etichette diverse per forzare diversità
-                if len(session_labels) == 0:
-                    best_tag = 'info_generali'
-                elif len(session_labels) == 1 and session_labels[0] == 'info_generali':
-                    best_tag = 'richiesta_operatore'
-                else:
-                    best_tag = 'altro'
-            
-            session_texts.append(dati['testo_completo'])
-            session_labels.append(best_tag)
-            session_ids.append(session_id)
-        
-        # Genera embedding
-        embeddings = self._get_embedder().encode(session_texts, session_ids=session_ids)
-        
-        # Converte etichette in array
-        labels_array = np.array(session_labels)
-        
-        # Verifica che ci siano almeno 2 classi diverse
-        unique_labels = set(session_labels)
-        if len(unique_labels) < 2:
-            # Se abbiamo solo una sessione, non possiamo fare training ML
-            if len(session_labels) == 1:
-                print(f"⚠️ Solo 1 sessione disponibile, impossibile training ML")
-                print(f"🔄 Saltando training e usando solo LLM per classificazione")
-                return {
-                    'training_accuracy': 0.0,
-                    'n_samples': len(session_labels),
-                    'n_features': 0,
-                    'n_classes': 1,
-                    'fallback_reason': 'insufficient_samples_for_ml'
-                }
-            
-            # Se abbiamo più sessioni ma tutte con la stessa classe, forza diversità
-            if 'altro' not in unique_labels:
-                session_labels[0] = 'altro'
-            if 'informazioni_generali' not in unique_labels and len(session_labels) > 1:
-                session_labels[1] = 'informazioni_generali'
-            labels_array = np.array(session_labels)
-            unique_labels = set(session_labels)
-        
-        # Se ancora abbiamo solo 1 classe, usa solo LLM
-        if len(unique_labels) < 2:
-            print(f"⚠️ Impossibile creare diversità di classi, uso solo LLM")
-            return {
-                'training_accuracy': 0.0,
-                'n_samples': len(session_labels),
-                'n_features': embeddings.shape[1],
-                'n_classes': len(unique_labels),
-                'fallback_reason': 'insufficient_class_diversity'
-            }
-        
-        # Allena l'ensemble classifier
-        metrics = self.ensemble_classifier.train_ml_ensemble(embeddings, labels_array)
-        
-        # Salva il modello ensemble
-        model_name = self.mongo_reader.generate_model_name(self.tenant_slug, "fallback_classifier")
-        self.ensemble_classifier.save_ensemble_model(f"models/{model_name}")
-        
-        print(f"✅ Classificatore fallback allenato e salvato come '{model_name}'")
-        print(f"📊 Classi usate: {sorted(unique_labels)}")
-        
-        return metrics
+    # RIMOSSA: _allena_classificatore_fallback() 
+    # Il training supervisionato ora richiede clustering riuscito per funzionare.
+    # In caso di clustering fallito, il processo si interrompe con errore esplicativo.
     
     def classifica_e_salva_sessioni(self,
                                    sessioni: Dict[str, Dict],
                                    batch_size: int = 32,
                                    use_ensemble: bool = True,
-                                   optimize_clusters: bool = True) -> Dict[str, Any]:
+                                   optimize_clusters: bool = True,
+                                   force_review: bool = False) -> Dict[str, Any]:
         """
-        Classifica le sessioni usando l'ensemble classifier e salva i risultati nel database TAG
+        Classifica le sessioni usando l'ensemble classifier e salva i risultati nel database MongoDB
+        
+        LOGICA UNIFICATA POST-TRAINING:
+        - Se force_review=True: Cancella collection MongoDB e riclassifica tutto da zero
+        - Se force_review=False: Usa logica progressiva intelligente (20%/7 giorni)
+        - SEMPRE: Ensemble LLM+ML con clustering ottimizzato
+        - SEMPRE: altro_tag_validation abilitata
+        - SEMPRE: Auto-classificazione completa (mai human review)
         
         Args:
             sessioni: Sessioni da classificare
             batch_size: Dimensione del batch per la classificazione
-            use_ensemble: Se True, usa l'ensemble classifier, altrimenti solo ML
-            optimize_clusters: Se True, classifica solo rappresentanti e propaga le etichette
+            use_ensemble: Se True, usa l'ensemble classifier (SEMPRE True in produzione)
+            optimize_clusters: Se True, usa clustering ottimizzato (SEMPRE True in produzione)  
+            force_review: Se True, cancella MongoDB e riprocessa tutto da capo
             
         Returns:
             Statistiche della classificazione
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-29
         """
-        print(f"🏷️  Classificazione e salvataggio di {len(sessioni)} sessioni...")
-        print(f"📊 Batch size: {batch_size}, Use ensemble: {use_ensemble}, Optimize clusters: {optimize_clusters}")
+        print(f"🏷️  CLASSIFICAZIONE POST-TRAINING di {len(sessioni)} sessioni...")
+        print(f"📊 Batch size: {batch_size}")
+        print(f"🔄 Force review: {force_review}")
+        print(f"🎯 Optimize clusters: {optimize_clusters}")
+        print(f"🔗 Use ensemble: {use_ensemble}")
         
-        if use_ensemble:
-            print(f"🔗 Usando ensemble classifier (LLM + ML)")
-        else:
-            print(f"🤖 Usando solo classificatore ML (parte dell'ensemble)")
-            # Ora tutto è gestito dall'ensemble, non serve controllo separato
+        # 🆕 GESTIONE FORCE_REVIEW: Pulizia MongoDB se richiesta  
+        if force_review:
+            print(f"🧹 FORCE REVIEW: Cancellazione collection MongoDB per tenant '{self.tenant_slug}'")
+            try:
+                # Aggiungi percorso root per import
+                sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+                from mongo_classification_reader import MongoClassificationReader
+                
+                mongo_reader = MongoClassificationReader()
+                
+                # Cancella tutte le classificazioni del tenant
+                clear_result = mongo_reader.clear_tenant_collection(self.tenant_slug)
+                
+                if clear_result['success']:
+                    deleted_count = clear_result['deleted_count']
+                    print(f"✅ Cancellate {deleted_count} classificazioni esistenti")
+                else:
+                    print(f"⚠️ Errore nella cancellazione: {clear_result['error']}")
+                
+                # Force clustering completo
+                print(f"🔄 Force review attivato → Clustering completo forzato")
+                
+            except Exception as e:
+                print(f"⚠️ Errore nella cancellazione MongoDB: {e}")
+                print(f"🔄 Continuando con la classificazione...")
         
-        # Connetti al database TAG
+        # Forza sempre ensemble e clustering ottimizzato per classificazione post-training
+        use_ensemble = True
+        optimize_clusters = True
+        
+        print(f"🎯 MODALITÀ UNIFICATA: Ensemble LLM+ML + Clustering Ottimizzato")
+        
+        # Connetti al database TAG (legacy, potrebbe non essere più necessario)
         print(f"💾 Connessione al database TAG...")
-        self.tag_db.connetti()
+        try:
+            self.tag_db.connetti()
+        except Exception as e:
+            print(f"⚠️ Errore connessione TAG DB (ignorabile): {e}")
         
         # Prepara dati per classificazione
         session_ids = list(sessioni.keys())
         session_texts = [sessioni[sid]['testo_completo'] for sid in session_ids]
         print(f"📦 Preparati {len(session_texts)} testi per classificazione")
         
-        # Classificazione ottimizzata per cluster o tradizionale
-        if optimize_clusters and use_ensemble and self.ensemble_classifier:
-            # Usa classificazione ottimizzata basata sui cluster
-            print(f"🎯 Classificazione ottimizzata per cluster in corso...")
+        # 🎯 LOGICA UNIFICATA: SEMPRE Classificazione ottimizzata + ensemble
+        # La logica intelligente (20%/7 giorni) è gestita automaticamente nel clustering upstream
+        print(f"🚀 Classificazione ottimizzata con ensemble LLM+ML in corso...")
+        
+        try:
             predictions = self._classifica_ottimizzata_cluster(sessioni, session_ids, session_texts, batch_size)
-        elif use_ensemble and self.ensemble_classifier:
-            # Usa advanced ensemble classifier con batch prediction tradizionale
-            print(f"🔍 Classificazione ensemble avanzata in corso...")
-            print(f"📦 Batch prediction di {len(session_texts)} testi...")
+            print(f"✅ Classificazione ottimizzata completata: {len(predictions)} risultati")
             
+        except Exception as e:
+            print(f"❌ ERRORE nella classificazione ottimizzata: {e}")
+            print(f"� Fallback alla classificazione ensemble tradizionale...")
+            
+            # Fallback: classificazione ensemble tradizionale
             try:
-                # Usa batch prediction per efficienza con embedder riutilizzabile
                 batch_predictions = self.ensemble_classifier.batch_predict(
                     session_texts, 
                     batch_size=batch_size,
-                    embedder=self.embedder  # Passa l'embedder esistente per evitare CUDA OOM
+                    embedder=self.embedder
                 )
                 predictions = batch_predictions
-                print(f"✅ Batch prediction completata: {len(predictions)} risultati")
+                print(f"✅ Fallback completato: {len(predictions)} risultati")
                 
-            except Exception as e:
-                print(f"⚠️ Errore nella classificazione ensemble: {e}")
-                print(f"🔄 Fallback alla classificazione singola...")
-                # Fallback alla singola predizione
+            except Exception as e2:
+                print(f"❌ ERRORE anche nel fallback: {e2}")
+                # Fallback finale: predizioni singole
                 predictions = []
                 for i, text in enumerate(session_texts):
-                    print(f"🔍 Classificando sessione {i+1}/{len(session_texts)}...")
                     try:
                         prediction = self.ensemble_classifier.predict_with_ensemble(
                             text, 
                             return_details=True, 
-                            embedder=self.embedder  # Passa l'embedder esistente
+                            embedder=self.embedder
                         )
                         predictions.append(prediction)
-                    except Exception as e2:
-                        print(f"⚠️ Fallback completo non riuscito: {e2}")
-                        # Fallback finale: predizione base
-                        ml_prediction = {'predicted_label': 'altro', 'confidence': 0.1}
+                    except Exception as e3:
+                        # Fallback assoluto
                         predictions.append({
-                            'predicted_label': ml_prediction['predicted_label'],
-                            'confidence': ml_prediction['confidence'],
+                            'predicted_label': 'altro',
+                            'confidence': 0.1,
                             'is_high_confidence': False,
                             'method': 'FALLBACK_FINAL',
                             'llm_prediction': None,
-                            'ml_prediction': ml_prediction,
-                            'ensemble_confidence': ml_prediction['confidence']
+                            'ml_prediction': {'predicted_label': 'altro', 'confidence': 0.1},
+                            'ensemble_confidence': 0.1
                         })
-            # RIMOSSO: predictions.extend(batch_predictions)  # batch_predictions non definita in caso di eccezione
-        else:
-            # Usa ensemble anche per "solo ML" (l'ensemble può disabilitare LLM)
-            predictions = []
-            for text in session_texts:
-                pred = self.ensemble_classifier.predict_with_ensemble(
-                    text, 
-                    return_details=True,
-                    embedder=self.embedder  # Passa l'embedder esistente
-                ) 
-                pred['method'] = 'ML_ONLY'
-                predictions.append(pred)
+                print(f"⚠️ Fallback finale completato: {len(predictions)} risultati")
+        
+        # 🆕 CONTATORE DEBUG per RAPPRESENTANTI e OUTLIERS
+        # Conta solo i casi che vengono classificati individualmente (esclude PROPAGATI)
+        classification_counter = 0
+        total_individual_cases = 0
+        
+        # Pre-conta i casi individuali per il totale
+        for prediction in predictions:
+            method = prediction.get('method', '')
+            if method.startswith('REPRESENTATIVE') or method.startswith('OUTLIER'):
+                total_individual_cases += 1
         
         # Salva classificazioni nel database
         stats = {
@@ -2015,6 +2058,8 @@ class EndToEndPipeline:
             'saved_successfully': 0,
             'save_errors': 0,
             'classifications_by_tag': {},
+            'individual_cases_classified': 0,  # Solo rappresentanti e outliers
+            'propagated_cases': 0,  # Casi ereditati
             'ensemble_stats': {
                 'llm_predictions': 0,
                 'ml_predictions': 0,
@@ -2024,7 +2069,30 @@ class EndToEndPipeline:
         }
         
         print(f"💾 Inizio salvataggio di {len(predictions)} classificazioni...")
+        print(f"📊 Casi individuali da classificare: {total_individual_cases} (rappresentanti + outliers)")
+        
         for i, (session_id, prediction) in enumerate(zip(session_ids, predictions)):
+            # 🆕 DEBUG CONTATORE per casi classificati individualmente
+            method = prediction.get('method', '')
+            session_type = None
+            
+            if method.startswith('REPRESENTATIVE'):
+                classification_counter += 1
+                session_type = "RAPPRESENTANTE"
+                stats['individual_cases_classified'] += 1
+                print(f"📋 caso n° {classification_counter:02d} / {total_individual_cases:03d} {session_type}")
+                
+            elif method.startswith('OUTLIER'):
+                classification_counter += 1 
+                session_type = "OUTLIER"
+                stats['individual_cases_classified'] += 1
+                print(f"📋 caso n° {classification_counter:02d} / {total_individual_cases:03d} {session_type}")
+                
+            elif 'PROPAGATED' in method or 'CLUSTER_PROPAGATED' in method:
+                stats['propagated_cases'] += 1
+                # I propagati non entrano nel contatore come richiesto
+            
+            # Debug standard ogni 10 classificazioni per tutti i tipi
             if (i + 1) % 10 == 0:  # Debug ogni 10 classificazioni
                 print(f"📊 Progresso salvataggio: {i+1}/{len(predictions)} ({((i+1)/len(predictions)*100):.1f}%)")
             
@@ -2164,14 +2232,15 @@ class EndToEndPipeline:
                         else:
                             disagreement_score = abs(ml_conf - llm_conf)
                 
-                # Determina se serve review basandosi su ensemble disagreement
-                needs_review = (has_disagreement and disagreement_score > 0.3) or (confidence < 0.7)
-                review_reason = None
-                if needs_review:
-                    if has_disagreement:
-                        review_reason = f"ensemble_disagreement_{disagreement_score:.2f}"
-                    else:
-                        review_reason = f"low_confidence_{confidence:.2f}"
+                # 🆕 CLASSIFICAZIONE POST-TRAINING: MAI human review
+                # Tutte le classificazioni sono auto-approvate in questa fase
+                needs_review = False
+                review_reason = "auto_classified_post_training"
+                
+                # Debug: mostra solo disaccordi significativi per statistica
+                if has_disagreement and disagreement_score > 0.3:
+                    if i < 10:  # Debug prime 10
+                        print(f"   📊 Sessione {i+1}: Disaccordo {disagreement_score:.2f} ma auto-approvata")
                 
                 # Ottieni dati sessione
                 session_data = sessioni[session_id]
@@ -2224,14 +2293,14 @@ class EndToEndPipeline:
                         'predicted_label': predicted_label,
                         'confidence': confidence,
                         'method': method,
-                        'reasoning': f"Auto-classificato con confidenza {confidence:.3f}"
+                        'reasoning': f"Auto-classificato post-training con confidenza {confidence:.3f}"
                     },
                     conversation_text=session_data['testo_completo'],
-                    needs_review=needs_review,
-                    review_reason=review_reason,
-                    classified_by='ens_pipe' if use_ensemble else 'ml_pipe',
-                    notes=f"Auto-classificato con confidenza {confidence:.3f}",
-                    cluster_metadata=cluster_metadata  # 🆕 Aggiunto supporto cluster metadata
+                    needs_review=needs_review,  # Sempre False in fase post-training
+                    review_reason=review_reason,  # "auto_classified_post_training"
+                    classified_by='post_training_pipeline',  # Specifica fase
+                    notes=f"Classificazione post-training automatica (confidenza {confidence:.3f})",
+                    cluster_metadata=cluster_metadata  # Metadata cluster per filtri UI
                 )
                 
                 if success:
@@ -2261,6 +2330,8 @@ class EndToEndPipeline:
         
         print(f"✅ Classificazione completata!")
         print(f"  💾 Salvate: {stats['saved_successfully']}/{stats['total_sessions']}")
+        print(f"  📋 Classificati individualmente: {stats['individual_cases_classified']} (rappresentanti + outliers)")
+        print(f"  🔄 Casi propagati: {stats['propagated_cases']} (ereditano etichetta)")
         print(f"  🎯 Alta confidenza: {stats['high_confidence']}")
         print(f"  ⚠️  Bassa confidenza: {stats['low_confidence']}")
         print(f"  ❌ Errori: {stats['save_errors']}")
@@ -2269,6 +2340,13 @@ class EndToEndPipeline:
             ens = stats['ensemble_stats']
             print(f"  🔗 Ensemble: {ens['llm_predictions']} LLM + {ens['ml_predictions']} ML")
             print(f"  🤝 Accordi: {ens['ensemble_agreements']}, Disaccordi: {ens['ensemble_disagreements']}")
+        
+        # Verifica integrità conteggi
+        expected_total = stats['individual_cases_classified'] + stats['propagated_cases']
+        if expected_total != stats['total_sessions']:
+            print(f"⚠️ ATTENZIONE: Conteggio inconsistente! Individ.({stats['individual_cases_classified']}) + Propag.({stats['propagated_cases']}) != Tot.({stats['total_sessions']})")
+        else:
+            print(f"✅ Integrità conteggi verificata: {expected_total} casi processati")
         
         # NUOVA FUNZIONALITÀ: Visualizzazione grafica STATISTICHE COMPLETE
         # (con etichette finali dopo classificazione)
@@ -3793,18 +3871,13 @@ class EndToEndPipeline:
                         if original_pred:
                             # Usa predizione originale per rappresentante
                             prediction = original_pred.copy()
-                            prediction['method'] = 'REPRESENTATIVE_ORIGINAL'
+                            prediction['method'] = 'REPRESENTATIVE'
                         else:
-                            # Fallback se non troviamo predizione originale
-                            prediction = {
-                                'predicted_label': cluster_label_info['label'],
-                                'confidence': cluster_label_info['confidence'],
-                                'ensemble_confidence': cluster_label_info['confidence'],
-                                'method': 'REPRESENTATIVE_FALLBACK',
-                                'cluster_id': cluster_id,
-                                'llm_prediction': None,
-                                'ml_prediction': {'predicted_label': cluster_label_info['label'], 'confidence': cluster_label_info['confidence']}
-                            }
+                            # 🚨 ERRORE GRAVE: Un rappresentante non ha predizione originale!
+                            # Questo non dovrebbe mai accadere se il codice funziona correttamente
+                            print(f"❌ ERRORE CRITICO: Rappresentante {session_id} del cluster {cluster_id} non trovato in representative_predictions!")
+                            print(f"   Available representatives: {[p.get('representative_session_id') for p in representative_predictions.get(cluster_id, [])]}")
+                            raise Exception(f"Bug nel matching rappresentanti: {session_id} non trovato")
                         
                         # ✅ CORREZIONE BUG: Aggiungi cluster_metadata per RAPPRESENTANTE
                         prediction['cluster_metadata'] = {
@@ -3849,20 +3922,13 @@ class EndToEndPipeline:
                             return_details=True,
                             embedder=self.embedder
                         )
-                        prediction['method'] = 'OUTLIER_DIRECT'
+                        prediction['method'] = 'OUTLIER'
                         prediction['cluster_id'] = -1
                         
                     except Exception as e:
-                        print(f"   ⚠️ Errore classificazione outlier {session_id}: {e}")
-                        prediction = {
-                            'predicted_label': 'altro',
-                            'confidence': 0.2,
-                            'ensemble_confidence': 0.2,
-                            'method': 'OUTLIER_FALLBACK',
-                            'cluster_id': -1,
-                            'llm_prediction': None,
-                            'ml_prediction': {'predicted_label': 'altro', 'confidence': 0.2}
-                        }
+                        # Se la classificazione fallisce, è un errore grave che va gestito upstream
+                        print(f"❌ ERRORE CRITICO: Classificazione outlier fallita per {session_id}: {e}")
+                        raise Exception(f"Classificazione outlier fallita: {e}")
                     
                     # ✅ CORREZIONE BUG: Aggiungi cluster_metadata per OUTLIER
                     prediction['cluster_metadata'] = {

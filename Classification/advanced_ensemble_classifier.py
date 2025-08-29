@@ -264,7 +264,11 @@ class AdvancedEnsembleClassifier:
                 )
             
             print(f"✅ ML ensemble training completato con descrizioni!")
-            print(f"   📊 Training accuracy: {train_accuracy:.3f}")
+            try:
+                accuracy_val = float(train_accuracy) if isinstance(train_accuracy, (str, int)) else train_accuracy
+                print(f"   📊 Training accuracy: {accuracy_val:.3f}")
+            except (ValueError, TypeError):
+                print(f"   📊 Training accuracy: {train_accuracy} (non-numeric)")
             print(f"   🎯 Features: {training_features.shape[1]} (enhancement: {enhancement_info})")
             print(f"   🤖 Algoritmi: Random Forest + SVM + Logistic Regression")
             
@@ -379,7 +383,11 @@ class AdvancedEnsembleClassifier:
             )
         
         print(f"✅ ML ensemble training completato!")
-        print(f"   📊 Training accuracy: {train_accuracy:.3f}")
+        try:
+            accuracy_val = float(train_accuracy) if isinstance(train_accuracy, (str, int)) else train_accuracy
+            print(f"   📊 Training accuracy: {accuracy_val:.3f}")
+        except (ValueError, TypeError):
+            print(f"   📊 Training accuracy: {train_accuracy} (non-numeric)")
         print(f"   🎯 Algoritmi: Random Forest + SVM + Logistic Regression")
         
         return training_result

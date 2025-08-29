@@ -1495,7 +1495,7 @@ class MongoClassificationReader:
                 ])
                 
                 if is_cluster_based:
-                    # Classificazione cluster-based senza metadata = outlier
+                    # 🎯 CLUSTERING-BASED: Sessione senza cluster metadata = outlier
                     outlier_counter = self._get_next_outlier_counter()
                     outlier_cluster_id = f"outlier_{outlier_counter}"
                     
@@ -1506,11 +1506,11 @@ class MongoClassificationReader:
                     doc["session_type"] = "outlier"
                     doc["classification_type"] = "OUTLIER"  # 🆕 EXPLICIT TYPE
                     
-                    print(f"🔍 OUTLIER ASSIGNMENT: Sessione {session_id} assegnata a cluster {outlier_cluster_id}")
+                    print(f"🎯 CLUSTERING OUTLIER DETECTED: Sessione {session_id} classificata come outlier (metodo={classified_by}) → cluster {outlier_cluster_id}")
                 else:
-                    # Classificazione normale senza clustering - non assegnare cluster metadata
+                    # 🔍 CLASSIFICAZIONE LLM DIRETTA (non cluster-based)
                     doc["classification_type"] = "NORMALE"  # 🆕 EXPLICIT TYPE
-                    print(f"� NORMAL CLASSIFICATION: Sessione {session_id} classificata senza clustering")
+                    print(f"🤖 LLM DIRECT CLASSIFICATION: Sessione {session_id} classificata tramite LLM diretto (classificazione={classified_by})")
                     # Non aggiungere cluster_id per classificazioni normali
             
             # 🆕 AGGIUNGI SEMPRE session_type basato sui metadata per consistenza UI
@@ -2180,39 +2180,6 @@ class MongoClassificationReader:
             traceback.print_exc()
             return 0
 
-
-def main():
-    """
-    Test del MongoDB Classification Reader
-    """
-    print("🔍 Test MongoDB Classification Reader")
-    
-    reader = MongoClassificationReader()
-    
-    if reader.connect():
-        print("✅ Connesso a MongoDB")
-        
-        # Test recupero etichette
-        labels = reader.get_available_labels("humanitas")
-        print(f"📋 Etichette trovate: {len(labels)}")
-        for label in labels[:5]:
-            print(f"  - {label}")
-        
-        # Test recupero sessioni
-        sessions = reader.get_all_sessions("humanitas", limit=3)
-        print(f"📊 Sessioni trovate: {len(sessions)}")
-        for session in sessions:
-            print(f"  - {session['session_id']}: {session['classification']} ({session['confidence']})")
-        
-        # Test statistiche
-        stats = reader.get_classification_stats("humanitas")
-        print(f"📈 Totale classificazioni: {stats.get('total_classifications', 0)}")
-        
-        reader.disconnect()
-        print("✅ Disconnesso da MongoDB")
-    else:
-        print("❌ Impossibile connettersi a MongoDB")
-
     def _determine_classification_type(self, cluster_metadata: dict) -> str:
         """
         Scopo: Determina il tipo di classificazione basato sui metadati cluster
@@ -2247,6 +2214,39 @@ def main():
             
         # DEFAULT: Se ha cluster_metadata ma non rientra nelle categorie sopra
         return "CLUSTER_MEMBER"
+
+
+def main():
+    """
+    Test del MongoDB Classification Reader
+    """
+    print("🔍 Test MongoDB Classification Reader")
+    
+    reader = MongoClassificationReader()
+    
+    if reader.connect():
+        print("✅ Connesso a MongoDB")
+        
+        # Test recupero etichette
+        labels = reader.get_available_labels("humanitas")
+        print(f"📋 Etichette trovate: {len(labels)}")
+        for label in labels[:5]:
+            print(f"  - {label}")
+        
+        # Test recupero sessioni
+        sessions = reader.get_all_sessions("humanitas", limit=3)
+        print(f"📊 Sessioni trovate: {len(sessions)}")
+        for session in sessions:
+            print(f"  - {session['session_id']}: {session['classification']} ({session['confidence']})")
+        
+        # Test statistiche
+        stats = reader.get_classification_stats("humanitas")
+        print(f"📈 Totale classificazioni: {stats.get('total_classifications', 0)}")
+        
+        reader.disconnect()
+        print("✅ Disconnesso da MongoDB")
+    else:
+        print("❌ Impossibile connettersi a MongoDB")
 
 
 if __name__ == "__main__":

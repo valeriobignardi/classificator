@@ -318,6 +318,11 @@ class IntelligentClassifier:
         self.auto_tag_creation = self.config.get('pipeline', {}).get('auto_tag_creation', True)
         self.llm_confidence_threshold = self.config.get('pipeline', {}).get('llm_confidence_threshold', 0.85)
         
+        # 🆕 Configurazione debug prompt da config.yaml
+        # Parametri input: debug_prompt - Se True mostra prompt LLM, se False nasconde
+        # Ultimo aggiornamento: 2025-08-29
+        self.debug_prompt = self.config.get('debug', {}).get('debug_prompt', True)
+        
         # Inizializzazione BERTopic provider (se disponibile ed abilitato)
         self.bertopic_provider = None
         if (BERTOPIC_AVAILABLE and self.enable_semantic_fallback and 
@@ -858,18 +863,21 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                     
                     self.logger.info(f"✅ Prompt SYSTEM caricato da database per tenant {self.tenant_id}")
                     
-                    # 🔍 STAMPA DETTAGLIATA PROMPT SYSTEM
-                    print("\n" + "="*80)
-                    print("🤖 DEBUG PROMPT SYSTEM - DATABASE")
-                    print("="*80)
-                    print(f"📋 Prompt Name: LLM/SYSTEM/intelligent_classifier_system")
-                    print(f"🏢 Tenant ID: {self.tenant_id}")
-                    print(f"📝 Variables Used: {list(variables.keys())}")
-                    print("-"*80)
-                    print("📄 SYSTEM PROMPT CONTENT (dopo sostituzione placeholder):")
-                    print("-"*80)
-                    print(system_prompt)
-                    print("="*80)
+                    # 🔍 STAMPA DETTAGLIATA PROMPT SYSTEM (solo se debug_prompt=True)
+                    if self.debug_prompt:
+                        print("\n" + "="*80)
+                        print("🤖 DEBUG PROMPT SYSTEM - DATABASE")
+                        print("="*80)
+                        print(f"📋 Prompt Name: LLM/SYSTEM/intelligent_classifier_system")
+                        print(f"🏢 Tenant ID: {self.tenant_id}")
+                        print(f"📝 Variables Used: {list(variables.keys())}")
+                        print("-"*80)
+                        print("📄 SYSTEM PROMPT CONTENT (dopo sostituzione placeholder):")
+                        print("-"*80)
+                        print(system_prompt)
+                        print("="*80)
+                    else:
+                        print(f"🤖 System prompt caricato per tenant {self.tenant_id} (debug_prompt=False)")
                     
                     return system_prompt
                     
@@ -1527,18 +1535,21 @@ Ragionamento: {ex["motivation"]}"""
         try:
             user_prompt = self._get_user_prompt(conversation_text, context)
             
-            # 🔍 STAMPA DETTAGLIATA PROMPT USER
-            print("\n" + "="*80)
-            print("👤 DEBUG PROMPT USER - DATABASE")
-            print("="*80)
-            print(f"📋 Prompt Name: LLM/TEMPLATE/intelligent_classifier_user")
-            print(f"🏢 Tenant ID: {self.tenant_id}")
-            print(f"📏 Text Length: {len(conversation_text)} chars")
-            print("-"*80)
-            print("📄 USER PROMPT CONTENT (dopo sostituzione placeholder):")
-            print("-"*80)
-            print(user_prompt)
-            print("="*80)
+            # 🔍 STAMPA DETTAGLIATA PROMPT USER (solo se debug_prompt=True)
+            if self.debug_prompt:
+                print("\n" + "="*80)
+                print("👤 DEBUG PROMPT USER - DATABASE")
+                print("="*80)
+                print(f"📋 Prompt Name: LLM/TEMPLATE/intelligent_classifier_user")
+                print(f"🏢 Tenant ID: {self.tenant_id}")
+                print(f"📏 Text Length: {len(conversation_text)} chars")
+                print("-"*80)
+                print("📄 USER PROMPT CONTENT (dopo sostituzione placeholder):")
+                print("-"*80)
+                print(user_prompt)
+                print("="*80)
+            else:
+                print(f"👤 User prompt generato per conversazione {len(conversation_text)} chars (debug_prompt=False)")
             
             return user_prompt
             
@@ -1628,30 +1639,33 @@ Ragionamento: {ex["motivation"]}"""
 
 <|assistant|>"""
         
-        # 🚀 DEBUG DETTAGLIATO COME RICHIESTO DALL'UTENTE
-        print("\n" + "🔥"*80)
-        print("🚀 PROMPT COMPLETO FINALE INVIATO ALL'LLM")
-        print("🔥"*80)
-        print(f"🤖 Model: {self.model_name}")
-        print(f"🌐 Ollama URL: {self.ollama_url}")
-        print(f"🏢 Tenant: {self.tenant_id}")
-        print(f"📏 Total Prompt Length: {len(prompt)} characters")
-        if tokenization_stats:
-            print(f"🔢 Token Analysis:")
-            print(f"   📊 Token prompt base: {tokenization_stats['prompt_tokens']}")
-            print(f"   📊 Token conversazione: {tokenization_stats['conversation_tokens_final']}")
-            print(f"   📊 Token totali stimati: {tokenization_stats['total_tokens_final']}")
-            print(f"   📊 Limite configurato: {tokenization_stats['max_tokens_limit']}")
-            if tokenization_stats['truncated']:
-                print(f"   ✂️  STATUS: Conversazione TRONCATA")
-            else:
-                print(f"   ✅ STATUS: Conversazione COMPLETA")
-        print("-"*80)
-        print("📄 FULL PROMPT CONTENT:")
-        print("-"*80)
-        print(prompt)
-        print("🔥"*80)
-        print()
+        # 🚀 DEBUG DETTAGLIATO COME RICHIESTO DALL'UTENTE (solo se debug_prompt=True)
+        if self.debug_prompt:
+            print("\n" + "🔥"*80)
+            print("🚀 PROMPT COMPLETO FINALE INVIATO ALL'LLM")
+            print("🔥"*80)
+            print(f"🤖 Model: {self.model_name}")
+            print(f"🌐 Ollama URL: {self.ollama_url}")
+            print(f"🏢 Tenant: {self.tenant_id}")
+            print(f"📏 Total Prompt Length: {len(prompt)} characters")
+            if tokenization_stats:
+                print(f"🔢 Token Analysis:")
+                print(f"   📊 Token prompt base: {tokenization_stats['prompt_tokens']}")
+                print(f"   📊 Token conversazione: {tokenization_stats['conversation_tokens_final']}")
+                print(f"   📊 Token totali stimati: {tokenization_stats['total_tokens_final']}")
+                print(f"   📊 Limite configurato: {tokenization_stats['max_tokens_limit']}")
+                if tokenization_stats['truncated']:
+                    print(f"   ✂️  STATUS: Conversazione TRONCATA")
+                else:
+                    print(f"   ✅ STATUS: Conversazione COMPLETA")
+            print("-"*80)
+            print("📄 FULL PROMPT CONTENT:")
+            print("-"*80)
+            print(prompt)
+            print("🔥"*80)
+            print()
+        else:
+            print(f"🚀 Prompt finale generato per LLM {self.model_name} - {len(prompt)} chars (debug_prompt=False)")
         
         return prompt
     

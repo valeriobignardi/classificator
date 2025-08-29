@@ -37,7 +37,7 @@ class Config:
     MAX_BATCH_SIZE = int(os.getenv("MAX_BATCH_SIZE", "32"))
     MAX_SEQUENCE_LENGTH = int(os.getenv("MAX_SEQUENCE_LENGTH", "512"))
     CUDA_DEVICE = os.getenv("CUDA_VISIBLE_DEVICES", "0")
-    CACHE_SIZE = int(os.getenv("CACHE_SIZE", "1000"))
+    CACHE_SIZE = int(os.getenv("CACHE_SIZE", "5000"))
     
 config = Config()
 
@@ -249,8 +249,8 @@ async def create_embeddings(
     if not request.texts:
         raise HTTPException(status_code=400, detail="No texts provided")
     
-    if len(request.texts) > 1000:  # Limite ragionevole
-        raise HTTPException(status_code=400, detail="Too many texts (max 1000)")
+    # LIMITE RIMOSSO: Il servizio può gestire qualsiasi quantità di testi
+    # suddividendoli automaticamente in batch ottimali
     
     start_time = time.time()
     

@@ -1,0 +1,20 @@
+# LaBSE Embedding Service Requirements
+# Ottimizzato per performance e gestione memoria
+
+# Core dependencies
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+
+# ML/AI dependencies
+torch>=1.9.0
+sentence-transformers>=2.2.0
+transformers>=4.20.0
+numpy>=1.21.0
+
+# System monitoring
+psutil>=5.9.0
+
+# HTTP client per testing
+httpx>=0.25.0
+requests>=2.31.0

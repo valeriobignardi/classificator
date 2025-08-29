@@ -41,11 +41,12 @@ import {
 } from '@mui/icons-material';
 import { apiService } from '../services/apiService';
 import { ReviewCase, ClusterCase } from '../types/ReviewCase';
+import { Tenant } from '../types/Tenant';
 import AllSessionsView from './AllSessionsView';
 import { useTenant } from '../contexts/TenantContext';
 
 interface ReviewDashboardProps {
-  tenant: string;
+  tenant: Tenant;
   onCaseSelect: (caseItem: ReviewCase) => void;
   onCreateMockCases: () => void;
   refreshTrigger: number;
@@ -159,12 +160,12 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
       
       if (showClusterView) {
         // Vista cluster: usa l'endpoint clusters
-        const response = await apiService.getClusterCases(tenant, effectiveLimit, includePropagated, includeOutliers);
+        const response = await apiService.getClusterCases(tenant.tenant_id, effectiveLimit, includePropagated, includeOutliers);
         setClusters(response.clusters || []);
         setCases([]); // Reset cases quando in cluster view
       } else {
         // Vista lista: usa l'endpoint review cases con logica di filtraggio modificata
-        const response = await apiService.getReviewCases(tenant, effectiveLimit, includePropagated, includeOutliers, includeRepresentatives);
+        const response = await apiService.getReviewCases(tenant.tenant_id, effectiveLimit, includePropagated, includeOutliers, includeRepresentatives);
         setCases(response.cases);
         setClusters([]); // Reset clusters quando in traditional view
       }
@@ -218,7 +219,7 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
     setTrainingDialogOpen(false);
 
     try {
-      const response = await apiService.startSupervisedTraining(tenant, trainingConfig);
+      const response = await apiService.startSupervisedTraining(tenant.tenant_id, trainingConfig);
       
       // Messaggio di successo basato sulla nuova struttura della risposta
       const isNewClient = response.client_type === 'new';
@@ -265,7 +266,7 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
     setSuccessMessage(null);
 
     try {
-      const response = await apiService.triggerManualRetraining(tenant);
+      const response = await apiService.triggerManualRetraining(tenant.tenant_id);
       
       if (response.success) {
         setSuccessMessage(
@@ -291,7 +292,7 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
 
     try {
       const config = uiConfig?.classification || {};
-      const response = await apiService.startFullClassification(tenant, {
+      const response = await apiService.startFullClassification(tenant.tenant_id, {
         confidence_threshold: config.confidence_threshold || 0.7,
         force_retrain: config.force_retrain !== false,
         max_sessions: config.max_sessions || null,
@@ -1222,7 +1223,7 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
       {activeTab === 1 && (
         // All Sessions Content
         <AllSessionsView 
-          clientName={tenant} 
+          clientName={tenant.nome} 
           onSessionAdd={handleSessionAddedToQueue}
         />
       )}

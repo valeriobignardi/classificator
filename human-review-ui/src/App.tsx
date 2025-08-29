@@ -88,7 +88,12 @@ function AppContent() {
 
   // Usa il context per il tenant
   const { selectedTenant } = useTenant();
-  const tenant = selectedTenant?.nome.toLowerCase() || 'humanitas'; // Fallback per compatibilità
+  // Passa l'oggetto tenant completo anziché solo il nome
+  const tenant = selectedTenant || { 
+    tenant_id: '015007d9-d413-11ef-86a5-96000228e7fe',  // Default humanitas
+    nome: 'humanitas',
+    is_active: true 
+  };
 
   const handleCaseSelect = (caseItem: ReviewCase) => {
     setSelectedCase(caseItem);
@@ -119,7 +124,7 @@ function AppContent() {
     setError(null);
     
     try {
-      await apiService.createMockCases(tenant, 3);
+      await apiService.createMockCases(tenant.tenant_id, 3);
       setRefreshTrigger(prev => prev + 1); // Trigger refresh
     } catch (err) {
       setError('Errore nella creazione dei casi mock');

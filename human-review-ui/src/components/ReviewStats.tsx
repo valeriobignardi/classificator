@@ -33,6 +33,7 @@ import {
   ChartOptions
 } from 'chart.js';
 import { apiService } from '../services/apiService';
+import { Tenant } from '../types/Tenant';
 
 // Registra i componenti di Chart.js
 ChartJS.register(ArcElement, Tooltip, Legend);
@@ -53,12 +54,12 @@ interface GeneralStats {
 }
 
 interface ReviewStatsProps {
-  tenant: string;
+  tenant: Tenant;
   refreshTrigger: number;
 }
 
 const ReviewStats: React.FC<ReviewStatsProps> = ({ tenant, refreshTrigger }) => {
-  const [selectedTenant, setSelectedTenant] = useState<string>(tenant || '');
+  const [selectedTenant, setSelectedTenant] = useState<string>(tenant?.tenant_id || '');
   const [availableTenants, setAvailableTenants] = useState<string[]>([]);
   const [labelStats, setLabelStats] = useState<LabelStat[]>([]);
   const [generalStats, setGeneralStats] = useState<GeneralStats | null>(null);

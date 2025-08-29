@@ -20,11 +20,12 @@ import {
 } from '@mui/icons-material';
 import { apiService } from '../services/apiService';
 import { ReviewCase } from '../types/ReviewCase';
+import { Tenant } from '../types/Tenant';
 import TagSuggestions from './TagSuggestions';
 
 interface CaseDetailProps {
   case: ReviewCase;
-  tenant: string;
+  tenant: Tenant;
   onCaseResolved: () => void;
   onBack: () => void;
 }
@@ -51,7 +52,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
     const loadAvailableTags = async () => {
       setTagsLoading(true);
       try {
-        const response = await apiService.getAvailableTags(tenant);
+        const response = await apiService.getAvailableTags(tenant.tenant_id);
         setAvailableTags(response.tags);
       } catch (err) {
         console.error('Error loading available tags:', err);
@@ -83,7 +84,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
 
     try {
       await apiService.resolveCase(
-        tenant,
+        tenant.tenant_id,
         caseItem.case_id,
         humanDecision.trim(),
         confidence,

@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  labse-embedding-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: labse-embedder
+    restart: unless-stopped
+    environment:
+      - MODEL_NAME=sentence-transformers/LaBSE
+      - MAX_BATCH_SIZE=32
+      - MAX_SEQUENCE_LENGTH=512
+      - CUDA_VISIBLE_DEVICES=0
+      - CACHE_SIZE=1000
+      - HF_HOME=/cache
+      - TRANSFORMERS_CACHE=/cache
+      - HF_HUB_CACHE=/cache
+    ports:
+      - "${EMBEDDING_SERVICE_PORT:-8081}:8080"
+    volumes:
+      - huggingface-cache:/cache                      # Cache HuggingFace gestita come volume
+      - logs:/app/logs                                # Log persistenti
+    networks:
+      - embedding-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    # Configurazione risorse
+    deploy:
+      resources:
+        limits:
+          memory: 4G  # Limite memoria per evitare OOM
+        reservations:
+          memory: 2G
+    # GPU support (decommentare se serve GPU)
+    # runtime: nvidia
+    # environment:
+    #   - NVIDIA_VISIBLE_DEVICES=0
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+volumes:
+  huggingface-cache:
+    driver: local
+  logs:
+    driver: local
+
+networks:
+  embedding-net:
+    driver: bridge
+    name: embedding-network

@@ -1,0 +1,46 @@
+# LaBSE Embedding Service - Versione semplificata
+# Autore: Valerio Bignardi  
+# Data: 2025-01-28
+FROM python:3.11-slim
+
+# Metadata
+LABEL maintainer="Valerio Bignardi"
+LABEL description="LaBSE Embedding Service - Versione semplificata senza cache pre-scaricata"
+LABEL version="1.1.0"
+
+# Variabili d'ambiente
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV MODEL_NAME="sentence-transformers/LaBSE"
+ENV MAX_BATCH_SIZE=32
+ENV MAX_SEQUENCE_LENGTH=512
+
+# Installa dipendenze del sistema minime
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Directory di lavoro
+WORKDIR /app
+
+# Copia requirements e installa dipendenze Python
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copia codice applicazione
+COPY app/ .
+
+# Crea directory necessarie
+RUN mkdir -p logs cache
+
+# Espone porta
+EXPOSE 8080
+
+# Health check ottimizzato
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Comando di avvio
+CMD ["python", "main.py"]

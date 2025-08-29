@@ -188,17 +188,45 @@ class SimpleEmbeddingManager:
         """
         Crea embedder direttamente (bypassa factory cache)
         
+        AGGIORNAMENTO 2025-08-29: Integrazione servizio Docker remoto per LaBSE
+        - LaBSE ora usa servizio dockerizzato invece di istanza locale
+        - Ottimizzazione memoria: modello caricato solo nel container dedicato
+        - Fallback automatico su LaBSE locale in caso di problemi servizio
+        
         Args:
             engine_type: Tipo engine
             
         Returns:
             Nuovo embedder
+            
+        Last update: 2025-08-29
         """
         print(f"🔧 DIRECT CREATE: {engine_type}")
         
         if engine_type == 'labse':
-            from labse_embedder import LaBSEEmbedder
-            return LaBSEEmbedder()
+            # NUOVO: Usa servizio Docker remoto per LaBSE
+            try:
+                print(f"🐳 Tentativo connessione a servizio LaBSE dockerizzato...")
+                from labse_remote_client import LaBSERemoteClient
+                
+                # Configura client per servizio Docker (porta 8081)
+                remote_client = LaBSERemoteClient(
+                    service_url="http://localhost:8081",
+                    timeout=300,
+                    max_retries=3,
+                    fallback_local=True  # Fallback automatico se servizio non disponibile
+                )
+                
+                print(f"✅ LaBSE Remote Client configurato con successo")
+                return remote_client
+                
+            except Exception as e:
+                print(f"⚠️ Errore configurazione servizio remoto LaBSE: {e}")
+                print(f"🔄 Fallback su LaBSE locale...")
+                
+                # Fallback su istanza locale se servizio remoto non disponibile
+                from labse_embedder import LaBSEEmbedder
+                return LaBSEEmbedder()
             
         elif engine_type == 'bge_m3':
             from bge_m3_embedder import BGE_M3_Embedder
@@ -219,9 +247,35 @@ class SimpleEmbeddingManager:
             raise ValueError(f"Engine type {engine_type} non supportato")
     
     def _create_labse_default(self) -> BaseEmbedder:
-        """Crea LaBSE default per fallback"""
-        from labse_embedder import LaBSEEmbedder
-        return LaBSEEmbedder()
+        """
+        Crea LaBSE default per fallback
+        
+        AGGIORNAMENTO 2025-08-29: Integrazione servizio Docker anche per fallback
+        - Coerenza con _create_embedder_directly
+        - Prima prova servizio remoto, poi fallback locale
+        
+        Returns:
+            Istanza LaBSE (preferibilmente remota)
+            
+        Last update: 2025-08-29
+        """
+        try:
+            print(f"🐳 Creazione LaBSE default via servizio remoto...")
+            from labse_remote_client import LaBSERemoteClient
+            
+            remote_client = LaBSERemoteClient(
+                service_url="http://localhost:8081",
+                timeout=300,
+                max_retries=2,  # Meno retry per fallback
+                fallback_local=True
+            )
+            
+            return remote_client
+            
+        except Exception as e:
+            print(f"⚠️ Fallback su LaBSE locale per default: {e}")
+            from labse_embedder import LaBSEEmbedder
+            return LaBSEEmbedder()
     
     def _normalize_tenant_id(self, tenant_identifier: str) -> str:
         """

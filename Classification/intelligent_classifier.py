@@ -2048,12 +2048,13 @@ Ragionamento: {ex["motivation"]}"""
         Returns:
             Dict con predicted_label, confidence, motivation (JSON garantito)
         """
-        # Schema JSON che garantisce la struttura della risposta
+        # Schema JSON che garantisce la struttura della risposta con enum constraint
         json_schema = {
             "type": "object",
             "properties": {
                 "predicted_label": {
                     "type": "string",
+                    "enum": list(self.domain_labels) if self.domain_labels else ["altro"],  # 🔑 VINCOLO: Solo etichette valide
                     "description": "L'etichetta di classificazione predetta dalle etichette disponibili"
                 },
                 "confidence": {
@@ -2064,28 +2065,29 @@ Ragionamento: {ex["motivation"]}"""
                 },
                 "motivation": {
                     "type": "string",
-                    "description": "Breve spiegazione della classificazione (massimo 100 parole)"
+                    "maxLength": 150,
+                    "description": "Breve spiegazione della classificazione in italiano (massimo 150 caratteri)"
                 }
             },
             "required": ["predicted_label", "confidence", "motivation"]
         }
         
-        # Costruisci il messaggio del sistema con etichette disponibili
+        # Costruisci il messaggio del sistema in italiano ottimizzato
         system_prompt = f"""
         Sei un classificatore esperto di conversazioni mediche per l'ospedale Humanitas.
         
-        Analizza la conversazione e classifica in una di queste categorie:
-        {', '.join(self.domain_labels)}
+        Analizza la conversazione e classifica in UNA di queste categorie:
+        {', '.join(self.domain_labels) if self.domain_labels else 'altro'}
         
-        Regole:
-        - predicted_label DEVE essere esattamente una delle etichette elencate sopra
-        - confidence: 0.0-1.0 basato sulla chiarezza del contenuto
-        - motivation: spiegazione breve e specifica (massimo 100 parole)
+        REGOLE OBBLIGATORIE:
+        - predicted_label: ESATTAMENTE una delle etichette elencate sopra
+        - confidence: numero tra 0.0 e 1.0 basato sulla chiarezza del contenuto
+        - motivation: spiegazione BREVE in ITALIANO (massimo 150 caratteri)
         
-        Rispondi SOLO con il JSON richiesto, senza altro testo.
+        Rispondi SOLO con JSON valido, NIENTE altro testo.
         """
         
-        # Payload per structured outputs
+        # Payload per structured outputs con constraint enum
         payload = {
             "model": self.model_name,
             "messages": [
@@ -2124,7 +2126,7 @@ Ragionamento: {ex["motivation"]}"""
             # Il JSON è già valido grazie allo schema!
             json_response = json.loads(result['message']['content'])
             
-            self.logger.debug(f"✅ Structured Output ricevuto: {json_response}")
+            self.logger.info(f"✅ Structured Output ricevuto: {json_response}")
             return json_response
             
         except (requests.RequestException, json.JSONDecodeError, KeyError) as e:
@@ -2133,7 +2135,7 @@ Ragionamento: {ex["motivation"]}"""
             return {
                 "predicted_label": "altro",
                 "confidence": 0.1,
-                "motivation": f"Errore tecnico API: {str(e)}"
+                "motivation": f"Errore tecnico API: {str(e)[:100]}"
             }
 
     def _call_ollama_api(self, prompt: str) -> str:

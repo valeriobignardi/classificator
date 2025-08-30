@@ -464,6 +464,38 @@ class MongoClassificationReader:
             print(f"Errore nel recupero sessioni: {e}")
             return []
     
+    def get_case_by_id(self, case_id) -> Optional[Dict[str, Any]]:
+        """
+        Scopo: Recupera un singolo caso per ObjectId
+        
+        Parametri input:
+            - case_id: ObjectId MongoDB del caso (_id)
+        
+        Output:
+            - Dizionario con i dettagli del caso o None se non trovato
+            
+        Ultimo aggiornamento: 2025-08-30
+        """
+        try:
+            if not self.ensure_connection():
+                return None
+            
+            collection = self.db[self.get_collection_name()]
+            
+            # Cerca il documento per _id
+            case = collection.find_one({'_id': case_id})
+            
+            if case:
+                print(f"✅ Caso trovato: {case_id}")
+                return case
+            else:
+                print(f"❌ Caso non trovato: {case_id}")
+                return None
+                
+        except Exception as e:
+            print(f"❌ Errore nel recupero caso {case_id}: {e}")
+            return None
+    
     def get_available_labels(self) -> List[str]:
         """
         Scopo: Recupera tutte le etichette/classificazioni disponibili per il tenant

@@ -240,18 +240,19 @@ class IntelligentTagSuggestionManager:
         try:
             # 🏗️ GESTIONE TENANT CENTRALIZZATA
             if tenant and TENANT_AVAILABLE:
-                tenant_id = tenant.tenant_id
+                # CORREZIONE: La tabella TAG usa tenant_slug, non tenant_id (UUID)
+                tenant_id = tenant.tenant_slug  # USA IL SLUG, NON L'UUID
                 client_name_resolved = tenant.tenant_slug
-                print(f"🎯 TAG: Uso tenant centralizzato {tenant}")
+                print(f"🎯 TAG: Uso tenant centralizzato {tenant} - Cerco con slug: {tenant.tenant_slug}")
             elif client_name:
-                # Legacy mode: risolvi client_name
-                tenant_id = self._resolve_tenant_id_from_name(client_name)
+                # Fallback legacy per compatibilità
+                tenant_id = client_name
                 client_name_resolved = client_name
-                print(f"🔄 TAG: Modalità legacy - risolvo client_name {client_name}")
+                print(f"🔄 TAG: Fallback legacy - uso client_name: {client_name}")
             else:
                 raise ValueError("Deve essere fornito 'tenant' (preferito) o 'client_name' (legacy)")
                 
-            self.logger.info(f"🔒 MULTI-TENANT: Client '{client_name_resolved}' → Tenant ID: {tenant_id}")
+            self.logger.info(f"🔒 MULTI-TENANT: Client '{client_name_resolved}' → Cerco tag con tenant_id: {tenant_id}")
             
             # STEP 2: Ottieni SOLO i tag del tenant specificato
             all_tags = self._get_all_available_tags(tenant_id)

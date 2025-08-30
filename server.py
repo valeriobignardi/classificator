@@ -67,44 +67,41 @@ def is_uuid(value: str) -> bool:
 
 def resolve_tenant_from_identifier(identifier: str) -> Tenant:
     """
-    CORREZIONE FONDAMENTALE: Risolve SOLO UUID in oggetto Tenant
-    NUOVO VINCOLO: identifier deve essere SEMPRE un UUID valido
-    Il frontend deve inviare sempre l'UUID del tenant, mai nomi o slug
+    CORREZIONE FONDAMENTALE: Risolve UUID o slug in oggetto Tenant
+    BACKWARD COMPATIBILITY: Supporta UUID e slug per compatibilità API esistenti
     
     Args:
-        identifier: UUID del tenant (SOLO UUID ACCETTATI)
+        identifier: UUID del tenant o database slug (es: 'alleanza', 'humanitas')
         
     Returns:
         Oggetto Tenant completo
         
     Raises:
-        ValueError: Se identifier non è UUID o tenant non trovato
+        ValueError: Se identifier non è UUID/slug valido o tenant non trovato
         
-    Ultimo aggiornamento: 2025-08-29 - CORREZIONE LOGICA FONDAMENTALE
+    Ultimo aggiornamento: 2025-08-29 - AGGIUNTO SUPPORTO SLUG
     """
     try:
-        # CONTROLLO RIGIDO: accetta SOLO UUID
-        if not is_uuid(identifier):
-            error_msg = f"❌ ERRORE: identifier deve essere un UUID valido. Ricevuto: '{identifier}'"
-            print(error_msg)
-            print("💡 SOLUZIONE: Il frontend deve inviare tenant_id (UUID), non nomi o slug")
-            raise ValueError(error_msg)
+        # PRIMO TENTATIVO: Se è un UUID, usa il metodo originale
+        if is_uuid(identifier):
+            print(f"🔍 Risoluzione tenant da UUID: {identifier}")
+            tenant = Tenant.from_uuid(identifier)
+            print(f"✅ Tenant risolto da UUID: {tenant.tenant_name} ({tenant.tenant_id})")
+            return tenant
         
-        print(f"🔍 Risoluzione tenant da UUID: {identifier}")
-        
-        # Usa il metodo statico della classe Tenant per risoluzione univoca
-        tenant = Tenant.from_uuid(identifier)
-        
-        print(f"✅ Tenant risolto: {tenant.tenant_name} ({tenant.tenant_id})")
+        # SECONDO TENTATIVO: Se è uno slug, risolvi da database TAG locale
+        print(f"🔍 Risoluzione tenant da slug: {identifier}")
+        tenant = Tenant.from_slug(identifier)
+        print(f"✅ Tenant risolto da slug: {tenant.tenant_name} ({tenant.tenant_id})")
         return tenant
         
     except Exception as e:
-        error_msg = f"❌ Errore risoluzione tenant UUID '{identifier}': {e}"
+        error_msg = f"❌ Errore risoluzione tenant '{identifier}': {e}"
         print(error_msg)
         print("💡 Verifica che:")
-        print("   1. Il tenant_id esista nel database TAG locale")
-        print("   2. Il tenant sia attivo (is_active = 1)")
-        print("   3. L'UUID sia nel formato corretto")
+        print("   1. Il tenant_id/slug esista nel database")
+        print("   2. Il tenant sia attivo")
+        print("   3. L'identificatore sia nel formato corretto")
         raise ValueError(error_msg)
 
 # Registrazione blueprint per validazione prompt
@@ -2141,17 +2138,67 @@ def api_get_case_detail(client_name: str, case_id: str):
         }
     """
     try:
-        # Ottieni il QualityGateEngine
+        # Ottieni il QualityGateEngine e MongoReader
         quality_gate = classification_service.get_quality_gate(client_name)
+        mongo_reader = classification_service.get_mongo_reader(client_name)
         
-        # Cerca il caso specifico
+        print(f"🔍 Ricerca caso {case_id} per tenant {client_name}")
+        print(f"🔍 Case ID tipo: {type(case_id)}, valore: '{case_id}'")
+        print(f"🔍 Case ID lunghezza: {len(case_id)}")
+        
+        # Prima cerca nei casi pending
         pending_cases = quality_gate.get_pending_reviews(tenant=client_name, limit=100)
         target_case = None
+        
+        print(f"🔍 Casi pending trovati: {len(pending_cases)}")
         
         for case in pending_cases:
             if case.case_id == case_id:
                 target_case = case
+                print(f"✅ Caso trovato nei pending: {case_id}")
                 break
+        
+        # Se non trovato nei pending, cerca direttamente nel database
+        if not target_case:
+            try:
+                print(f"🔍 Caso non trovato nei pending, cerco nel database...")
+                # Cerca nel database usando l'ObjectId MongoDB
+                from bson import ObjectId
+                print(f"🔍 Provo conversione a ObjectId: {case_id}")
+                obj_id = ObjectId(case_id)
+                print(f"✅ ObjectId creato: {obj_id}")
+                
+                db_case = mongo_reader.get_case_by_id(obj_id)
+                print(f"🔍 Risultato query database: {db_case is not None}")
+                
+                if db_case:
+                    print(f"✅ Documento trovato nel database: {db_case.get('_id', 'NO_ID')}")
+                    # Crea un oggetto semplice simile a ReviewCase senza import
+                    class SimpleCase:
+                        def __init__(self, **kwargs):
+                            for k, v in kwargs.items():
+                                setattr(self, k, v)
+                    
+                    target_case = SimpleCase(
+                        case_id=str(db_case['_id']),
+                        session_id=db_case.get('session_id', ''),
+                        conversation_text=db_case.get('conversation_text', ''),
+                        ml_prediction=db_case.get('ml_prediction', 'unknown'),
+                        ml_confidence=float(db_case.get('ml_confidence', 0.0)),
+                        llm_prediction=db_case.get('llm_prediction', 'unknown'),
+                        llm_confidence=float(db_case.get('llm_confidence', 0.0)),
+                        uncertainty_score=float(db_case.get('uncertainty_score', 0.0)),
+                        novelty_score=float(db_case.get('novelty_score', 0.0)),
+                        reason=db_case.get('reason', ''),
+                        created_at=db_case.get('created_at', ''),
+                        tenant=client_name,
+                        cluster_id=db_case.get('cluster_id')
+                    )
+                    print(f"✅ Caso trovato nel database: {case_id}")
+            except Exception as db_error:
+                print(f"⚠️ Errore ricerca caso nel database: {db_error}")
+                import traceback
+                traceback.print_exc()
         
         if not target_case:
             return jsonify({
@@ -2182,8 +2229,9 @@ def api_get_case_detail(client_name: str, case_id: str):
             from TAGS.tag import IntelligentTagSuggestionManager
             tag_manager = IntelligentTagSuggestionManager()
             
-            # Recupera tag suggeriti per il cliente
-            raw_suggested_tags = tag_manager.get_suggested_tags_for_client(client_name)
+            # CORREZIONE: Ottieni oggetto tenant e passalo alla funzione
+            tenant = resolve_tenant_from_identifier(client_name)
+            raw_suggested_tags = tag_manager.get_suggested_tags_for_client(tenant=tenant)
             
             # Converti il formato per il frontend
             suggested_tags = []
@@ -2199,8 +2247,12 @@ def api_get_case_detail(client_name: str, case_id: str):
             case_data['suggested_tags'] = suggested_tags
             case_data['total_suggested_tags'] = len(suggested_tags)
             
+            print(f"✅ Tag suggeriti recuperati per {client_name}: {len(suggested_tags)}")
+            
         except Exception as tag_error:
-            print(f"⚠️ Errore recupero tag suggeriti: {tag_error}")
+            print(f"⚠️ Errore recupero tag suggeriti per {client_name}: {tag_error}")
+            import traceback
+            traceback.print_exc()
             case_data['suggested_tags'] = []
             case_data['total_suggested_tags'] = 0
         

@@ -219,7 +219,6 @@ class SemanticMemoryManager:
             tenant_slug = self.tenant_name or "humanitas"  # Default fallback
             
             classificazioni = self.mongo_reader.get_all_sessions(
-                client_name=tenant_slug, 
                 limit=None  # Tutte le classificazioni
             )
             
@@ -516,7 +515,6 @@ class SemanticMemoryManager:
                 # Usa MongoDB per ottenere i conteggi freschi
                 tenant_slug = self.tenant_name or "humanitas"
                 all_classifications = self.mongo_reader.get_all_sessions(
-                    client_name=tenant_slug, 
                     limit=None
                 )
                 
@@ -680,7 +678,6 @@ class SemanticMemoryManager:
             # Usa MongoDB per ottenere le etichette uniche
             tenant_slug = self.tenant_name or "humanitas"
             all_classifications = self.mongo_reader.get_all_sessions(
-                client_name=tenant_slug, 
                 limit=None
             )
             
@@ -739,7 +736,6 @@ class SemanticMemoryManager:
                         # Conta documenti con questo tag in MongoDB
                         tenant_slug = self.tenant_name or "humanitas"
                         all_docs = self.mongo_reader.get_all_sessions(
-                            client_name=tenant_slug, 
                             limit=None
                         )
                         count = sum(1 for doc in all_docs if doc.get('classification') == similar_label)

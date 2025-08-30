@@ -244,6 +244,7 @@ class IntelligentClassifier:
         self.enable_cache = enable_cache
         self.cache_ttl_hours = cache_ttl_hours
         self.enable_finetuning = enable_finetuning
+        self.enable_logging = enable_logging  # Fix: attributo mancante
         
         # Inizializza LLM Debugger
         self.llm_debugger = None

@@ -4571,7 +4571,9 @@ def create_prompt():
                 return jsonify({'error': f'Campo {field} mancante'}), 400
         
         print(f"📝 API: Creazione prompt per tenant {data['tenant_name']}")
+        print(f"  🏷️ Nome: {data.get('prompt_name', 'AUTO-GENERATO')}")
         print(f"  🏷️ Tipo: {data['prompt_type']}")
+        print(f"  🔧 Engine: {data.get('engine', 'LLM')}")
         
         prompt_manager = PromptManager()
         prompt_id = prompt_manager.create_prompt(
@@ -4579,6 +4581,8 @@ def create_prompt():
             tenant_name=data['tenant_name'],
             prompt_type=data['prompt_type'],
             content=data['content'],
+            prompt_name=data.get('prompt_name'),  # ✅ AGGIUNTO parametro
+            engine=data.get('engine', 'LLM'),     # ✅ AGGIUNTO parametro
             variables=data.get('variables', {}),
             is_active=data.get('is_active', True)
         )

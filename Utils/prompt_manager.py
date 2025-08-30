@@ -978,6 +978,8 @@ Motivazione: Richiesta diretta di prenotazione"""
                      tenant_name: str,
                      prompt_type: str,
                      content: str,
+                     prompt_name: str = None,  # ✅ AGGIUNTO parametro
+                     engine: str = 'LLM',      # ✅ AGGIUNTO parametro  
                      variables: Dict[str, Any] = None,
                      is_active: bool = True) -> Optional[int]:
         """
@@ -1006,15 +1008,17 @@ Motivazione: Richiesta diretta di prenotazione"""
             """
             
             variables_json = json.dumps(variables) if variables else '{}'
-            # Determina engine in base al prompt_type
-            engine = 'LLM' if 'llm' in prompt_type.lower() else 'ML'
+            # Usa prompt_name se fornito, altrimenti genera automaticamente
+            actual_prompt_name = prompt_name if prompt_name else f"{prompt_type}_prompt"
+            # Usa engine fornito, altrimenti determina in base al prompt_type
+            actual_engine = engine if engine else ('LLM' if 'llm' in prompt_type.lower() else 'ML')
             
             cursor.execute(query, (
                 tenant_id,
                 tenant_name,
-                engine,
+                actual_engine,        # ✅ USA engine fornito
                 prompt_type,
-                f"{prompt_type}_prompt",  # prompt_name derivato dal prompt_type
+                actual_prompt_name,   # ✅ USA prompt_name fornito
                 content,  # prompt_content
                 variables_json,  # dynamic_variables
                 is_active

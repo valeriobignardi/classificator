@@ -205,6 +205,8 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
         body: JSON.stringify({
           tenant_id: selectedTenant.tenant_id,
           tenant_name: selectedTenant.tenant_name,  // ✅ AGGIUNTO campo mancante
+          prompt_name: newPrompt.prompt_name,       // ✅ AGGIUNTO campo mancante
+          engine: newPrompt.engine,                 // ✅ AGGIUNTO campo mancante
           prompt_type: newPrompt.prompt_type,
           content: newPrompt.content,
           variables: {},
@@ -400,11 +402,10 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
               <Button
                 variant="outlined"
                 onClick={createPrompt}
-                startIcon={<Save />}
                 color="secondary"
                 sx={{ flexGrow: 1 }}
               >
-                ➕ Crea Vuoto
+                SALVA
               </Button>
               <Button
                 variant="outlined"
@@ -488,9 +489,8 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
                         <Button
                           variant="contained"
                           onClick={() => savePrompt(editingPrompt)}
-                          startIcon={<Save />}
                         >
-                          Salva
+                          SALVA
                         </Button>
                         <Button
                           variant="outlined"

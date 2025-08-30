@@ -451,6 +451,14 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
                           key={toolId} 
                           label={tool ? tool.display_name : `Tool ${toolId}`}
                           size="small"
+                          onDelete={() => {
+                            // Rimuove il tool dalla selezione
+                            setNewPrompt(prev => ({
+                              ...prev,
+                              tools: prev.tools.filter(id => id !== toolId)
+                            }));
+                          }}
+                          deleteIcon={<Cancel />}
                         />
                       );
                     })}
@@ -589,6 +597,13 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
                                 color="primary"
                                 variant="outlined"
                                 title={tool ? `${tool.tool_name} - ${tool.description}` : undefined}
+                                onDelete={() => {
+                                  // Rimuove il tool dal prompt e salva immediatamente
+                                  const updatedTools = prompt.tools.filter(id => id !== toolId);
+                                  const updatedPrompt = { ...prompt, tools: updatedTools };
+                                  savePrompt(updatedPrompt);
+                                }}
+                                deleteIcon={<Cancel />}
                               />
                             );
                           })}
@@ -632,6 +647,14 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
                                     key={toolId} 
                                     label={tool ? tool.display_name : `Tool ${toolId}`}
                                     size="small"
+                                    onDelete={() => {
+                                      // Rimuove il tool dalla selezione in editing
+                                      setEditingPrompt(prev => prev ? {
+                                        ...prev,
+                                        tools: (prev.tools || []).filter(id => id !== toolId)
+                                      } : null);
+                                    }}
+                                    deleteIcon={<Cancel />}
                                   />
                                 );
                               })}

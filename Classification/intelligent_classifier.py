@@ -47,6 +47,11 @@ except ImportError:
 
 # Import per fine-tuning
 import sys
+import os
+
+# Aggiungi path per ToolManager
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Utils'))
+from tool_manager import ToolManager
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'FineTuning'))
 
 # Import PromptManager per gestione prompt da database
@@ -290,6 +295,17 @@ class IntelligentClassifier:
                 if enable_logging:
                     print(f"⚠️ MySQL connector non disponibile: {e}")
                 self.mysql_connector = None
+
+        # ToolManager per recupero tools dal database
+        self.tool_manager = None
+        try:
+            self.tool_manager = ToolManager()
+            if enable_logging:
+                print(f"🛠️ ToolManager inizializzato per recupero tools dal database")
+        except Exception as e:
+            if enable_logging:
+                print(f"⚠️ ToolManager non disponibile: {e}")
+            self.tool_manager = None
 
         # MongoDB connector (se disponibile) - USA OGGETTO TENANT
         self.mongo_reader = None
@@ -2049,36 +2065,67 @@ Ragionamento: {ex["motivation"]}"""
         Returns:
             Dict con predicted_label, confidence, motivation (JSON garantito dalle function tools)
         """
-        # Definizione della function tool per classificazione
-        classification_tool = {
-            "type": "function",
-            "function": {
-                "name": "classify_conversation",
-                "description": "Classifica una conversazione medica in una categoria specifica",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "predicted_label": {
-                            "type": "string",
-                            "enum": list(self.domain_labels) if self.domain_labels else ["altro"],
-                            "description": "L'etichetta di classificazione dalla lista delle categorie disponibili"
-                        },
-                        "confidence": {
-                            "type": "number",
-                            "minimum": 0.0,
-                            "maximum": 1.0,
-                            "description": "Livello di confidenza della classificazione (0.0 = incerto, 1.0 = molto sicuro)"
-                        },
-                        "motivation": {
-                            "type": "string",
-                            "maxLength": 150,
-                            "description": "Breve spiegazione in italiano del motivo della classificazione (max 150 caratteri)"
+        # Recupero della function tool dal database tramite ToolManager
+        classification_tool = None
+        if self.tool_manager:
+            try:
+                # Recupera il tool di classificazione dal database
+                db_tool = self.tool_manager.get_tool_by_name("classify_conversation")
+                if db_tool:
+                    classification_tool = {
+                        "type": "function", 
+                        "function": {
+                            "name": db_tool['nome'],
+                            "description": db_tool['descrizione'],
+                            "parameters": json.loads(db_tool['schema_json'])
                         }
-                    },
-                    "required": ["predicted_label", "confidence", "motivation"]
+                    }
+                    # Aggiorna l'enum dei domain_labels nel tool dal database
+                    if (self.domain_labels and 
+                        'properties' in classification_tool['function']['parameters'] and
+                        'predicted_label' in classification_tool['function']['parameters']['properties']):
+                        classification_tool['function']['parameters']['properties']['predicted_label']['enum'] = list(self.domain_labels)
+                    
+                    if self.enable_logging:
+                        print(f"🛠️ Tool di classificazione recuperato dal database: {db_tool['nome']}")
+                else:
+                    if self.enable_logging:
+                        print("⚠️ Tool di classificazione non trovato nel database, uso definizione di fallback")
+            except Exception as e:
+                if self.enable_logging:
+                    print(f"⚠️ Errore nel recupero del tool dal database: {e}")
+        
+        # Fallback: definizione hardcoded se il tool non è disponibile dal database
+        if not classification_tool:
+            classification_tool = {
+                "type": "function",
+                "function": {
+                    "name": "classify_conversation",
+                    "description": "Classifica una conversazione medica in una categoria specifica",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "predicted_label": {
+                                "type": "string",
+                                "enum": list(self.domain_labels) if self.domain_labels else ["altro"],
+                                "description": "L'etichetta di classificazione dalla lista delle categorie disponibili"
+                            },
+                            "confidence": {
+                                "type": "number",
+                                "minimum": 0.0,
+                                "maximum": 1.0,
+                                "description": "Livello di confidenza della classificazione (0.0 = incerto, 1.0 = molto sicuro)"
+                            },
+                            "motivation": {
+                                "type": "string",
+                                "maxLength": 150,
+                                "description": "Breve spiegazione in italiano del motivo della classificazione (max 150 caratteri)"
+                            }
+                        },
+                        "required": ["predicted_label", "confidence", "motivation"]
+                    }
                 }
             }
-        }
         
         # Messaggio di sistema ottimizzato per function calling
         system_message = f"""

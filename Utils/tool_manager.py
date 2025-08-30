@@ -133,6 +133,52 @@ class ToolManager:
             self.logger.error(f"❌ Errore recupero tools per tenant {tenant_id}: {e}")
             return []
     
+    def get_tool_by_name(self, tool_name: str, tenant_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Recupera un tool specifico per nome e tenant
+        
+        Args:
+            tool_name: Nome univoco del tool
+            tenant_id: ID del tenant
+            
+        Returns:
+            Dati del tool o None se non trovato
+        """
+        try:
+            connection = self._get_connection()
+            cursor = connection.cursor(dictionary=True)
+            
+            query = """
+            SELECT id, tool_name, display_name, description, function_schema, 
+                   is_active, tenant_id, tenant_name, created_at, updated_at
+            FROM tools 
+            WHERE tool_name = %s AND tenant_id = %s AND is_active = TRUE
+            """
+            
+            cursor.execute(query, (tool_name, tenant_id))
+            tool = cursor.fetchone()
+            
+            if tool and tool['function_schema']:
+                try:
+                    tool['function_schema'] = json.loads(tool['function_schema'])
+                except json.JSONDecodeError as e:
+                    self.logger.warning(f"⚠️ Schema JSON non valido per tool {tool['tool_name']}: {e}")
+                    tool['function_schema'] = {}
+            
+            if tool:
+                # Converte datetime in string
+                tool['created_at'] = tool['created_at'].isoformat() if tool['created_at'] else None
+                tool['updated_at'] = tool['updated_at'].isoformat() if tool['updated_at'] else None
+            
+            cursor.close()
+            connection.close()
+            
+            return tool
+            
+        except Error as e:
+            self.logger.error(f"❌ Errore recupero tool {tool_name} per tenant {tenant_id}: {e}")
+            return None
+
     def get_tool_by_id(self, tool_id: int) -> Optional[Dict[str, Any]]:
         """
         Recupera un tool specifico per ID

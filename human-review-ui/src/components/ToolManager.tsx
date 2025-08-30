@@ -134,25 +134,39 @@ const ToolManager: React.FC<ToolManagerProps> = ({ open }) => {
    * Salva modifiche tool esistente
    */
   const saveTool = async (tool: Tool) => {
+    console.log('💾 saveTool called with:', tool);
+    
     try {
+      console.log('🌐 Making PUT request to:', `/api/tools/${tool.id}`);
+      
+      const requestBody = {
+        display_name: tool.display_name,
+        description: tool.description,
+        function_schema: tool.function_schema,
+        is_active: tool.is_active
+      };
+      
+      console.log('📤 Request body:', requestBody);
+
       const response = await fetch(`/api/tools/${tool.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          display_name: tool.display_name,
-          description: tool.description,
-          function_schema: tool.function_schema,
-          is_active: tool.is_active
-        }),
+        body: JSON.stringify(requestBody),
       });
 
+      console.log('📡 Response status:', response.status);
+      console.log('📡 Response ok:', response.ok);
+
       if (!response.ok) {
-        throw new Error(`Errore HTTP: ${response.status}`);
+        const errorText = await response.text();
+        console.log('❌ Response error text:', errorText);
+        throw new Error(`Errore HTTP: ${response.status} - ${errorText}`);
       }
 
       const updatedTool = await response.json();
+      console.log('✅ Updated tool received:', updatedTool);
       
       // Aggiorna lo stato locale
       setTools(prevTools => 
@@ -161,9 +175,10 @@ const ToolManager: React.FC<ToolManagerProps> = ({ open }) => {
 
       setSuccess('Tool salvato con successo!');
       setTimeout(() => setSuccess(null), 3000);
+      closeDialog();
 
     } catch (err) {
-      console.error('Errore salvataggio tool:', err);
+      console.error('❌ Errore salvataggio tool:', err);
       setError(err instanceof Error ? err.message : 'Errore nel salvataggio tool');
       setTimeout(() => setError(null), 5000);
     }
@@ -173,46 +188,66 @@ const ToolManager: React.FC<ToolManagerProps> = ({ open }) => {
    * Crea nuovo tool
    */
   const createTool = async () => {
-    if (!selectedTenant) return;
+    console.log('➕ createTool called');
+    console.log('🏢 Selected tenant:', selectedTenant);
+    
+    if (!selectedTenant) {
+      console.log('❌ No tenant selected!');
+      setError('Nessun tenant selezionato');
+      return;
+    }
 
     try {
       // Validazione schema JSON
       let parsedSchema;
       try {
         parsedSchema = JSON.parse(formData.function_schema);
+        console.log('✅ Parsed schema:', parsedSchema);
       } catch (e) {
+        console.log('❌ JSON parsing error:', e);
         setError('Schema funzione deve essere un JSON valido');
         return;
       }
+
+      const requestBody = {
+        tool_name: formData.tool_name,
+        display_name: formData.display_name,
+        description: formData.description,
+        function_schema: parsedSchema,
+        is_active: formData.is_active,
+        tenant_id: selectedTenant.tenant_id
+      };
+      
+      console.log('📤 POST request body:', requestBody);
+      console.log('🌐 Making POST request to: /api/tools');
 
       const response = await fetch('/api/tools', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          tool_name: formData.tool_name,
-          display_name: formData.display_name,
-          description: formData.description,
-          function_schema: parsedSchema,
-          is_active: formData.is_active,
-          tenant_id: selectedTenant.tenant_id
-        }),
+        body: JSON.stringify(requestBody),
       });
 
+      console.log('📡 Response status:', response.status);
+      console.log('📡 Response ok:', response.ok);
+
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `Errore HTTP: ${response.status}`);
+        const errorData = await response.text();
+        console.log('❌ Response error:', errorData);
+        throw new Error(`Errore HTTP: ${response.status} - ${errorData}`);
       }
 
       const newTool = await response.json();
+      console.log('✅ New tool created:', newTool);
+      
       setTools(prevTools => [...prevTools, newTool]);
       setSuccess('Tool creato con successo!');
       setTimeout(() => setSuccess(null), 3000);
       closeDialog();
 
     } catch (err) {
-      console.error('Errore creazione tool:', err);
+      console.error('❌ Errore creazione tool:', err);
       setError(err instanceof Error ? err.message : 'Errore nella creazione tool');
       setTimeout(() => setError(null), 5000);
     }
@@ -295,12 +330,29 @@ const ToolManager: React.FC<ToolManagerProps> = ({ open }) => {
    * Gestisce submit form
    */
   const handleSubmit = () => {
+    console.log('🔥 handleSubmit called!');
+    console.log('📋 Form data:', formData);
+    console.log('✏️ Editing tool:', editingTool);
+    
+    // Validazione campi obbligatori
     if (!formData.tool_name || !formData.display_name || !formData.description) {
+      console.log('❌ Validation failed - missing required fields');
       setError('Tutti i campi obbligatori devono essere compilati');
       return;
     }
 
+    // Validazione JSON schema
+    try {
+      JSON.parse(formData.function_schema);
+      console.log('✅ JSON schema validation passed');
+    } catch (e) {
+      console.log('❌ JSON schema validation failed:', e);
+      setError('Schema funzione deve essere un JSON valido');
+      return;
+    }
+
     if (editingTool) {
+      console.log('📝 Updating existing tool...');
       // Modifica tool esistente
       const updatedTool = {
         ...editingTool,
@@ -309,8 +361,10 @@ const ToolManager: React.FC<ToolManagerProps> = ({ open }) => {
         function_schema: JSON.parse(formData.function_schema),
         is_active: formData.is_active
       };
+      console.log('🔄 Calling saveTool with:', updatedTool);
       saveTool(updatedTool);
     } else {
+      console.log('➕ Creating new tool...');
       // Crea nuovo tool
       createTool();
     }
@@ -554,7 +608,7 @@ const ToolManager: React.FC<ToolManagerProps> = ({ open }) => {
             Annulla
           </Button>
           <Button onClick={handleSubmit} variant="contained" startIcon={<SaveIcon />}>
-            {editingTool ? 'Salva Modifiche' : 'Crea Tool'}
+            SALVA
           </Button>
         </DialogActions>
       </Dialog>

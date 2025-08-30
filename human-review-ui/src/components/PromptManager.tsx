@@ -204,9 +204,8 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
         },
         body: JSON.stringify({
           tenant_id: selectedTenant.tenant_id,
-          engine: newPrompt.engine,
+          tenant_name: selectedTenant.tenant_name,  // ✅ AGGIUNTO campo mancante
           prompt_type: newPrompt.prompt_type,
-          prompt_name: newPrompt.prompt_name,
           content: newPrompt.content,
           variables: {},
           is_active: true
@@ -214,7 +213,9 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
       });
 
       if (!response.ok) {
-        throw new Error(`Errore creazione: ${response.statusText}`);
+        const errorData = await response.text();
+        console.log('❌ Errore response:', errorData);
+        throw new Error(`Errore creazione: ${response.status} - ${errorData}`);
       }
 
       await loadPrompts();

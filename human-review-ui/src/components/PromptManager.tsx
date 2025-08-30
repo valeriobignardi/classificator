@@ -57,7 +57,21 @@ interface Prompt {
   prompt_name: string;
   content: string;
   variables: Record<string, any>;
+  tools: number[]; // Array di ID tool associati al prompt
   is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+interface Tool {
+  id: number;
+  tool_name: string;
+  display_name: string;
+  description: string;
+  function_schema: Record<string, any>;
+  is_active: boolean;
+  tenant_id: string;
+  tenant_name: string;
   created_at: string;
   updated_at: string;
 }

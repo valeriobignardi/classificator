@@ -133,50 +133,49 @@ class ToolManager:
             self.logger.error(f"❌ Errore recupero tools per tenant {tenant_id}: {e}")
             return []
     
-    def get_tool_by_name(self, tool_name: str, tenant_id: str) -> Optional[Dict[str, Any]]:
+    def get_tool_by_id(self, tool_id: int) -> dict:
         """
-        Recupera un tool specifico per nome e tenant
+        Recupera un tool specifico per ID univoco
         
         Args:
-            tool_name: Nome univoco del tool
-            tenant_id: ID del tenant
+            tool_id: ID univoco del tool
             
         Returns:
-            Dati del tool o None se non trovato
+            Dict con dati del tool o None se non trovato
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-30
         """
+        if not self.connection:
+            self.connect()
+            
         try:
-            connection = self._get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = self.connection.cursor(dictionary=True)
             
             query = """
             SELECT id, tool_name, display_name, description, function_schema, 
-                   is_active, tenant_id, tenant_name, created_at, updated_at
+                   is_active, tenant_id, tenant_name
             FROM tools 
-            WHERE tool_name = %s AND tenant_id = %s AND is_active = TRUE
+            WHERE id = %s AND is_active = 1
             """
             
-            cursor.execute(query, (tool_name, tenant_id))
-            tool = cursor.fetchone()
+            cursor.execute(query, (tool_id,))
+            result = cursor.fetchone()
             
-            if tool and tool['function_schema']:
+            if result and result['function_schema']:
                 try:
-                    tool['function_schema'] = json.loads(tool['function_schema'])
+                    # Parse JSON schema se è stringa
+                    if isinstance(result['function_schema'], str):
+                        result['function_schema'] = json.loads(result['function_schema'])
                 except json.JSONDecodeError as e:
-                    self.logger.warning(f"⚠️ Schema JSON non valido per tool {tool['tool_name']}: {e}")
-                    tool['function_schema'] = {}
-            
-            if tool:
-                # Converte datetime in string
-                tool['created_at'] = tool['created_at'].isoformat() if tool['created_at'] else None
-                tool['updated_at'] = tool['updated_at'].isoformat() if tool['updated_at'] else None
+                    self.logger.error(f"❌ Errore parsing JSON schema tool ID {tool_id}: {e}")
+                    result['function_schema'] = {}
             
             cursor.close()
-            connection.close()
-            
-            return tool
+            return result
             
         except Error as e:
-            self.logger.error(f"❌ Errore recupero tool {tool_name} per tenant {tenant_id}: {e}")
+            self.logger.error(f"❌ Errore recupero tool ID {tool_id}: {e}")
             return None
 
     def get_tool_by_id(self, tool_id: int) -> Optional[Dict[str, Any]]:
@@ -520,6 +519,77 @@ class ToolManager:
         
         self.logger.info(f"📤 Esportati {len(tools)} tools per tenant {tenant_id}")
         return export_data
+
+    def get_tool_by_name(self, tool_name: str, tenant_or_id=None) -> Optional[Dict[str, Any]]:
+        """
+        Recupera un tool attivo per nome e tenant
+        
+        Args:
+            tool_name: Nome del tool da cercare
+            tenant_or_id: Oggetto Tenant o tenant_id per filtrare
+            
+        Returns:
+            Dict con dati del tool o None se non trovato
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-30
+        """
+        try:
+            connection = self._get_connection()
+            cursor = connection.cursor(dictionary=True)
+            
+            # Gestione compatibilità Tenant vs tenant_id string
+            if tenant_or_id is not None and hasattr(tenant_or_id, 'tenant_id'):
+                # Oggetto Tenant - usa direttamente i suoi dati
+                resolved_tenant_id = tenant_or_id.tenant_id
+            else:
+                # Retrocompatibilità: tenant_id string
+                resolved_tenant_id = tenant_or_id
+            
+            # Query per tool attivo
+            query = """
+            SELECT id, tool_name, display_name, description, function_schema, 
+                   is_active, tenant_id, tenant_name, created_at, updated_at
+            FROM tools 
+            WHERE tool_name = %s AND is_active = 1
+            """
+            params = [tool_name]
+            
+            # Aggiungi filtro tenant se specificato
+            if resolved_tenant_id:
+                query += " AND tenant_id = %s"
+                params.append(resolved_tenant_id)
+            
+            query += " ORDER BY updated_at DESC LIMIT 1"
+            
+            cursor.execute(query, params)
+            result = cursor.fetchone()
+            
+            cursor.close()
+            connection.close()
+            
+            if result:
+                # Parse function_schema da JSON
+                function_schema = result['function_schema']
+                if isinstance(function_schema, str):
+                    try:
+                        function_schema = json.loads(function_schema)
+                    except json.JSONDecodeError:
+                        self.logger.warning(f"⚠️ Schema non valido per tool {tool_name}")
+                        function_schema = {}
+                
+                tool_data = dict(result)
+                tool_data['function_schema'] = function_schema
+                
+                self.logger.info(f"✅ Trovato tool '{tool_name}' per tenant {resolved_tenant_id}")
+                return tool_data
+            else:
+                self.logger.warning(f"⚠️ Tool '{tool_name}' non trovato per tenant {resolved_tenant_id}")
+                return None
+                
+        except Error as e:
+            self.logger.error(f"❌ Errore recupero tool per nome: {e}")
+            return None
 
 if __name__ == "__main__":
     # Test del ToolManager

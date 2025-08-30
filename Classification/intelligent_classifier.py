@@ -2058,6 +2058,7 @@ Ragionamento: {ex["motivation"]}"""
         """
         IMPLEMENTAZIONE DEFINITIVA: Usa Function Tools di Ollama/Mistral
         Elimina completamente il parsing manuale - Mistral restituisce JSON strutturato
+        Recupera i tool dal database tramite il prompt e i tool ID associati
         
         Args:
             conversation_text: Testo della conversazione da classificare
@@ -2065,67 +2066,75 @@ Ragionamento: {ex["motivation"]}"""
         Returns:
             Dict con predicted_label, confidence, motivation (JSON garantito dalle function tools)
         """
-        # Recupero della function tool dal database tramite ToolManager
-        classification_tool = None
-        if self.tool_manager:
+        # Recupero dei function tools dal database tramite PromptManager e ToolManager
+        classification_tools = []
+        
+        if self.prompt_manager and self.tool_manager:
             try:
-                # Recupera il tool di classificazione dal database
-                db_tool = self.tool_manager.get_tool_by_name("classify_conversation")
-                if db_tool:
-                    classification_tool = {
-                        "type": "function", 
-                        "function": {
-                            "name": db_tool['nome'],
-                            "description": db_tool['descrizione'],
-                            "parameters": json.loads(db_tool['schema_json'])
-                        }
-                    }
-                    # Aggiorna l'enum dei domain_labels nel tool dal database
-                    if (self.domain_labels and 
-                        'properties' in classification_tool['function']['parameters'] and
-                        'predicted_label' in classification_tool['function']['parameters']['properties']):
-                        classification_tool['function']['parameters']['properties']['predicted_label']['enum'] = list(self.domain_labels)
-                    
-                    if self.enable_logging:
-                        print(f"🛠️ Tool di classificazione recuperato dal database: {db_tool['nome']}")
-                else:
-                    if self.enable_logging:
-                        print("⚠️ Tool di classificazione non trovato nel database, uso definizione di fallback")
+                # 1. Recupera gli ID dei tool dal prompt "intelligent_classifier_system"
+                resolved_tenant_id = self.prompt_manager._resolve_tenant_id(self.tenant_id)
+                tool_ids = self.prompt_manager.get_prompt_tools(
+                    tenant_id=resolved_tenant_id,
+                    prompt_name="intelligent_classifier_system",
+                    engine="LLM"
+                )
+                
+                if self.enable_logging:
+                    print(f"🔍 Tool IDs recuperati dal prompt: {tool_ids}")
+                
+                # 2. Per ogni tool ID, recupera il tool completo dal database
+                for tool_id in tool_ids:
+                    try:
+                        # tool_id deve essere un numero intero
+                        if not isinstance(tool_id, int):
+                            if isinstance(tool_id, str) and tool_id.isdigit():
+                                tool_id = int(tool_id)
+                            else:
+                                if self.enable_logging:
+                                    print(f"⚠️ Tool ID non valido (deve essere numerico): {tool_id}")
+                                continue
+                        
+                        db_tool = self.tool_manager.get_tool_by_id(tool_id)
+                        
+                        if db_tool and db_tool['is_active']:
+                            # Costruisce il tool per Ollama/Mistral usando la struttura corretta
+                            classification_tool = {
+                                "type": "function", 
+                                "function": {
+                                    "name": db_tool['tool_name'],
+                                    "description": db_tool['description'],
+                                    "parameters": db_tool['function_schema']
+                                }
+                            }
+                            
+                            # Aggiorna l'enum dei domain_labels nel tool dal database
+                            if (self.domain_labels and 
+                                'properties' in classification_tool['function']['parameters'] and
+                                'predicted_label' in classification_tool['function']['parameters']['properties']):
+                                classification_tool['function']['parameters']['properties']['predicted_label']['enum'] = list(self.domain_labels)
+                            
+                            classification_tools.append(classification_tool)
+                            
+                            if self.enable_logging:
+                                print(f"✅ Tool recuperato dal database: {db_tool['tool_name']} (ID: {tool_id}) per tenant {db_tool['tenant_id']}")
+                        else:
+                            if self.enable_logging:
+                                print(f"⚠️ Tool ID {tool_id} non trovato o non attivo nel database")
+                                
+                    except Exception as e:
+                        if self.enable_logging:
+                            print(f"⚠️ Errore recupero tool ID {tool_id}: {e}")
+                        
             except Exception as e:
                 if self.enable_logging:
-                    print(f"⚠️ Errore nel recupero del tool dal database: {e}")
+                    print(f"⚠️ Errore nel recupero dei tool dal prompt: {e}")
         
-        # Fallback: definizione hardcoded se il tool non è disponibile dal database
-        if not classification_tool:
-            classification_tool = {
-                "type": "function",
-                "function": {
-                    "name": "classify_conversation",
-                    "description": "Classifica una conversazione medica in una categoria specifica",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "predicted_label": {
-                                "type": "string",
-                                "enum": list(self.domain_labels) if self.domain_labels else ["altro"],
-                                "description": "L'etichetta di classificazione dalla lista delle categorie disponibili"
-                            },
-                            "confidence": {
-                                "type": "number",
-                                "minimum": 0.0,
-                                "maximum": 1.0,
-                                "description": "Livello di confidenza della classificazione (0.0 = incerto, 1.0 = molto sicuro)"
-                            },
-                            "motivation": {
-                                "type": "string",
-                                "maxLength": 150,
-                                "description": "Breve spiegazione in italiano del motivo della classificazione (max 150 caratteri)"
-                            }
-                        },
-                        "required": ["predicted_label", "confidence", "motivation"]
-                    }
-                }
-            }
+        # Verifica che ci sia almeno un tool disponibile
+        if not classification_tools:
+            raise ValueError(
+                "❌ ERRORE CRITICO: Nessun tool di classificazione disponibile dal database. "
+                "Verificare che il prompt 'intelligent_classifier_system' abbia tool associati e che siano attivi."
+            )
         
         # Messaggio di sistema ottimizzato per function calling
         system_message = f"""
@@ -2134,12 +2143,12 @@ Ragionamento: {ex["motivation"]}"""
         Le categorie disponibili sono:
         {', '.join(self.domain_labels) if self.domain_labels else 'altro'}
         
-        Analizza la conversazione fornita e usa la function classify_conversation per restituire:
+        Analizza la conversazione fornita e usa una delle function tools disponibili per restituire:
         - predicted_label: ESATTAMENTE una delle categorie elencate sopra
         - confidence: valore da 0.0 a 1.0 basato sulla chiarezza del contenuto
         - motivation: spiegazione breve e chiara in italiano (massimo 150 caratteri)
         
-        DEVI SEMPRE usare la function classify_conversation per rispondere.
+        DEVI SEMPRE usare una delle function tools disponibili per rispondere.
         """
         
         # Payload per function calling con Ollama/Mistral
@@ -2155,7 +2164,7 @@ Ragionamento: {ex["motivation"]}"""
                     "content": f"Classifica questa conversazione medica:\n\n{conversation_text}"
                 }
             ],
-            "tools": [classification_tool],  # 🔑 FUNCTION TOOLS invece di format
+            "tools": classification_tools,  # 🔑 ARRAY DI FUNCTION TOOLS dal database
             "stream": False,
             "options": {
                 "temperature": 0.01,  # Molto deterministico per function calling

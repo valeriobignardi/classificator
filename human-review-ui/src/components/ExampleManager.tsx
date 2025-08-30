@@ -14,9 +14,6 @@ import { apiService } from '../services/apiService';
 import {
   Box,
   Typography,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
   TextField,
   Button,
   Chip,
@@ -35,12 +32,11 @@ import {
   Tooltip,
   Card,
   CardContent,
-  CardActions,  // ✅ AGGIUNTO
+  CardActions,  
   Paper,
   Stack
 } from '@mui/material';
 import {
-  ExpandMore,
   Save,
   Add,
   Delete,
@@ -58,6 +54,7 @@ interface Example {
   categoria: string;
   livello_difficolta: string;
   description: string;
+  esempio_content: string;  // ✅ AGGIUNTO: Campo contenuto dell'esempio
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -86,7 +83,7 @@ const ExampleManager: React.FC<ExampleManagerProps> = ({ open }) => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   
-  // Stati per nuovo esempio
+  // Stati per nuovo/modifica esempio (unificati)
   const [showAddForm, setShowAddForm] = useState(false);
   const [newExample, setNewExample] = useState({
     esempio_name: '',
@@ -96,14 +93,8 @@ const ExampleManager: React.FC<ExampleManagerProps> = ({ open }) => {
     livello_difficolta: 'MEDIO'
   });
   
-  // Stati per modifica esempio ✅ NUOVO
+  // Stato per identificare se siamo in modalità modifica
   const [editingExample, setEditingExample] = useState<Example | null>(null);
-  const [editForm, setEditForm] = useState({
-    esempio_name: '',
-    description: '',
-    categoria: '',
-    livello_difficolta: ''
-  });
   
   // Stati per preview placeholder
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -139,10 +130,11 @@ const ExampleManager: React.FC<ExampleManagerProps> = ({ open }) => {
   }, [selectedTenant]);
 
   /**
-   * Crea nuovo esempio nel database
-   * Input: newExample state object
-   * Output: Nuovo esempio nel database, ricarica lista
-   * Ultima modifica: 2025-08-25
+   * Crea nuovo esempio o salva modifiche a esempio esistente
+   * Input: dati dal form newExample
+   * Output: Nuovo esempio nel database o esempio modificato, ricarica lista
+   * Autore: Valerio Bignardi
+   * Data: 2025-08-30
    */
   const createExample = async () => {
     if (!selectedTenant?.tenant_id) return;
@@ -151,18 +143,40 @@ const ExampleManager: React.FC<ExampleManagerProps> = ({ open }) => {
       setLoading(true);
       setError(null);
 
-      const exampleData = {
-        tenant_id: selectedTenant.tenant_id,
-        engine: 'LLM',  // Esplicito
-        esempio_type: 'CONVERSATION',  // Esplicito
-        ...newExample
-      };
+      if (editingExample) {
+        // MODALITÀ MODIFICA - Aggiorna esempio esistente
+        const updateData = {
+          esempio_name: newExample.esempio_name,
+          description: newExample.description,
+          categoria: newExample.categoria,
+          livello_difficolta: newExample.livello_difficolta,
+          esempio_content: newExample.esempio_content,  // ✅ AGGIUNTO: Contenuto dell'esempio
+          tenant_id: selectedTenant.tenant_id
+        };
 
-      console.log('🔍 [DEBUG] React createExample - Dati inviati:', exampleData);
+        console.log('🔍 [DEBUG] React updateExample - Dati inviati:', updateData);
+        
+        await apiService.updateExample(editingExample.id, updateData);
+        
+        setSuccess(`Esempio "${newExample.esempio_name}" aggiornato con successo!`);
+        setEditingExample(null);
+      } else {
+        // MODALITÀ CREAZIONE - Crea nuovo esempio
+        const exampleData = {
+          tenant_id: selectedTenant.tenant_id,
+          engine: 'LLM',  // Esplicito
+          esempio_type: 'CONVERSATION',  // Esplicito
+          ...newExample
+        };
 
-      await apiService.createExample(exampleData);
+        console.log('🔍 [DEBUG] React createExample - Dati inviati:', exampleData);
 
-      setSuccess(`Esempio "${newExample.esempio_name}" creato con successo!`);
+        await apiService.createExample(exampleData);
+
+        setSuccess(`Esempio "${newExample.esempio_name}" creato con successo!`);
+      }
+
+      // Chiudi form e resetta dati
       setShowAddForm(false);
       setNewExample({
         esempio_name: '',
@@ -213,18 +227,25 @@ const ExampleManager: React.FC<ExampleManagerProps> = ({ open }) => {
   /**
    * Inizia modifica di un esempio esistente
    * Input: esempio da modificare
-   * Output: Apre form di modifica
+   * Output: Apre form di modifica (stesso form del nuovo esempio)
    * Autore: Valerio Bignardi
    * Data: 2025-08-30
    */
   const startEditingExample = (example: Example) => {
-    setEditingExample(example);
-    setEditForm({
+    // Popola il form "nuovo esempio" con i dati esistenti
+    setNewExample({
       esempio_name: example.esempio_name,
+      esempio_content: example.esempio_content || '', // ✅ CORRETTO: Usa il contenuto dall'esempio
       description: example.description,
       categoria: example.categoria,
       livello_difficolta: example.livello_difficolta
     });
+    
+    // Imposta modalità modifica
+    setEditingExample(example);
+    
+    // Apre lo stesso dialog del nuovo esempio
+    setShowAddForm(true);
   };
 
   /**
@@ -233,35 +254,6 @@ const ExampleManager: React.FC<ExampleManagerProps> = ({ open }) => {
    * Output: Esempio aggiornato nel database
    * Autore: Valerio Bignardi
    * Data: 2025-08-30
-   */
-  const saveEditedExample = async () => {
-    if (!editingExample || !selectedTenant?.tenant_id) return;
-
-    try {
-      setLoading(true);
-      setError(null);
-
-      // Chiamata API per aggiornare l'esempio
-      await apiService.updateExample(editingExample.id, {
-        esempio_name: editForm.esempio_name,
-        description: editForm.description,
-        categoria: editForm.categoria,
-        livello_difficolta: editForm.livello_difficolta,
-        tenant_id: selectedTenant.tenant_id
-      });
-
-      setSuccess(`Esempio "${editForm.esempio_name}" aggiornato con successo!`);
-      setEditingExample(null);
-      loadExamples();
-
-    } catch (err) {
-      console.error('Errore aggiornamento esempio:', err);
-      setError(err instanceof Error ? err.message : 'Errore aggiornamento esempio');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   /**
    * Preview esempi formattati per placeholder
    * Input: selectedTenant per filtro
@@ -496,12 +488,22 @@ const ExampleManager: React.FC<ExampleManagerProps> = ({ open }) => {
         </Box>
       )}
 
-      {/* Dialog per nuovo esempio */}
-      <Dialog open={showAddForm} onClose={() => setShowAddForm(false)} maxWidth="md" fullWidth>
+      {/* Dialog per nuovo/modifica esempio */}
+      <Dialog open={showAddForm} onClose={() => {
+        setShowAddForm(false);
+        setEditingExample(null);
+        setNewExample({
+          esempio_name: '',
+          esempio_content: '',
+          description: '',
+          categoria: '',
+          livello_difficolta: 'MEDIO'
+        });
+      }} maxWidth="md" fullWidth>
         <DialogTitle>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Add color="primary" />
-            Nuovo Esempio Conversazione
+            {editingExample ? <AutoFixHigh color="primary" /> : <Add color="primary" />}
+            {editingExample ? `Modifica Esempio: ${editingExample.esempio_name}` : 'Nuovo Esempio Conversazione'}
           </Box>
         </DialogTitle>
         <DialogContent dividers>
@@ -572,81 +574,26 @@ const ExampleManager: React.FC<ExampleManagerProps> = ({ open }) => {
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setShowAddForm(false)} disabled={loading}>
+          <Button onClick={() => {
+            setShowAddForm(false);
+            setEditingExample(null);
+            setNewExample({
+              esempio_name: '',
+              esempio_content: '',
+              description: '',
+              categoria: '',
+              livello_difficolta: 'MEDIO'
+            });
+          }} disabled={loading}>
             Annulla
           </Button>
           <Button
             onClick={createExample}
             variant="contained"
-            disabled={loading || !newExample.esempio_name || !newExample.esempio_content}
+            disabled={loading || !newExample.esempio_name || (!newExample.esempio_content && !editingExample)}
             startIcon={loading ? <CircularProgress size={16} /> : <Save />}
           >
-            Crea Esempio
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Dialog per modifica esempio */}
-      <Dialog open={editingExample !== null} onClose={() => setEditingExample(null)} maxWidth="md" fullWidth>
-        <DialogTitle>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <AutoFixHigh color="primary" />
-            Modifica Esempio: {editingExample?.esempio_name}
-          </Box>
-        </DialogTitle>
-        <DialogContent dividers>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <TextField
-              fullWidth
-              label="Nome Esempio"
-              value={editForm.esempio_name}
-              onChange={(e) => setEditForm(prev => ({ ...prev, esempio_name: e.target.value }))}
-              size="small"
-            />
-            
-            <TextField
-              fullWidth
-              label="Descrizione"
-              value={editForm.description}
-              onChange={(e) => setEditForm(prev => ({ ...prev, description: e.target.value }))}
-              size="small"
-              multiline
-              rows={2}
-            />
-            
-            <TextField
-              fullWidth
-              label="Categoria"
-              value={editForm.categoria}
-              onChange={(e) => setEditForm(prev => ({ ...prev, categoria: e.target.value }))}
-              size="small"
-            />
-            
-            <FormControl fullWidth size="small">
-              <InputLabel>Livello Difficoltà</InputLabel>
-              <Select
-                value={editForm.livello_difficolta}
-                onChange={(e) => setEditForm(prev => ({ ...prev, livello_difficolta: e.target.value }))}
-                label="Livello Difficoltà"
-              >
-                <MenuItem value="FACILE">Facile</MenuItem>
-                <MenuItem value="MEDIO">Medio</MenuItem>
-                <MenuItem value="DIFFICILE">Difficile</MenuItem>
-              </Select>
-            </FormControl>
-          </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setEditingExample(null)} disabled={loading}>
-            Annulla
-          </Button>
-          <Button
-            onClick={saveEditedExample}
-            variant="contained"
-            disabled={loading || !editForm.esempio_name.trim()}
-            startIcon={loading ? <CircularProgress size={20} /> : <Save />}
-          >
-            SALVA
+            {editingExample ? 'SALVA' : 'Crea Esempio'}
           </Button>
         </DialogActions>
       </Dialog>

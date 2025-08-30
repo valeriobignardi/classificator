@@ -24,6 +24,7 @@ project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(project_root)
 
 from Utils.prompt_manager import PromptManager
+from Utils.tenant import Tenant
 
 # Crea blueprint invece di app Flask
 esempi_bp = Blueprint('esempi', __name__)
@@ -263,11 +264,23 @@ def update_example(esempio_id: int):
         updates = {k: v for k, v in data.items() if k != 'tenant_id'}
         
         logger.info(f"🔄 PUT /api/examples/{esempio_id} - tenant: {tenant_id}")
+        logger.info(f"🔍 DATI COMPLETI RICEVUTI: {data}")
+        logger.info(f"🔍 UPDATES DA APPLICARE: {updates}")
         
-        # Aggiorna esempio
+        # Risolvi oggetto Tenant dal tenant_id
+        try:
+            tenant = Tenant.from_uuid(tenant_id)
+        except Exception as e:
+            logger.error(f"❌ Errore risoluzione tenant {tenant_id}: {e}")
+            return jsonify(format_api_response(
+                success=False,
+                error=f"Tenant non valido: {tenant_id}"
+            )), 400
+        
+        # Aggiorna esempio passando oggetto tenant completo
         success = prompt_manager.update_example(
-            esempio_id=esempio_id,
-            tenant_id=tenant_id,
+            esempio_id,       # primo parametro posizionale
+            tenant,           # secondo parametro posizionale (oggetto tenant)
             **updates
         )
         

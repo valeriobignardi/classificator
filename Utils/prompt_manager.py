@@ -1878,7 +1878,7 @@ Motivazione: Richiesta diretta di prenotazione"""
             # Query dinamica in base ai filtri - Solo esempi attivi
             query = """
             SELECT id, esempio_name, esempio_type, categoria, livello_difficolta, 
-                   description, is_active, created_at, updated_at
+                   description, esempio_content, is_active, created_at, updated_at
             FROM esempi 
             WHERE tenant_id = %s AND engine = %s AND is_active = TRUE
             """
@@ -1904,9 +1904,10 @@ Motivazione: Richiesta diretta di prenotazione"""
                     'categoria': esempio[3],
                     'livello_difficolta': esempio[4],
                     'description': esempio[5],
-                    'is_active': bool(esempio[6]),
-                    'created_at': esempio[7].strftime('%Y-%m-%d %H:%M:%S'),
-                    'updated_at': esempio[8].strftime('%Y-%m-%d %H:%M:%S')
+                    'esempio_content': esempio[6],  # ✅ AGGIUNTO: Contenuto dell'esempio
+                    'is_active': bool(esempio[7]),
+                    'created_at': esempio[8].strftime('%Y-%m-%d %H:%M:%S'),
+                    'updated_at': esempio[9].strftime('%Y-%m-%d %H:%M:%S')
                 })
             
             self.logger.info(f"✅ Recuperati {len(result)} esempi per tenant {tenant_display}")

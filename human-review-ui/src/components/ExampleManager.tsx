@@ -35,6 +35,7 @@ import {
   Tooltip,
   Card,
   CardContent,
+  CardActions,  // ✅ AGGIUNTO
   Paper,
   Stack
 } from '@mui/material';
@@ -93,6 +94,15 @@ const ExampleManager: React.FC<ExampleManagerProps> = ({ open }) => {
     description: '',
     categoria: '',
     livello_difficolta: 'MEDIO'
+  });
+  
+  // Stati per modifica esempio ✅ NUOVO
+  const [editingExample, setEditingExample] = useState<Example | null>(null);
+  const [editForm, setEditForm] = useState({
+    esempio_name: '',
+    description: '',
+    categoria: '',
+    livello_difficolta: ''
   });
   
   // Stati per preview placeholder
@@ -195,6 +205,58 @@ const ExampleManager: React.FC<ExampleManagerProps> = ({ open }) => {
     } catch (err) {
       console.error('Errore eliminazione esempio:', err);
       setError(err instanceof Error ? err.message : 'Errore eliminazione esempio');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /**
+   * Inizia modifica di un esempio esistente
+   * Input: esempio da modificare
+   * Output: Apre form di modifica
+   * Autore: Valerio Bignardi
+   * Data: 2025-08-30
+   */
+  const startEditingExample = (example: Example) => {
+    setEditingExample(example);
+    setEditForm({
+      esempio_name: example.esempio_name,
+      description: example.description,
+      categoria: example.categoria,
+      livello_difficolta: example.livello_difficolta
+    });
+  };
+
+  /**
+   * Salva modifiche esempio
+   * Input: dati del form di modifica
+   * Output: Esempio aggiornato nel database
+   * Autore: Valerio Bignardi
+   * Data: 2025-08-30
+   */
+  const saveEditedExample = async () => {
+    if (!editingExample || !selectedTenant?.tenant_id) return;
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      // Chiamata API per aggiornare l'esempio
+      await apiService.updateExample(editingExample.id, {
+        esempio_name: editForm.esempio_name,
+        description: editForm.description,
+        categoria: editForm.categoria,
+        livello_difficolta: editForm.livello_difficolta,
+        tenant_id: selectedTenant.tenant_id
+      });
+
+      setSuccess(`Esempio "${editForm.esempio_name}" aggiornato con successo!`);
+      setEditingExample(null);
+      loadExamples();
+
+    } catch (err) {
+      console.error('Errore aggiornamento esempio:', err);
+      setError(err instanceof Error ? err.message : 'Errore aggiornamento esempio');
     } finally {
       setLoading(false);
     }
@@ -342,109 +404,94 @@ const ExampleManager: React.FC<ExampleManagerProps> = ({ open }) => {
       {/* Lista esempi */}
       {selectedTenant && (
         <Box sx={{ mb: 3 }}>
+          {/* Empty state */}
           {examples.length === 0 && !loading ? (
-            <Card>
-              <CardContent sx={{ textAlign: 'center', py: 4 }}>
-                <Chat sx={{ fontSize: 48, color: 'text.secondary', mb: 2 }} />
-                <Typography variant="h6" color="text.secondary" gutterBottom>
-                  Nessun esempio trovato
-                </Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                  Crea il tuo primo esempio per iniziare
-                </Typography>
-                <Button
-                  variant="contained"
-                  startIcon={<Add />}
-                  onClick={() => setShowAddForm(true)}
-                >
-                  Crea Primo Esempio
-                </Button>
-              </CardContent>
-            </Card>
+            <Paper sx={{ p: 4, textAlign: 'center' }}>
+              <Chat sx={{ fontSize: 48, color: 'text.secondary', mb: 2 }} />
+              <Typography variant="h6" color="text.secondary" gutterBottom>
+                Nessun esempio configurato
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                Crea il primo esempio per abilitare il sistema di esempi dinamici
+              </Typography>
+              <Button variant="outlined" startIcon={<Add />} onClick={() => setShowAddForm(true)}>
+                Aggiungi Esempio
+              </Button>
+            </Paper>
           ) : (
-            examples.map((example) => (
-              <Box key={example.id} sx={{ position: 'relative', mb: 1, '&:hover .delete-button': { opacity: 1 } }}>
-                <Accordion sx={{ mb: 0 }}>
-                  <AccordionSummary 
-                    expandIcon={<ExpandMore />}
-                    sx={{ pr: 8 }} // Space for external button
-                  >
-                    <Box sx={{ display: 'flex', alignItems: 'center', width: '100%', gap: 2 }}>
-                      <Box sx={{ flex: 1 }}>
-                        <Typography variant="subtitle1" sx={{ fontWeight: 500 }}>
+            /* Grid di esempi stile ToolManager */
+            <Box sx={{ 
+              display: 'grid', 
+              gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', 
+              gap: 2 
+            }}>
+              {examples.map((example) => (
+                <Box key={example.id}>
+                  <Card sx={{ height: '100%' }}>
+                    <CardContent>
+                      {/* Header con nome e stato */}
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+                        <Typography variant="h6" component="h3">
                           {example.esempio_name}
                         </Typography>
-                        <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap' }}>
-                          <Chip 
-                            label={example.categoria || 'Nessuna categoria'} 
-                            size="small" 
-                            variant="outlined"
-                            color="primary"
-                          />
-                          <Chip 
-                            label={example.livello_difficolta} 
-                            size="small" 
-                            variant="outlined"
-                            color={
-                              example.livello_difficolta === 'FACILE' ? 'success' :
-                              example.livello_difficolta === 'MEDIO' ? 'warning' : 'error'
-                            }
-                          />
-                          <Chip 
-                            label={example.is_active ? 'Attivo' : 'Inattivo'} 
-                            size="small" 
-                            color={example.is_active ? 'success' : 'default'}
-                          />
-                        </Box>
+                        <Chip
+                          label={example.is_active ? 'Attivo' : 'Inattivo'}
+                          color={example.is_active ? 'success' : 'default'}
+                          size="small"
+                        />
                       </Box>
-                    </Box>
-                  </AccordionSummary>
-                  <AccordionDetails>
-                    <Box>
-                      {example.description && (
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                          {example.description}
-                        </Typography>
-                      )}
-                      <Typography variant="caption" color="text.secondary">
-                        Creato: {new Date(example.created_at).toLocaleString('it-IT')}
-                        {example.updated_at !== example.created_at && (
-                          <span> • Aggiornato: {new Date(example.updated_at).toLocaleString('it-IT')}</span>
-                        )}
+
+                      {/* Tipo esempio */}
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1, fontFamily: 'monospace' }}>
+                        {example.esempio_type}
                       </Typography>
-                    </Box>
-                  </AccordionDetails>
-                </Accordion>
-                
-                {/* Pulsante elimina posizionato FUORI dall'Accordion - NO HTML NESTING! */}
-                <Box
-                  className="delete-button"
-                  sx={{ 
-                    position: 'absolute',
-                    right: 48,
-                    top: 12,
-                    opacity: 0,
-                    transition: 'opacity 0.2s',
-                    zIndex: 10
-                  }}
-                >
-                  <Tooltip title="Elimina esempio">
-                    <IconButton
-                      size="small"
-                      color="error"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        e.preventDefault();
-                        deleteExample(example.id, example.esempio_name);
-                      }}
-                      sx={{ bgcolor: 'background.paper', boxShadow: 1 }}
-                    >
-                      <Delete />
-                    </IconButton>
-                  </Tooltip>
+
+                      {/* Descrizione */}
+                      <Typography variant="body2" sx={{ mb: 2 }}>
+                        {example.description || 'Nessuna descrizione'}
+                      </Typography>
+
+                      {/* Chip con categoria e difficoltà */}
+                      <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap' }}>
+                        <Chip 
+                          label={example.categoria || 'Nessuna categoria'} 
+                          size="small" 
+                          variant="outlined"
+                          color="primary"
+                        />
+                        <Chip 
+                          label={`Livello: ${example.livello_difficolta || 'N/A'}`} 
+                          size="small" 
+                          variant="outlined"
+                          color={
+                            example.livello_difficolta === 'FACILE' ? 'success' :
+                            example.livello_difficolta === 'MEDIO' ? 'warning' : 'error'
+                          }
+                        />
+                      </Box>
+
+                      {/* Data creazione */}
+                      <Typography variant="caption" color="text.secondary">
+                        Creato: {new Date(example.created_at).toLocaleDateString('it-IT')}
+                      </Typography>
+                    </CardContent>
+
+                    <CardActions>
+                      <Tooltip title="Modifica esempio">
+                        <IconButton onClick={() => startEditingExample(example)} size="small">
+                          <AutoFixHigh />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Elimina esempio">
+                        <IconButton onClick={() => deleteExample(example.id, example.esempio_name)} size="small" color="error">
+                          <Delete />
+                        </IconButton>
+                      </Tooltip>
+                    </CardActions>
+                  </Card>
                 </Box>
-              </Box>
-            ))
+              ))}
+            </Box>
           )}
         </Box>
       )}
@@ -535,6 +582,71 @@ const ExampleManager: React.FC<ExampleManagerProps> = ({ open }) => {
             startIcon={loading ? <CircularProgress size={16} /> : <Save />}
           >
             Crea Esempio
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Dialog per modifica esempio */}
+      <Dialog open={editingExample !== null} onClose={() => setEditingExample(null)} maxWidth="md" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <AutoFixHigh color="primary" />
+            Modifica Esempio: {editingExample?.esempio_name}
+          </Box>
+        </DialogTitle>
+        <DialogContent dividers>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <TextField
+              fullWidth
+              label="Nome Esempio"
+              value={editForm.esempio_name}
+              onChange={(e) => setEditForm(prev => ({ ...prev, esempio_name: e.target.value }))}
+              size="small"
+            />
+            
+            <TextField
+              fullWidth
+              label="Descrizione"
+              value={editForm.description}
+              onChange={(e) => setEditForm(prev => ({ ...prev, description: e.target.value }))}
+              size="small"
+              multiline
+              rows={2}
+            />
+            
+            <TextField
+              fullWidth
+              label="Categoria"
+              value={editForm.categoria}
+              onChange={(e) => setEditForm(prev => ({ ...prev, categoria: e.target.value }))}
+              size="small"
+            />
+            
+            <FormControl fullWidth size="small">
+              <InputLabel>Livello Difficoltà</InputLabel>
+              <Select
+                value={editForm.livello_difficolta}
+                onChange={(e) => setEditForm(prev => ({ ...prev, livello_difficolta: e.target.value }))}
+                label="Livello Difficoltà"
+              >
+                <MenuItem value="FACILE">Facile</MenuItem>
+                <MenuItem value="MEDIO">Medio</MenuItem>
+                <MenuItem value="DIFFICILE">Difficile</MenuItem>
+              </Select>
+            </FormControl>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditingExample(null)} disabled={loading}>
+            Annulla
+          </Button>
+          <Button
+            onClick={saveEditedExample}
+            variant="contained"
+            disabled={loading || !editForm.esempio_name.trim()}
+            startIcon={loading ? <CircularProgress size={20} /> : <Save />}
+          >
+            SALVA
           </Button>
         </DialogActions>
       </Dialog>

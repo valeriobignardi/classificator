@@ -419,6 +419,39 @@ class ApiService {
   }
 
   /**
+   * Aggiorna un esempio esistente
+   * @param exampleId ID dell'esempio da aggiornare
+   * @param data Dati dell'esempio da aggiornare
+   * Autore: Valerio Bignardi
+   * Data: 2025-08-30
+   */
+  async updateExample(exampleId: number, data: {
+    esempio_name: string;
+    description: string;
+    categoria: string;
+    livello_difficolta: string;
+    tenant_id: string;
+  }): Promise<any> {
+    console.log('🔍 [DEBUG] ApiService.updateExample() - Avvio richiesta');
+    console.log('🔍 [DEBUG] ID esempio:', exampleId);
+    console.log('🔍 [DEBUG] Dati:', data);
+    
+    const url = `${API_BASE_URL}/examples/${exampleId}`;
+    console.log('🔍 [DEBUG] URL chiamata:', url);
+
+    try {
+      const response = await axios.put(url, data);
+      console.log('✅ [DEBUG] Esempio aggiornato:', response.status);
+      console.log('✅ [DEBUG] Risultato:', response.data);
+      
+      return response.data;
+    } catch (error) {
+      console.error('❌ [DEBUG] Errore aggiornamento esempio:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Ottiene esempi formattati per il placeholder {{examples_text}}
    * @param tenantId ID del tenant
    * @param limit Numero massimo di esempi

@@ -940,7 +940,7 @@ Motivazione: Richiesta diretta di prenotazione"""
             
             query = """
             SELECT id, tenant_id, tenant_name, engine, prompt_type, prompt_name, 
-                   prompt_content, dynamic_variables, is_active, created_at, updated_at
+                   prompt_content, dynamic_variables, tools, is_active, created_at, updated_at
             FROM prompts 
             WHERE tenant_id = %s AND is_active = 1
             ORDER BY created_at DESC
@@ -952,6 +952,16 @@ Motivazione: Richiesta diretta di prenotazione"""
             
             prompts = []
             for row in results:
+                # Parsing dei tools da JSON
+                tools_data = []
+                if row[8]:  # tools field (index 8)
+                    try:
+                        tools_data = json.loads(row[8]) if isinstance(row[8], str) else row[8]
+                        if not isinstance(tools_data, list):
+                            tools_data = []
+                    except (json.JSONDecodeError, TypeError):
+                        tools_data = []
+                
                 prompts.append({
                     'id': row[0],
                     'tenant_id': row[1],
@@ -961,9 +971,10 @@ Motivazione: Richiesta diretta di prenotazione"""
                     'prompt_name': row[5],
                     'content': row[6],  # prompt_content
                     'variables': json.loads(row[7]) if row[7] else {},  # dynamic_variables
-                    'is_active': bool(row[8]),
-                    'created_at': row[9].isoformat() if row[9] else None,
-                    'updated_at': row[10].isoformat() if row[10] else None
+                    'tools': tools_data,  # tools array
+                    'is_active': bool(row[9]),  # shifted index
+                    'created_at': row[10].isoformat() if row[10] else None,  # shifted index
+                    'updated_at': row[11].isoformat() if row[11] else None  # shifted index
                 })
             
             self.logger.info(f"📋 Recuperati {len(prompts)} prompt per tenant {resolved_tenant_id}")
@@ -980,6 +991,7 @@ Motivazione: Richiesta diretta di prenotazione"""
                      content: str,
                      prompt_name: str = None,  # ✅ AGGIUNTO parametro
                      engine: str = 'LLM',      # ✅ AGGIUNTO parametro  
+                     tools: List[int] = None,  # ✅ AGGIUNTO parametro tools
                      variables: Dict[str, Any] = None,
                      is_active: bool = True) -> Optional[int]:
         """
@@ -990,6 +1002,9 @@ Motivazione: Richiesta diretta di prenotazione"""
             tenant_name: Nome del tenant
             prompt_type: Tipo di prompt specifico
             content: Contenuto del prompt
+            prompt_name: Nome identificativo del prompt
+            engine: Engine del prompt (LLM, ML, FINETUNING)
+            tools: Lista di ID tool associati al prompt
             variables: Variabili dinamiche (opzionale)
             is_active: Se il prompt è attivo
             
@@ -1003,11 +1018,12 @@ Motivazione: Richiesta diretta di prenotazione"""
             cursor = self.connection.cursor()
             
             query = """
-            INSERT INTO prompts (tenant_id, tenant_name, engine, prompt_type, prompt_name, prompt_content, dynamic_variables, is_active, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+            INSERT INTO prompts (tenant_id, tenant_name, engine, prompt_type, prompt_name, prompt_content, tools, dynamic_variables, is_active, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
             """
             
             variables_json = json.dumps(variables) if variables else '{}'
+            tools_json = json.dumps(tools) if tools else '[]'  # ✅ AGGIUNTO tools
             # Usa prompt_name se fornito, altrimenti genera automaticamente
             actual_prompt_name = prompt_name if prompt_name else f"{prompt_type}_prompt"
             # Usa engine fornito, altrimenti determina in base al prompt_type
@@ -1020,7 +1036,8 @@ Motivazione: Richiesta diretta di prenotazione"""
                 prompt_type,
                 actual_prompt_name,   # ✅ USA prompt_name fornito
                 content,  # prompt_content
-                variables_json,  # dynamic_variables
+                tools_json,           # ✅ AGGIUNTO tools field
+                variables_json,       # dynamic_variables
                 is_active
             ))
             
@@ -1113,6 +1130,7 @@ Motivazione: Richiesta diretta di prenotazione"""
     def update_prompt(self, 
                      prompt_id: int,
                      content: str = None,
+                     tools: List[int] = None,  # ✅ AGGIUNTO parametro tools
                      variables: Dict[str, Any] = None,
                      is_active: bool = None) -> bool:
         """
@@ -1121,6 +1139,7 @@ Motivazione: Richiesta diretta di prenotazione"""
         Args:
             prompt_id: ID del prompt da aggiornare
             content: Nuovo contenuto (opzionale)
+            tools: Nuova lista di ID tool (opzionale)
             variables: Nuove variabili (opzionale)
             is_active: Nuovo stato attivo (opzionale)
             
@@ -1140,6 +1159,10 @@ Motivazione: Richiesta diretta di prenotazione"""
             if content is not None:
                 updates.append("prompt_content = %s")
                 values.append(content)
+                
+            if tools is not None:  # ✅ AGGIUNTO tools update
+                updates.append("tools = %s")
+                values.append(json.dumps(tools))
                 
             if variables is not None:
                 updates.append("dynamic_variables = %s")

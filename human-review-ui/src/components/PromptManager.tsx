@@ -83,6 +83,7 @@ interface PromptManagerProps {
 const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
   const { selectedTenant } = useTenant();
   const [prompts, setPrompts] = useState<Prompt[]>([]);
+  const [tools, setTools] = useState<Tool[]>([]); // Tool disponibili per il tenant
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editingPrompt, setEditingPrompt] = useState<Prompt | null>(null);
@@ -94,7 +95,8 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
     engine: 'LLM',
     prompt_type: 'SYSTEM',
     prompt_name: '',
-    content: ''
+    content: '',
+    tools: [] as number[] // Array di ID tool selezionati
   });
   const [showAddForm, setShowAddForm] = useState(false);
 
@@ -135,6 +137,37 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
     }, [selectedTenant]);
 
   /**
+   * Carica tool disponibili per il tenant corrente
+   */
+  const loadTools = useCallback(async () => {
+    if (!selectedTenant?.tenant_id) {
+      setTools([]);
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/tools/tenant/${selectedTenant.tenant_id}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Errore HTTP: ${response.status}`);
+      }
+
+      const data = await response.json();
+      setTools(Array.isArray(data) ? data : []);
+      
+    } catch (err) {
+      console.error('Errore caricamento tool:', err);
+      // Non bloccare l'interfaccia se i tool non si caricano
+      setTools([]);
+    }
+  }, [selectedTenant]);
+
+  /**
    * Salva modifiche prompt esistente
    */
   const savePrompt = async (prompt: Prompt) => {
@@ -146,6 +179,7 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
         },
         body: JSON.stringify({
           content: prompt.content,
+          tools: prompt.tools,  // ✅ AGGIUNTO campo tools
           variables: prompt.variables,
           is_active: prompt.is_active
         }),
@@ -223,6 +257,7 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
           engine: newPrompt.engine,                 // ✅ AGGIUNTO campo mancante
           prompt_type: newPrompt.prompt_type,
           content: newPrompt.content,
+          tools: newPrompt.tools,                   // ✅ AGGIUNTO campo tools
           variables: {},
           is_active: true
         }),
@@ -236,7 +271,7 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
 
       await loadPrompts();
       setShowAddForm(false);
-      setNewPrompt({ engine: 'LLM', prompt_type: 'SYSTEM', prompt_name: '', content: '' });
+      setNewPrompt({ engine: 'LLM', prompt_type: 'SYSTEM', prompt_name: '', content: '', tools: [] });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Errore creazione');
     }
@@ -298,8 +333,9 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
   useEffect(() => {
     if (selectedTenant && open) {
       loadPrompts();
+      loadTools(); // Carica anche i tool disponibili
     }
-  }, [selectedTenant, open, loadPrompts]);
+  }, [selectedTenant, open, loadPrompts, loadTools]);
 
   if (!selectedTenant) {
     return (
@@ -392,6 +428,56 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
               sx={{ mb: 2 }}
               size="small"
             />
+
+            {/* Selezione Tool associati al prompt */}
+            <FormControl fullWidth sx={{ mb: 2 }}>
+              <InputLabel>Tool Associati</InputLabel>
+              <Select
+                multiple
+                value={newPrompt.tools}
+                onChange={(e) => {
+                  const value = e.target.value as number[];
+                  setNewPrompt(prev => ({ 
+                    ...prev, 
+                    tools: Array.isArray(value) ? value : []
+                  }));
+                }}
+                renderValue={(selected: number[]) => (
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                    {selected.map((toolId: number) => {
+                      const tool = tools.find(t => t.id === toolId);
+                      return (
+                        <Chip 
+                          key={toolId} 
+                          label={tool ? tool.display_name : `Tool ${toolId}`}
+                          size="small"
+                        />
+                      );
+                    })}
+                  </Box>
+                )}
+              >
+                {tools.map((tool) => (
+                  <MenuItem key={tool.id} value={tool.id}>
+                    <Box>
+                      <Typography variant="body2" fontWeight="bold">
+                        {tool.display_name}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {tool.tool_name} - {tool.description.substring(0, 80)}...
+                      </Typography>
+                    </Box>
+                  </MenuItem>
+                ))}
+                {tools.length === 0 && (
+                  <MenuItem disabled>
+                    <Typography variant="body2" color="text.secondary">
+                      Nessun tool disponibile per questo tenant
+                    </Typography>
+                  </MenuItem>
+                )}
+              </Select>
+            </FormControl>
 
             <TextField
               fullWidth
@@ -486,6 +572,30 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
                       Ultimo aggiornamento: {new Date(prompt.updated_at).toLocaleString('it-IT')}
                     </Typography>
                     
+                    {/* Visualizzazione Tool associati */}
+                    {prompt.tools && prompt.tools.length > 0 && (
+                      <Box sx={{ mb: 2 }}>
+                        <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                          Tool Associati:
+                        </Typography>
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                          {prompt.tools.map((toolId: number) => {
+                            const tool = tools.find(t => t.id === toolId);
+                            return (
+                              <Chip 
+                                key={toolId}
+                                label={tool ? tool.display_name : `Tool ID: ${toolId}`}
+                                size="small"
+                                color="primary"
+                                variant="outlined"
+                                title={tool ? `${tool.tool_name} - ${tool.description}` : undefined}
+                              />
+                            );
+                          })}
+                        </Box>
+                      </Box>
+                    )}
+                    
                     {editingPrompt?.id === prompt.id ? (
                       <Box>
                         <TextField
@@ -499,6 +609,49 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
                         rows={10}
                         sx={{ mb: 2 }}
                       />
+                      
+                      {/* Modifica Tool associati */}
+                      <FormControl fullWidth sx={{ mb: 2 }}>
+                        <InputLabel>Tool Associati</InputLabel>
+                        <Select
+                          multiple
+                          value={editingPrompt.tools || []}
+                          onChange={(e) => {
+                            const value = e.target.value as number[];
+                            setEditingPrompt(prev => prev ? { 
+                              ...prev, 
+                              tools: Array.isArray(value) ? value : []
+                            } : null);
+                          }}
+                          renderValue={(selected: number[]) => (
+                            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                              {selected.map((toolId: number) => {
+                                const tool = tools.find(t => t.id === toolId);
+                                return (
+                                  <Chip 
+                                    key={toolId} 
+                                    label={tool ? tool.display_name : `Tool ${toolId}`}
+                                    size="small"
+                                  />
+                                );
+                              })}
+                            </Box>
+                          )}
+                        >
+                          {tools.map((tool) => (
+                            <MenuItem key={tool.id} value={tool.id}>
+                              <Box>
+                                <Typography variant="body2" fontWeight="bold">
+                                  {tool.display_name}
+                                </Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                  {tool.tool_name} - {tool.description.substring(0, 80)}...
+                                </Typography>
+                              </Box>
+                            </MenuItem>
+                          ))}
+                        </Select>
+                      </FormControl>
                       <Box sx={{ display: 'flex', gap: 1 }}>
                         <Button
                           variant="contained"

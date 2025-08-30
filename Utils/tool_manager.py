@@ -196,7 +196,7 @@ class ToolManager:
             SELECT id, tool_name, display_name, description, function_schema, 
                    is_active, tenant_id, tenant_name, created_at, updated_at
             FROM tools 
-            WHERE id = %s
+            WHERE id = %s AND is_active = 1
             """
             
             cursor.execute(query, (tool_id,))

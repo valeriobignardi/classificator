@@ -4583,6 +4583,7 @@ def create_prompt():
             content=data['content'],
             prompt_name=data.get('prompt_name'),  # ✅ AGGIUNTO parametro
             engine=data.get('engine', 'LLM'),     # ✅ AGGIUNTO parametro
+            tools=data.get('tools', []),          # ✅ AGGIUNTO parametro tools
             variables=data.get('variables', {}),
             is_active=data.get('is_active', True)
         )
@@ -4735,6 +4736,7 @@ def update_prompt(prompt_id: int):
         success = prompt_manager.update_prompt(
             prompt_id=prompt_id,
             content=data.get('content'),
+            tools=data.get('tools'),      # ✅ AGGIUNTO parametro tools
             variables=data.get('variables'),
             is_active=data.get('is_active')
         )

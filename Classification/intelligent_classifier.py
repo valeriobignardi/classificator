@@ -2096,7 +2096,7 @@ Ragionamento: {ex["motivation"]}"""
                         
                         db_tool = self.tool_manager.get_tool_by_id(tool_id)
                         
-                        if db_tool and db_tool['is_active']:
+                        if db_tool:
                             # Costruisce il tool per Ollama/Mistral usando la struttura corretta
                             classification_tool = {
                                 "type": "function", 

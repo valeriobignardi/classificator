@@ -942,7 +942,7 @@ Motivazione: Richiesta diretta di prenotazione"""
             SELECT id, tenant_id, tenant_name, engine, prompt_type, prompt_name, 
                    prompt_content, dynamic_variables, is_active, created_at, updated_at
             FROM prompts 
-            WHERE tenant_id = %s
+            WHERE tenant_id = %s AND is_active = 1
             ORDER BY created_at DESC
             """
             
@@ -1212,14 +1212,20 @@ Motivazione: Richiesta diretta di prenotazione"""
             cursor.execute(query, (prompt_id,))
             
             if cursor.rowcount > 0:
+                # Prima recupera il contenuto del prompt per la history
+                content_query = "SELECT prompt_content FROM prompts WHERE id = %s"
+                cursor.execute(content_query, (prompt_id,))
+                content_result = cursor.fetchone()
+                old_content = content_result[0] if content_result else ""
+                
                 # Crea entry nella history per tracciare l'eliminazione
                 history_query = """
                 INSERT INTO prompt_history 
-                SELECT id, tenant_id, engine, prompt_type, prompt_name, 
-                       content, variables, FALSE, NOW() 
+                (prompt_id, tenant_id, old_content, new_content, change_type, change_reason, changed_by, changed_at)
+                SELECT %s, tenant_id, %s, '', 'DELETE', 'Soft delete via API', 'system', NOW()
                 FROM prompts WHERE id = %s
                 """
-                cursor.execute(history_query, (prompt_id,))
+                cursor.execute(history_query, (prompt_id, old_content, prompt_id))
                 
                 self.connection.commit()
                 cursor.close()

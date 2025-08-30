@@ -230,21 +230,34 @@ const PromptManager: React.FC<PromptManagerProps> = ({ open }) => {
    * Elimina prompt
    */
   const deletePrompt = async (promptId: number) => {
+    console.log('🗑️ deletePrompt called with ID:', promptId);
+    
     if (!window.confirm('Sei sicuro di voler eliminare questo prompt?')) {
+      console.log('❌ Eliminazione annullata dall\'utente');
       return;
     }
 
     try {
+      console.log('🌐 Making DELETE request to:', `/api/prompts/${promptId}`);
+      
       const response = await fetch(`/api/prompts/${promptId}`, {
         method: 'DELETE',
       });
 
+      console.log('📡 Response status:', response.status);
+      console.log('📡 Response ok:', response.ok);
+
       if (!response.ok) {
-        throw new Error(`Errore eliminazione: ${response.statusText}`);
+        const errorText = await response.text();
+        console.log('❌ Response error:', errorText);
+        throw new Error(`Errore eliminazione: ${response.status} - ${errorText}`);
       }
 
+      console.log('✅ Prompt eliminato con successo, ricaricando lista...');
       await loadPrompts();
+      
     } catch (err) {
+      console.error('❌ Errore eliminazione prompt:', err);
       setError(err instanceof Error ? err.message : 'Errore eliminazione');
     }
   };

@@ -201,7 +201,7 @@ def create_example():
         
         # Crea esempio
         esempio_id = prompt_manager.create_example(
-            tenant_id=tenant_id,
+            tenant_or_id=tenant_id,  # ✅ CORRETTO: parametro corretto
             esempio_name=esempio_name,
             esempio_content=esempio_content,
             engine=engine,
@@ -314,7 +314,7 @@ def delete_example(esempio_id: int):
         # Elimina esempio (soft delete)
         success = prompt_manager.delete_example(
             esempio_id=esempio_id,
-            tenant_id=tenant_id
+            tenant_or_id=tenant_id  # ✅ CORRETTO: parametro corretto
         )
         
         if success:

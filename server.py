@@ -2549,29 +2549,45 @@ def sync_tenants_from_remote():
 @app.route('/api/stats/tenants', methods=['GET'])
 def get_available_tenants():
     """
-    Ottieni lista di tutti i tenant disponibili nel database
+    Ottieni lista di tutti i tenant disponibili dalla tabella TAG.tenants
+    CORREZIONE FINALE: Usa la tabella corretta TAG.tenants
     """
     try:
         from TagDatabase.tag_database_connector import TagDatabaseConnector
-        tag_db = TagDatabaseConnector()
+        # Usa metodo bootstrap per query generali sui tenant
+        tag_db = TagDatabaseConnector.create_for_tenant_resolution()
         tag_db.connetti()
         
+        # CORREZIONE: Query diretta sulla tabella TAG.tenants
         query = """
-        SELECT DISTINCT tenant_name
-        FROM session_classifications 
-        WHERE tenant_name IS NOT NULL
+        SELECT tenant_name, tenant_slug, tenant_id
+        FROM TAG.tenants 
         ORDER BY tenant_name
         """
         
         results = tag_db.esegui_query(query)
         tag_db.disconnetti()
         
-        tenants = [row[0] for row in results] if results else []
+        # Formato tenant per il frontend React
+        tenants = []
+        if results:
+            for row in results:
+                tenant_name, tenant_slug, tenant_id = row
+                tenants.append({
+                    'name': tenant_name,
+                    'slug': tenant_slug,
+                    'id': tenant_id
+                })
+        
+        print(f"🔍 Trovati {len(tenants)} tenant da TAG.tenants:")
+        for tenant in tenants:
+            print(f"  - {tenant['name']} ({tenant['slug']}) -> {tenant['id']}")
         
         return jsonify({
             'success': True,
             'tenants': tenants,
-            'total': len(tenants)
+            'total': len(tenants),
+            'source': 'TAG.tenants'
         }), 200
         
     except Exception as e:
@@ -2581,7 +2597,7 @@ def get_available_tenants():
         }), 500
 
 @app.route('/api/stats/labels/<tenant_name>', methods=['GET'])
-def get_label_statistics(tenant_identifier: str):
+def get_label_statistics(tenant_name: str):
     """
     Ottieni statistiche delle etichette per un tenant specifico
     
@@ -2591,8 +2607,8 @@ def get_label_statistics(tenant_identifier: str):
         tenant_identifier: UUID del tenant
     """
     try:
-        # Risolve tenant_identifier in oggetto Tenant
-        tenant = resolve_tenant_from_identifier(tenant_identifier)
+        # Risolve tenant_name in oggetto Tenant
+        tenant = resolve_tenant_from_identifier(tenant_name)
         
         from TagDatabase.tag_database_connector import TagDatabaseConnector
         tag_db = TagDatabaseConnector(tenant=tenant)
@@ -2668,7 +2684,7 @@ def get_label_statistics(tenant_identifier: str):
         return jsonify({
             'success': False,
             'error': str(e),
-            'tenant': tenant.tenant_name if 'tenant' in locals() else tenant_identifier
+            'tenant': tenant.tenant_name if 'tenant' in locals() else tenant_name
         }), 500
 
 @app.route('/clients', methods=['GET'])

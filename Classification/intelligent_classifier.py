@@ -2040,71 +2040,79 @@ Ragionamento: {ex["motivation"]}"""
     
     def _call_ollama_api_structured(self, conversation_text: str) -> Dict[str, Any]:
         """
-        Nuova implementazione con Ollama Structured Outputs - elimina parsing manuale
+        IMPLEMENTAZIONE DEFINITIVA: Usa Function Tools di Ollama/Mistral
+        Elimina completamente il parsing manuale - Mistral restituisce JSON strutturato
         
         Args:
             conversation_text: Testo della conversazione da classificare
             
         Returns:
-            Dict con predicted_label, confidence, motivation (JSON garantito)
+            Dict con predicted_label, confidence, motivation (JSON garantito dalle function tools)
         """
-        # Schema JSON che garantisce la struttura della risposta con enum constraint
-        json_schema = {
-            "type": "object",
-            "properties": {
-                "predicted_label": {
-                    "type": "string",
-                    "enum": list(self.domain_labels) if self.domain_labels else ["altro"],  # 🔑 VINCOLO: Solo etichette valide
-                    "description": "L'etichetta di classificazione predetta dalle etichette disponibili"
-                },
-                "confidence": {
-                    "type": "number",
-                    "minimum": 0.0,
-                    "maximum": 1.0,
-                    "description": "Livello di confidenza della classificazione (0.0-1.0)"
-                },
-                "motivation": {
-                    "type": "string",
-                    "maxLength": 150,
-                    "description": "Breve spiegazione della classificazione in italiano (massimo 150 caratteri)"
+        # Definizione della function tool per classificazione
+        classification_tool = {
+            "type": "function",
+            "function": {
+                "name": "classify_conversation",
+                "description": "Classifica una conversazione medica in una categoria specifica",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "predicted_label": {
+                            "type": "string",
+                            "enum": list(self.domain_labels) if self.domain_labels else ["altro"],
+                            "description": "L'etichetta di classificazione dalla lista delle categorie disponibili"
+                        },
+                        "confidence": {
+                            "type": "number",
+                            "minimum": 0.0,
+                            "maximum": 1.0,
+                            "description": "Livello di confidenza della classificazione (0.0 = incerto, 1.0 = molto sicuro)"
+                        },
+                        "motivation": {
+                            "type": "string",
+                            "maxLength": 150,
+                            "description": "Breve spiegazione in italiano del motivo della classificazione (max 150 caratteri)"
+                        }
+                    },
+                    "required": ["predicted_label", "confidence", "motivation"]
                 }
-            },
-            "required": ["predicted_label", "confidence", "motivation"]
+            }
         }
         
-        # Costruisci il messaggio del sistema in italiano ottimizzato
-        system_prompt = f"""
+        # Messaggio di sistema ottimizzato per function calling
+        system_message = f"""
         Sei un classificatore esperto di conversazioni mediche per l'ospedale Humanitas.
         
-        Analizza la conversazione e classifica in UNA di queste categorie:
+        Le categorie disponibili sono:
         {', '.join(self.domain_labels) if self.domain_labels else 'altro'}
         
-        REGOLE OBBLIGATORIE:
-        - predicted_label: ESATTAMENTE una delle etichette elencate sopra
-        - confidence: numero tra 0.0 e 1.0 basato sulla chiarezza del contenuto
-        - motivation: spiegazione BREVE in ITALIANO (massimo 150 caratteri)
+        Analizza la conversazione fornita e usa la function classify_conversation per restituire:
+        - predicted_label: ESATTAMENTE una delle categorie elencate sopra
+        - confidence: valore da 0.0 a 1.0 basato sulla chiarezza del contenuto
+        - motivation: spiegazione breve e chiara in italiano (massimo 150 caratteri)
         
-        Rispondi SOLO con JSON valido, NIENTE altro testo.
+        DEVI SEMPRE usare la function classify_conversation per rispondere.
         """
         
-        # Payload per structured outputs con constraint enum
+        # Payload per function calling con Ollama/Mistral
         payload = {
             "model": self.model_name,
             "messages": [
                 {
                     "role": "system",
-                    "content": system_prompt
+                    "content": system_message
                 },
                 {
                     "role": "user", 
-                    "content": f"Classifica questa conversazione:\n\n{conversation_text}"
+                    "content": f"Classifica questa conversazione medica:\n\n{conversation_text}"
                 }
             ],
+            "tools": [classification_tool],  # 🔑 FUNCTION TOOLS invece di format
             "stream": False,
-            "format": json_schema,  # 🔑 SCHEMA OBBLIGATORIO - elimina parsing manuale!
             "options": {
-                "temperature": 0.01,  # Molto deterministico
-                "num_predict": 200,   # Spazio per JSON completo
+                "temperature": 0.01,  # Molto deterministico per function calling
+                "num_predict": 200,   # Sufficiente per function call
                 "top_p": 0.8,
                 "top_k": 20
             }
@@ -2112,7 +2120,7 @@ Ragionamento: {ex["motivation"]}"""
         
         try:
             response = self.session.post(
-                f"{self.ollama_url}/api/chat",  # 🔑 USA /api/chat per structured outputs
+                f"{self.ollama_url}/api/chat",  # Usa /api/chat per function tools
                 json=payload,
                 timeout=self.timeout
             )
@@ -2120,22 +2128,64 @@ Ragionamento: {ex["motivation"]}"""
             response.raise_for_status()
             result = response.json()
             
-            if 'message' not in result or 'content' not in result['message']:
-                raise ValueError(f"Risposta API Ollama malformata: {result}")
+            # Verifica la struttura della risposta di function calling
+            if 'message' not in result:
+                raise ValueError(f"Risposta API Ollama malformata: manca 'message'")
+                
+            message = result['message']
             
-            # Il JSON è già valido grazie allo schema!
-            json_response = json.loads(result['message']['content'])
+            # Controlla se il modello ha fatto una function call
+            if 'tool_calls' in message and message['tool_calls']:
+                tool_call = message['tool_calls'][0]  # Prima function call
+                
+                if (tool_call.get('function', {}).get('name') == 'classify_conversation' and 
+                    'arguments' in tool_call['function']):
+                    
+                    # Estrai gli argomenti della function call
+                    arguments = tool_call['function']['arguments']
+                    
+                    # Se arguments è una stringa, parsala come JSON
+                    if isinstance(arguments, str):
+                        arguments = json.loads(arguments)
+                    
+                    # Valida che abbiamo tutti i campi richiesti
+                    if all(key in arguments for key in ['predicted_label', 'confidence', 'motivation']):
+                        self.logger.info(f"✅ Function call classificazione ricevuta: {arguments}")
+                        return arguments
+                    else:
+                        raise ValueError(f"Function call incompleta: mancano campi richiesti in {arguments}")
+                else:
+                    raise ValueError(f"Function call non riconosciuta: {tool_call}")
             
-            self.logger.info(f"✅ Structured Output ricevuto: {json_response}")
-            return json_response
-            
-        except (requests.RequestException, json.JSONDecodeError, KeyError) as e:
-            self.logger.error(f"❌ Errore Ollama Structured API: {e}")
-            # Fallback solo per errori di connessione, non di parsing
+            # Se non c'è function call, prova a parsare il contenuto come fallback
+            elif 'content' in message:
+                content = message['content'].strip()
+                self.logger.warning(f"⚠️ Modello non ha usato function call, tento parsing contenuto: {content[:100]}...")
+                
+                # Fallback: prova a parsare come JSON
+                try:
+                    parsed_content = json.loads(content)
+                    if all(key in parsed_content for key in ['predicted_label', 'confidence', 'motivation']):
+                        return parsed_content
+                except json.JSONDecodeError:
+                    pass
+                
+                # Fallback estremo
+                return {
+                    "predicted_label": "altro",
+                    "confidence": 0.2,
+                    "motivation": f"Risposta non strutturata: {content[:100]}"
+                }
+            else:
+                raise ValueError("Risposta senza tool_calls né content")
+                
+        except (requests.RequestException, json.JSONDecodeError, KeyError, ValueError) as e:
+            self.logger.error(f"❌ Errore Ollama Function Tools API: {e}")
+            # Fallback per errori di connessione/parsing
             return {
                 "predicted_label": "altro",
                 "confidence": 0.1,
-                "motivation": f"Errore tecnico API: {str(e)[:100]}"
+                "motivation": f"Errore API: {str(e)[:100]}"
             }
 
     def _call_ollama_api(self, prompt: str) -> str:
@@ -2806,6 +2856,27 @@ Ragionamento: {ex["motivation"]}"""
             
             if success:
                 self.logger.debug(f"💾 Classificazione salvata in MongoDB: {session_id[:8]}/{tenant_id}")
+                
+                # AGGIUNTA: Salva anche il tag scoperto nella tabella MySQL tags
+                # Questo risolve il problema dei tag non visibili nel frontend
+                try:
+                    tag_description = f"Tag generato automaticamente durante classificazione (metodo: {result.method})"
+                    tag_saved = self._add_new_validated_label(
+                        tag_name=result.predicted_label,
+                        tag_description=tag_description, 
+                        confidence=result.confidence,
+                        validation_method=result.method
+                    )
+                    
+                    if tag_saved:
+                        self.logger.debug(f"🏷️ Tag '{result.predicted_label}' aggiunto alla tabella tags per frontend")
+                    else:
+                        self.logger.debug(f"🏷️ Tag '{result.predicted_label}' già esistente nella tabella tags")
+                        
+                except Exception as tag_error:
+                    self.logger.warning(f"⚠️ Errore salvataggio tag '{result.predicted_label}' in tabella MySQL: {tag_error}")
+                    # Non blocca il flusso principale, è solo per il frontend
+                    
             else:
                 self.logger.warning(f"⚠️ Errore salvataggio MongoDB per tenant {tenant_id}")
                 

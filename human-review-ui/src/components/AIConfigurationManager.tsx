@@ -36,7 +36,9 @@ import {
   DialogContent,
   DialogActions,
   Tooltip,
-  IconButton
+  IconButton,
+  Tabs,
+  Tab
 } from '@mui/material';
 import {
   ExpandMore as ExpandMoreIcon,
@@ -50,10 +52,12 @@ import {
   BugReport as BugReportIcon,
   Computer as ComputerIcon,
   Storage as StorageIcon,
-  Star as StarIcon
+  Star as StarIcon,
+  Tune as TuneIcon
 } from '@mui/icons-material';
 import { useTenant } from '../contexts/TenantContext';
 import { apiService } from '../services/apiService';
+import LLMConfigurationPage from './LLMConfigurationPage';
 
 interface EmbeddingEngine {
   name: string;
@@ -139,6 +143,9 @@ interface DebugInfo {
 const AIConfigurationManager: React.FC<{ open: boolean }> = ({ open }) => {
   const { selectedTenant } = useTenant();
   const tenantId = selectedTenant?.tenant_id;
+
+  // Stati per tab management
+  const [currentTab, setCurrentTab] = useState(0);
 
   // Stati per embedding engines
   const [embeddingEngines, setEmbeddingEngines] = useState<Record<string, EmbeddingEngine>>({});
@@ -406,259 +413,298 @@ const AIConfigurationManager: React.FC<{ open: boolean }> = ({ open }) => {
         </Box>
       </Box>
 
-            {/* Status generale */}
-      {configuration && !loading && !embeddingEngineLoading && !llmModelLoading && (
-        <Alert
-          severity={getStatusConfig(configuration.status?.overall_status || 'ok').color}
-          icon={getStatusConfig(configuration.status?.overall_status || 'ok').icon}
-          sx={{ mb: 3 }}
+      {/* Tab Navigation */}
+      <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
+        <Tabs 
+          value={currentTab} 
+          onChange={(e, newValue) => setCurrentTab(newValue)}
+          aria-label="AI configuration tabs"
         >
-          <strong>Stato Configurazione:</strong> {getStatusConfig(configuration.status?.overall_status || 'ok').label}
-          <br />
-          <Typography variant="body2" sx={{ mt: 1 }}>
-            Embedding Engine: {configuration.status?.embedding_engine_ok ? '✅' : '❌'} | 
-            Modello LLM: {configuration.status?.llm_model_ok ? '✅' : '❌'}
-          </Typography>
-        </Alert>
-      )}
+          <Tab 
+            icon={<SettingsIcon />}
+            label="Configurazione Base" 
+            iconPosition="start"
+          />
+          <Tab 
+            icon={<TuneIcon />}
+            label="Configurazione Avanzata LLM" 
+            iconPosition="start"
+          />
+        </Tabs>
+      </Box>
 
-      {/* Indicatore caricamento configurazione */}
-      {(loading || embeddingEngineLoading || llmModelLoading) && (
-        <Alert severity="info" sx={{ mb: 3 }}>
-          <Box display="flex" alignItems="center" gap={1}>
-            <CircularProgress size={16} />
-            <Typography>
-              Caricamento configurazione AI in corso...
-            </Typography>
-          </Box>
-        </Alert>
-      )}
-
-      {/* Alerts */}
-      {error && (
-        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
-          {error}
-        </Alert>
-      )}
-      {success && (
-        <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess(null)}>
-          {success}
-        </Alert>
-      )}
-
-      {loading && (
-        <Box display="flex" justifyContent="center" my={3}>
-          <CircularProgress />
-        </Box>
-      )}
-
-      <Stack spacing={3} direction={{ xs: 'column', md: 'row' }}>
-        {/* Sezione Embedding Engines */}
-        <Box sx={{ flex: 1 }}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                <MemoryIcon color="primary" />
-                Motore di Embedding
+      {/* Tab Panel 0: Configurazione Base (Existing) */}
+      {currentTab === 0 && (
+        <Box>
+          {/* Status generale */}
+          {configuration && !loading && !embeddingEngineLoading && !llmModelLoading && (
+            <Alert
+              severity={getStatusConfig(configuration.status?.overall_status || 'ok').color}
+              icon={getStatusConfig(configuration.status?.overall_status || 'ok').icon}
+              sx={{ mb: 3 }}
+            >
+              <strong>Stato Configurazione:</strong> {getStatusConfig(configuration.status?.overall_status || 'ok').label}
+              <br />
+              <Typography variant="body2" sx={{ mt: 1 }}>
+                Embedding Engine: {configuration.status?.embedding_engine_ok ? '✅' : '❌'} | 
+                Modello LLM: {configuration.status?.llm_model_ok ? '✅' : '❌'}
               </Typography>
+            </Alert>
+          )}
 
-              {configuration && (
-                <Alert severity="info" sx={{ mb: 2 }}>
-                  <strong>Attualmente in uso:</strong> {configuration.embedding_engine?.current || 'N/A'}
-                </Alert>
-              )}
+          {/* Indicatore caricamento configurazione */}
+          {(loading || embeddingEngineLoading || llmModelLoading) && (
+            <Alert severity="info" sx={{ mb: 3 }}>
+              <Box display="flex" alignItems="center" gap={1}>
+                <CircularProgress size={16} />
+                <Typography>
+                  Caricamento configurazione AI in corso...
+                </Typography>
+              </Box>
+            </Alert>
+          )}
 
-              <FormControl fullWidth sx={{ mb: 2 }}>
-                <InputLabel>Seleziona Embedding Engine</InputLabel>
-                <Select
-                  value={selectedEmbeddingEngine && embeddingEngines[selectedEmbeddingEngine] ? selectedEmbeddingEngine : ''}
-                  onChange={(e) => setSelectedEmbeddingEngine(e.target.value)}
-                  disabled={embeddingEngineLoading}
-                >
-                  {Object.entries(embeddingEngines || {}).map(([key, engine]) => (
-                    <MenuItem key={key} value={key} disabled={!engine.available}>
-                      {engine.name} {!engine.available && ' (Non disponibile)'}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+          {/* Alerts */}
+          {error && (
+            <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
+              {error}
+            </Alert>
+          )}
+          {success && (
+            <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess(null)}>
+              {success}
+            </Alert>
+          )}
 
-              {selectedEmbeddingEngine && embeddingEngines && embeddingEngines[selectedEmbeddingEngine] && (
-                <Box sx={{ mb: 2 }}>
-                  <Typography variant="subtitle2" gutterBottom>
-                    {embeddingEngines[selectedEmbeddingEngine].name}
+          {loading && (
+            <Box display="flex" justifyContent="center" my={3}>
+              <CircularProgress />
+            </Box>
+          )}
+
+          <Stack spacing={3} direction={{ xs: 'column', md: 'row' }}>
+            {/* Sezione Embedding Engines */}
+            <Box sx={{ flex: 1 }}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                    <MemoryIcon color="primary" />
+                    Motore di Embedding
                   </Typography>
-                  <Typography variant="body2" color="textSecondary" gutterBottom>
-                    {embeddingEngines[selectedEmbeddingEngine].description}
-                  </Typography>
-                  
-                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', my: 1 }}>
-                    {renderAvailabilityStatus(
-                      embeddingEngines[selectedEmbeddingEngine].available,
-                      embeddingEngines[selectedEmbeddingEngine].requirements
-                    )}
-                    <Chip label={`${embeddingEngines[selectedEmbeddingEngine].embedding_dim}D`} size="small" />
-                    <Chip 
-                      icon={embeddingEngines[selectedEmbeddingEngine].supports_gpu ? <ComputerIcon /> : <StorageIcon />}
-                      label={embeddingEngines[selectedEmbeddingEngine].provider} 
-                      size="small" 
-                    />
-                  </Box>
 
-                  <Accordion sx={{ mt: 2 }}>
-                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                      <Typography variant="body2">Dettagli Tecnici</Typography>
-                    </AccordionSummary>
-                    <AccordionDetails>
-                      <Stack direction="row" spacing={2}>
-                        <Box sx={{ flex: 1 }}>
-                          <Typography variant="subtitle2" color="success.main">Pro:</Typography>
-                          <List dense>
-                            {(embeddingEngines[selectedEmbeddingEngine].pros || []).map((pro, idx) => (
-                              <ListItem key={idx} sx={{ py: 0 }}>
-                                <ListItemIcon sx={{ minWidth: 20 }}>
-                                  <CheckCircleIcon color="success" fontSize="small" />
-                                </ListItemIcon>
-                                <ListItemText primary={pro} />
-                              </ListItem>
-                            ))}
-                          </List>
-                        </Box>
-                        <Box sx={{ flex: 1 }}>
-                          <Typography variant="subtitle2" color="warning.main">Contro:</Typography>
-                          <List dense>
-                            {(embeddingEngines[selectedEmbeddingEngine].cons || []).map((con, idx) => (
-                              <ListItem key={idx} sx={{ py: 0 }}>
-                                <ListItemIcon sx={{ minWidth: 20 }}>
-                                  <WarningIcon color="warning" fontSize="small" />
-                                </ListItemIcon>
-                                <ListItemText primary={con} />
-                              </ListItem>
-                            ))}
-                          </List>
-                        </Box>
-                      </Stack>
-                    </AccordionDetails>
-                  </Accordion>
-                </Box>
-              )}
+                  {configuration && (
+                    <Alert severity="info" sx={{ mb: 2 }}>
+                      <strong>Attualmente in uso:</strong> {configuration.embedding_engine?.current || 'N/A'}
+                    </Alert>
+                  )}
 
-              <Button
-                variant="contained"
-                fullWidth
-                onClick={() => handleSetEmbeddingEngine(selectedEmbeddingEngine)}
-                disabled={
-                  !selectedEmbeddingEngine || 
-                  embeddingEngineLoading || 
-                  !embeddingEngines || 
-                  !embeddingEngines[selectedEmbeddingEngine]?.available ||
-                  (configuration ? selectedEmbeddingEngine === configuration.embedding_engine?.current : false)
-                }
-                startIcon={embeddingEngineLoading ? <CircularProgress size={20} /> : <SettingsIcon />}
-              >
-                {embeddingEngineLoading ? 'Configurando...' : 'Applica Embedding Engine'}
-              </Button>
-            </CardContent>
-          </Card>
-        </Box>
+                  <FormControl fullWidth sx={{ mb: 2 }}>
+                    <InputLabel>Seleziona Embedding Engine</InputLabel>
+                    <Select
+                      value={selectedEmbeddingEngine && embeddingEngines[selectedEmbeddingEngine] ? selectedEmbeddingEngine : ''}
+                      onChange={(e) => setSelectedEmbeddingEngine(e.target.value)}
+                      disabled={embeddingEngineLoading}
+                    >
+                      {Object.entries(embeddingEngines || {}).map(([key, engine]) => (
+                        <MenuItem key={key} value={key} disabled={!engine.available}>
+                          {engine.name} {!engine.available && ' (Non disponibile)'}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
 
-        {/* Sezione Modelli LLM */}
-        <Box sx={{ flex: 1 }}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                <PsychologyIcon color="primary" />
-                Modello LLM
-              </Typography>
+                  {selectedEmbeddingEngine && embeddingEngines && embeddingEngines[selectedEmbeddingEngine] && (
+                    <Box sx={{ mb: 2 }}>
+                      <Typography variant="subtitle2" gutterBottom>
+                        {embeddingEngines[selectedEmbeddingEngine].name}
+                      </Typography>
+                      <Typography variant="body2" color="textSecondary" gutterBottom>
+                        {embeddingEngines[selectedEmbeddingEngine].description}
+                      </Typography>
+                      
+                      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', my: 1 }}>
+                        {renderAvailabilityStatus(
+                          embeddingEngines[selectedEmbeddingEngine].available,
+                          embeddingEngines[selectedEmbeddingEngine].requirements
+                        )}
+                        <Chip label={`${embeddingEngines[selectedEmbeddingEngine].embedding_dim}D`} size="small" />
+                        <Chip 
+                          icon={embeddingEngines[selectedEmbeddingEngine].supports_gpu ? <ComputerIcon /> : <StorageIcon />}
+                          label={embeddingEngines[selectedEmbeddingEngine].provider} 
+                          size="small" 
+                        />
+                      </Box>
 
-              {configuration && (
-                <Alert severity="info" sx={{ mb: 2 }}>
-                  <strong>Attualmente in uso:</strong> {configuration.llm_model?.current || 'N/A'}
-                </Alert>
-              )}
+                      <Accordion sx={{ mt: 2 }}>
+                        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                          <Typography variant="body2">Dettagli Tecnici</Typography>
+                        </AccordionSummary>
+                        <AccordionDetails>
+                          <Stack direction="row" spacing={2}>
+                            <Box sx={{ flex: 1 }}>
+                              <Typography variant="subtitle2" color="success.main">Pro:</Typography>
+                              <List dense>
+                                {(embeddingEngines[selectedEmbeddingEngine].pros || []).map((pro, idx) => (
+                                  <ListItem key={idx} sx={{ py: 0 }}>
+                                    <ListItemIcon sx={{ minWidth: 20 }}>
+                                      <CheckCircleIcon color="success" fontSize="small" />
+                                    </ListItemIcon>
+                                    <ListItemText primary={pro} />
+                                  </ListItem>
+                                ))}
+                              </List>
+                            </Box>
+                            <Box sx={{ flex: 1 }}>
+                              <Typography variant="subtitle2" color="warning.main">Contro:</Typography>
+                              <List dense>
+                                {(embeddingEngines[selectedEmbeddingEngine].cons || []).map((con, idx) => (
+                                  <ListItem key={idx} sx={{ py: 0 }}>
+                                    <ListItemIcon sx={{ minWidth: 20 }}>
+                                      <WarningIcon color="warning" fontSize="small" />
+                                    </ListItemIcon>
+                                    <ListItemText primary={con} />
+                                  </ListItem>
+                                ))}
+                              </List>
+                            </Box>
+                          </Stack>
+                        </AccordionDetails>
+                      </Accordion>
+                    </Box>
+                  )}
 
-              {/* Status Ollama */}
-              {llmModels && (
-                <Box sx={{ mb: 2 }}>
-                  <Typography variant="body2" component="span">
-                    <strong>Stato Ollama:</strong> {
-                      llmModels.models?.ollama_status?.connected ? 
-                      <Chip icon={<CheckCircleIcon />} label="Connesso" color="success" size="small" /> :
-                      <Chip icon={<ErrorIcon />} label="Disconnesso" color="error" size="small" />
+                  <Button
+                    variant="contained"
+                    fullWidth
+                    onClick={() => handleSetEmbeddingEngine(selectedEmbeddingEngine)}
+                    disabled={
+                      !selectedEmbeddingEngine || 
+                      embeddingEngineLoading || 
+                      !embeddingEngines || 
+                      !embeddingEngines[selectedEmbeddingEngine]?.available ||
+                      (configuration ? selectedEmbeddingEngine === configuration.embedding_engine?.current : false)
                     }
+                    startIcon={embeddingEngineLoading ? <CircularProgress size={20} /> : <SettingsIcon />}
+                  >
+                    {embeddingEngineLoading ? 'Configurando...' : 'Applica Embedding Engine'}
+                  </Button>
+                </CardContent>
+              </Card>
+            </Box>
+
+            {/* Sezione Modelli LLM */}
+            <Box sx={{ flex: 1 }}>
+              <Card>
+                <CardContent>
+                  <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                    <PsychologyIcon color="primary" />
+                    Modello LLM
                   </Typography>
-                  {llmModels.models?.ollama_status?.models_count && (
-                    <Typography variant="body2" color="textSecondary" component="div" sx={{ mt: 0.5 }}>
-                      {llmModels.models.ollama_status.models_count} modelli installati
-                    </Typography>
+
+                  {configuration && (
+                    <Alert severity="info" sx={{ mb: 2 }}>
+                      <strong>Attualmente in uso:</strong> {configuration.llm_model?.current || 'N/A'}
+                    </Alert>
                   )}
-                </Box>
-              )}
 
-              <FormControl fullWidth sx={{ mb: 2 }}>
-                <InputLabel>Seleziona Modello LLM</InputLabel>
-                <Select
-                  value={selectedLlmModel && llmModels?.models?.ollama_available?.some((model: LLMModel) => model.name === selectedLlmModel) ? selectedLlmModel : ''}
-                  onChange={(e) => setSelectedLlmModel(e.target.value)}
-                  disabled={llmModelLoading || !llmModels?.models?.ollama_status?.connected}
-                >
-                  {/* Modelli raccomandati */}
-                  {(llmModels?.models?.ollama_recommended || []).map((model: LLMModel) => (
-                    <MenuItem key={model.name} value={model.name}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        {model.recommended && <StarIcon color="warning" fontSize="small" />}
-                        {model.name} - {model.description}
-                        <Chip label={model.category} size="small" />
-                      </Box>
-                    </MenuItem>
-                  ))}
-                  
-                  {/* Separatore se ci sono modelli installati */}
-                  {(llmModels?.models?.ollama_available || []).length > 0 && (
-                    <MenuItem disabled>
-                      <Divider />
-                      Modelli Installati
-                    </MenuItem>
+                  {/* Status Ollama */}
+                  {llmModels && (
+                    <Box sx={{ mb: 2 }}>
+                      <Typography variant="body2" component="span">
+                        <strong>Stato Ollama:</strong> {
+                          llmModels.models?.ollama_status?.connected ? 
+                          <Chip icon={<CheckCircleIcon />} label="Connesso" color="success" size="small" /> :
+                          <Chip icon={<ErrorIcon />} label="Disconnesso" color="error" size="small" />
+                        }
+                      </Typography>
+                      {llmModels.models?.ollama_status?.models_count && (
+                        <Typography variant="body2" color="textSecondary" component="div" sx={{ mt: 0.5 }}>
+                          {llmModels.models.ollama_status.models_count} modelli installati
+                        </Typography>
+                      )}
+                    </Box>
                   )}
-                  
-                  {/* Modelli effettivamente installati */}
-                  {(llmModels?.models?.ollama_available || []).map((model: LLMModel) => (
-                    <MenuItem key={model.name} value={model.name}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <CheckCircleIcon color="success" fontSize="small" />
-                        {model.name}
-                        <Chip label={model.size} size="small" />
-                        <Chip label={model.category} size="small" />
-                      </Box>
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
 
-              {selectedLlmModel && (
-                <Alert severity="success" sx={{ mb: 2 }}>
-                  Modello selezionato: <strong>{selectedLlmModel}</strong>
-                </Alert>
-              )}
+                  <FormControl fullWidth sx={{ mb: 2 }}>
+                    <InputLabel>Seleziona Modello LLM</InputLabel>
+                    <Select
+                      value={selectedLlmModel && llmModels?.models?.ollama_available?.some((model: LLMModel) => model.name === selectedLlmModel) ? selectedLlmModel : ''}
+                      onChange={(e) => setSelectedLlmModel(e.target.value)}
+                      disabled={llmModelLoading || !llmModels?.models?.ollama_status?.connected}
+                    >
+                      {/* Modelli raccomandati */}
+                      {(llmModels?.models?.ollama_recommended || []).map((model: LLMModel) => (
+                        <MenuItem key={model.name} value={model.name}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            {model.recommended && <StarIcon color="warning" fontSize="small" />}
+                            {model.name} - {model.description}
+                            <Chip label={model.category} size="small" />
+                          </Box>
+                        </MenuItem>
+                      ))}
+                      
+                      {/* Separatore se ci sono modelli installati */}
+                      {(llmModels?.models?.ollama_available || []).length > 0 && (
+                        <MenuItem disabled>
+                          <Divider />
+                          Modelli Installati
+                        </MenuItem>
+                      )}
+                      
+                      {/* Modelli effettivamente installati */}
+                      {(llmModels?.models?.ollama_available || []).map((model: LLMModel) => (
+                        <MenuItem key={model.name} value={model.name}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <CheckCircleIcon color="success" fontSize="small" />
+                            {model.name}
+                            <Chip label={model.size} size="small" />
+                            <Chip label={model.category} size="small" />
+                          </Box>
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
 
-              <Button
-                variant="contained"
-                fullWidth
-                onClick={() => handleSetLlmModel(selectedLlmModel)}
-                disabled={
-                  !selectedLlmModel || 
-                  llmModelLoading || 
-                  !llmModels?.models?.ollama_status?.connected ||
-                  (configuration ? selectedLlmModel === configuration.llm_model?.current : false)
-                }
-                startIcon={llmModelLoading ? <CircularProgress size={20} /> : <SettingsIcon />}
-              >
-                {llmModelLoading ? 'Configurando...' : 'Applica Modello LLM'}
-              </Button>
-            </CardContent>
-          </Card>
+                  {selectedLlmModel && (
+                    <Alert severity="success" sx={{ mb: 2 }}>
+                      Modello selezionato: <strong>{selectedLlmModel}</strong>
+                    </Alert>
+                  )}
+
+                  <Button
+                    variant="contained"
+                    fullWidth
+                    onClick={() => handleSetLlmModel(selectedLlmModel)}
+                    disabled={
+                      !selectedLlmModel || 
+                      llmModelLoading || 
+                      !llmModels?.models?.ollama_status?.connected ||
+                      (configuration ? selectedLlmModel === configuration.llm_model?.current : false)
+                    }
+                    startIcon={llmModelLoading ? <CircularProgress size={20} /> : <SettingsIcon />}
+                  >
+                    {llmModelLoading ? 'Configurando...' : 'Applica Modello LLM'}
+                  </Button>
+                </CardContent>
+              </Card>
+            </Box>
+          </Stack>
         </Box>
-      </Stack>
+      )}
+
+      {/* Tab Panel 1: Configurazione Avanzata LLM */}
+      {currentTab === 1 && tenantId && (
+        <Box>
+          <LLMConfigurationPage 
+            tenantId={tenantId}
+            onConfigurationChange={(config) => {
+              console.log('Configurazione LLM cambiata:', config);
+              // Ricarica la configurazione base se necessario
+              loadConfiguration();
+            }}
+          />
+        </Box>
+      )}
 
       {/* Dialog Debug */}
       <Dialog 

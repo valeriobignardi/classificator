@@ -1,34 +1,95 @@
 # Piano di Refactoring: Separazione Parametri Token e UI Dinamica
 
 **Autore:** Valerio Bignardi  
-**Data creazione:** 31 Agos## FASE 2: Implementazione API Layer
+**Data creazione:** 31 Agosto 2025
+**Ultima modifica:** 31 Agosto 2025
+
+**Obiettivo:** Separare i parametri di tokenizzazione per embedding e LLM, implementare UI dinamica per configurazione parametri LLM per tenant
+
+---
+
+## **✅ FASI COMPLETATE**
+
+## FASE 1: Separazione Configurazione Backend ✅ COMPLETATA
+
+### FASE 1.1: Separazione Config.yaml ✅ COMPLETATA
+- ✅ COMPLETATA: Separazione embedding.tokenization vs llm.tokenization
+- ✅ COMPLETATA: Struttura tenant_configs per personalizzazioni
+- ✅ COMPLETATA: Definizioni dettagliate modelli con limiti e capabilities
+- ✅ COMPLETATA: Backward compatibility con configurazioni esistenti
+
+### FASE 1.2: TokenizationManager ✅ COMPLETATA  
+- ✅ COMPLETATA: Metodo load_llm_tokenization_config per tenant
+- ✅ COMPLETATA: Backward compatibility in _load_config
+- ✅ COMPLETATA: Gestione separata embedding vs LLM tokenization
+
+### FASE 1.3: Embedding Engines ✅ COMPLETATA
+- ✅ COMPLETATA: Compatibilità automatica via TokenizationManager aggiornato
+
+### FASE 1.4: IntelligentClassifier ✅ COMPLETATA
+- ✅ COMPLETATA: Metodo load_tenant_llm_config per caricamento tenant-specific
+- ✅ COMPLETATA: Integrazione con TokenizationManager per parametri LLM
+- ✅ COMPLETATA: Fallback logic con parametri globali
+
+## FASE 2: Implementazione API Layer ✅ COMPLETATA
 
 ### FASE 2.1: API Endpoints per Gestione LLM ✅ COMPLETATA
 - ✅ COMPLETATA: GET /api/llm/models/<tenant_id> - Lista modelli disponibili
-- ✅ COMPLETATA: GET /api/llm/parameters/<tenant_id> - Parametri attuali tenant
+- ✅ COMPLETATA: GET /api/llm/parameters/<tenant_id> - Parametri attuali tenant  
 - ✅ COMPLETATA: PUT /api/llm/parameters/<tenant_id> - Aggiorna parametri tenant
 - ✅ COMPLETATA: GET /api/llm/model-info/<model_name> - Info modello specifico
 - ✅ COMPLETATA: POST /api/llm/validate-parameters - Validazione parametri
 - ✅ COMPLETATA: POST /api/llm/reset-parameters/<tenant_id> - Reset parametri
-- ✅ COMPLETATA: POST /api/llm/test-model/<tenant_id> - Test modello con parametri
-- ✅ COMPLETATA: Funzione validate_llm_parameters per controlli specifici per modello
-- ✅ COMPLETATA: Gestione errori e logging per tutte le API
-- ✅ COMPLETATA: Integrazione con IntelligentClassifier per caricamento tenant config*Obiettivo:** Separare i parametri di tokenizzazione per embedding e LLM, implementare UI dinamica per configurazione parametri LLM per tenant
+- ✅ COMPLETATA: GET /api/llm/tenants - Lista tenant con config personalizzate
+- ✅ TESTATA: Tutte le API funzionanti e validate con test completi
+
+### FASE 2.2: Backend Services ✅ COMPLETATA
+- ✅ COMPLETATA: LLMConfigurationService - Servizio centralizzato
+- ✅ COMPLETATA: Cache intelligente con hot-reload automatico
+- ✅ COMPLETATA: Validazione avanzata con vincoli per modello
+- ✅ COMPLETATA: Backup automatico configurazioni
+- ✅ COMPLETATA: Thread-safe operations con lock
+- ✅ TESTATA: 4 modelli configurati, validazione parametri, tenant management
 
 ---
 
-## **Stato Attuale Analizzato**
+## **🔄 FASE 3: Componenti React Frontend** ✅ COMPLETATA
 
-### **Parametri Token Attuali**
-- ❌ **Condiviso**: `tokenization.max_tokens: 8000` (usato da embedding E LLM input)
-- ✅ **Separato**: `llm.generation.max_tokens: 150` (solo LLM output)
+### FASE 3.1: Servizio API Frontend ✅ COMPLETATA
+- ✅ COMPLETATA: llmConfigService.ts - Interfaccia TypeScript tipizzata
+- ✅ COMPLETATA: Interfacce LLMModel, LLMParameters, TenantLLMConfig
+- ✅ COMPLETATA: Metodi getAvailableModels, getTenantParameters
+- ✅ COMPLETATA: Metodi updateTenantParameters, resetTenantParameters
+- ✅ COMPLETATA: Metodi validateParameters, testModelConfiguration
+- ✅ COMPLETATA: Gestione errori e logging frontend
 
-### **Parametri LLM Identificati**
-**Generazione:**
-- `max_tokens`: 150 (output)
-- `temperature`: 0.1
-- `top_k`: 40  
-- `top_p`: 0.9
+### FASE 3.2: Componente LLMModelSelector ✅ COMPLETATA  
+- ✅ COMPLETATA: Dropdown modelli disponibili per tenant
+- ✅ COMPLETATA: Caricamento dinamico limiti modello selezionato
+- ✅ COMPLETATA: Visualizzazione info modello (context limit, capabilities)
+- ✅ COMPLETATA: Aggiornamento automatico parametri quando cambia modello
+- ✅ COMPLETATA: Gestione stati loading/error con feedback visivo
+
+### FASE 3.3: Componente LLMParametersPanel ✅ COMPLETATA
+- ✅ COMPLETATA: Slider interattivi per tutti i parametri LLM
+- ✅ COMPLETATA: Tokenization Slider (max_tokens con range dinamico)
+- ✅ COMPLETATA: Generation Sliders (temperature, top_k, top_p, repeat_penalty, max_tokens)
+- ✅ COMPLETATA: Connection Settings (timeout)
+- ✅ COMPLETATA: Validazione real-time con indicatori visivi
+- ✅ COMPLETATA: Reset to defaults button
+- ✅ COMPLETATA: Anteprima JSON configurazione
+
+### FASE 3.4: Pagina Configurazione Completa ✅ COMPLETATA
+- ✅ COMPLETATA: LLMConfigurationPage - Combinazione moduli
+- ✅ COMPLETATA: Integrazione LLMModelSelector + LLMParametersPanel  
+- ✅ COMPLETATA: Test configurazione con anteprima risultati
+- ✅ COMPLETATA: Gestione stato tenant e sincronizzazione componenti
+- ✅ COMPLETATA: Styling completo e responsive design
+- ✅ COMPLETATA: Feedback visivo per operazioni asincrone
+
+---
+
+## **🔄 FASE 4: Integrazione e Testing** - PROSSIMA FASE
 - `repeat_penalty`: 1.1
 
 **Connessione:**

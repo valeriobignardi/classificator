@@ -221,11 +221,28 @@ class IntelligentClassifier:
         # Configurazione client_name
         self.client_name = client_name
         
-        # Imposta parametri da config se non forniti esplicitamente
-        self.ollama_url = ollama_url or ollama_config.get('url', 'http://localhost:11434')
-        self.timeout = timeout or ollama_config.get('timeout', 300)
-        self.temperature = temperature or generation_config.get('temperature', 0.1)
-        self.max_tokens = max_tokens or generation_config.get('max_tokens', 150)
+        # Carica configurazione tenant-specific LLM
+        tenant_llm_config = self.load_tenant_llm_config(self.tenant_id)
+        
+        # Imposta parametri da config tenant o globale
+        self.ollama_url = ollama_url or tenant_llm_config['connection']['url']
+        self.timeout = timeout or tenant_llm_config['connection']['timeout']
+        self.temperature = temperature or tenant_llm_config['generation']['temperature']
+        self.max_tokens = max_tokens or tenant_llm_config['generation']['max_tokens']
+        
+        # Parametri aggiuntivi da configurazione tenant
+        self.top_k = tenant_llm_config['generation']['top_k']
+        self.top_p = tenant_llm_config['generation']['top_p']
+        self.repeat_penalty = tenant_llm_config['generation']['repeat_penalty']
+        
+        # Parametri tokenizzazione per LLM (separati da embedding)
+        self.llm_tokenization = tenant_llm_config['tokenization']
+        
+        print(f"🎯 Config LLM caricata per {self.tenant_id} (fonte: {tenant_llm_config['source']})")
+        print(f"   📝 Max output tokens: {self.max_tokens}")
+        print(f"   📊 Max input tokens: {self.llm_tokenization['max_tokens']}")
+        print(f"   🌡️  Temperature: {self.temperature}")
+        print(f"   🔢 Top K: {self.top_k}, Top P: {self.top_p}")
         
         # Determina il modello da usare in base al cliente
         if model_name:
@@ -616,6 +633,93 @@ class IntelligentClassifier:
         session.mount("https://", adapter)
         
         return session
+    
+    def load_tenant_llm_config(self, tenant_id: str = None) -> Dict[str, Any]:
+        """
+        Carica configurazione LLM specifica per tenant
+        
+        Args:
+            tenant_id: ID del tenant (se None, usa self.tenant_id)
+            
+        Returns:
+            Dizionario con parametri LLM per il tenant
+            
+        Data ultima modifica: 2025-08-31
+        """
+        tenant_id = tenant_id or self.tenant_id
+        
+        try:
+            # Configurazione LLM globale come base
+            llm_config = self.config.get('llm', {})
+            generation_config = llm_config.get('generation', {})
+            tokenization_config = llm_config.get('tokenization', {})
+            connection_config = llm_config.get('ollama', {})
+            
+            # Configurazione tenant-specific
+            tenant_configs = self.config.get('tenant_configs', {})
+            tenant_config = tenant_configs.get(tenant_id, {})
+            tenant_llm_params = tenant_config.get('llm_parameters', {})
+            
+            if tenant_llm_params:
+                print(f"📋 Caricamento parametri LLM specifici per tenant: {tenant_id}")
+                
+                # Merge configurazioni con priorità a tenant
+                tenant_generation = tenant_llm_params.get('generation', {})
+                tenant_tokenization = tenant_llm_params.get('tokenization', {})
+                tenant_connection = tenant_llm_params.get('connection', {})
+                
+                merged_config = {
+                    'generation': {
+                        'max_tokens': tenant_generation.get('max_tokens', generation_config.get('max_tokens', 150)),
+                        'temperature': tenant_generation.get('temperature', generation_config.get('temperature', 0.1)),
+                        'top_k': tenant_generation.get('top_k', generation_config.get('top_k', 40)),
+                        'top_p': tenant_generation.get('top_p', generation_config.get('top_p', 0.9)),
+                        'repeat_penalty': tenant_generation.get('repeat_penalty', generation_config.get('repeat_penalty', 1.1))
+                    },
+                    'tokenization': {
+                        'max_tokens': tenant_tokenization.get('max_tokens', tokenization_config.get('max_tokens', 8000)),
+                        'model_name': tokenization_config.get('model_name', 'cl100k_base'),
+                        'truncation_strategy': tokenization_config.get('truncation_strategy', 'start')
+                    },
+                    'connection': {
+                        'timeout': tenant_connection.get('timeout', connection_config.get('timeout', 300)),
+                        'url': connection_config.get('url', 'http://localhost:11434')
+                    },
+                    'source': 'tenant_specific'
+                }
+                
+                return merged_config
+            
+            else:
+                print(f"📋 Caricamento parametri LLM globali per tenant: {tenant_id}")
+                return {
+                    'generation': {
+                        'max_tokens': generation_config.get('max_tokens', 150),
+                        'temperature': generation_config.get('temperature', 0.1),
+                        'top_k': generation_config.get('top_k', 40),
+                        'top_p': generation_config.get('top_p', 0.9),
+                        'repeat_penalty': generation_config.get('repeat_penalty', 1.1)
+                    },
+                    'tokenization': {
+                        'max_tokens': tokenization_config.get('max_tokens', 8000),
+                        'model_name': tokenization_config.get('model_name', 'cl100k_base'),
+                        'truncation_strategy': tokenization_config.get('truncation_strategy', 'start')
+                    },
+                    'connection': {
+                        'timeout': connection_config.get('timeout', 300),
+                        'url': connection_config.get('url', 'http://localhost:11434')
+                    },
+                    'source': 'global'
+                }
+                
+        except Exception as e:
+            print(f"⚠️  Errore caricamento config LLM per tenant {tenant_id}: {e}")
+            return {
+                'generation': {'max_tokens': 150, 'temperature': 0.1, 'top_k': 40, 'top_p': 0.9, 'repeat_penalty': 1.1},
+                'tokenization': {'max_tokens': 8000, 'model_name': 'cl100k_base', 'truncation_strategy': 'start'},
+                'connection': {'timeout': 300, 'url': 'http://localhost:11434'},
+                'source': 'fallback'
+            }
     
     def is_available(self) -> bool:
         """

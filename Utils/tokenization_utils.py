@@ -67,11 +67,23 @@ class TokenizationManager:
             with open(self.config_path, 'r', encoding='utf-8') as file:
                 config = yaml.safe_load(file)
             
-            tokenization_config = config.get('tokenization', {})
+            # NUOVA STRUTTURA: Priorità a embedding.tokenization
+            embedding_config = config.get('embedding', {})
+            embedding_tokenization = embedding_config.get('tokenization', {})
             
-            self.max_tokens = tokenization_config.get('max_tokens', 8000)
-            self.model_name = tokenization_config.get('model_name', 'cl100k_base')
-            self.truncation_strategy = tokenization_config.get('truncation_strategy', 'start')
+            if embedding_tokenization:
+                # Usa configurazione separata per embedding
+                self.max_tokens = embedding_tokenization.get('max_tokens', 8000)
+                self.model_name = embedding_tokenization.get('model_name', 'cl100k_base')
+                self.truncation_strategy = embedding_tokenization.get('truncation_strategy', 'start')
+                print(f"📊 Caricamento config SEPARATA per embedding")
+            else:
+                # BACKWARD COMPATIBILITY: Fallback a struttura legacy
+                tokenization_config = config.get('tokenization', {})
+                self.max_tokens = tokenization_config.get('max_tokens', 8000)
+                self.model_name = tokenization_config.get('model_name', 'cl100k_base')
+                self.truncation_strategy = tokenization_config.get('truncation_strategy', 'start')
+                print(f"⚠️  Fallback a config LEGACY per embedding")
             
         except Exception as e:
             print(f"⚠️  Errore caricamento config: {e}")
@@ -317,3 +329,68 @@ class TokenizationManager:
             'truncation_strategy': self.truncation_strategy,
             'encoding_name': self.encoding.name
         }
+    
+    def load_llm_tokenization_config(self, tenant_id: str = None) -> Dict[str, Any]:
+        """
+        Carica configurazione tokenizzazione LLM per un tenant specifico
+        
+        Args:
+            tenant_id: ID del tenant (se None, usa config globale)
+            
+        Returns:
+            Dizionario con configurazione tokenizzazione LLM
+            
+        Ultima modifica: 2025-08-31
+        """
+        try:
+            with open(self.config_path, 'r', encoding='utf-8') as file:
+                config = yaml.safe_load(file)
+            
+            # Configurazione LLM globale
+            llm_config = config.get('llm', {})
+            llm_tokenization = llm_config.get('tokenization', {})
+            
+            # Configurazione tenant-specific (se specificato)
+            if tenant_id:
+                tenant_configs = config.get('tenant_configs', {})
+                tenant_config = tenant_configs.get(tenant_id, {})
+                tenant_llm_params = tenant_config.get('llm_parameters', {})
+                tenant_tokenization = tenant_llm_params.get('tokenization', {})
+                
+                if tenant_tokenization:
+                    print(f"📋 Caricamento config LLM tokenization per tenant: {tenant_id}")
+                    return {
+                        'max_tokens': tenant_tokenization.get('max_tokens', llm_tokenization.get('max_tokens', 8000)),
+                        'model_name': llm_tokenization.get('model_name', 'cl100k_base'),
+                        'truncation_strategy': llm_tokenization.get('truncation_strategy', 'start'),
+                        'source': 'tenant_specific'
+                    }
+            
+            # Fallback a configurazione globale LLM
+            if llm_tokenization:
+                print(f"📋 Caricamento config LLM tokenization globale")
+                return {
+                    'max_tokens': llm_tokenization.get('max_tokens', 8000),
+                    'model_name': llm_tokenization.get('model_name', 'cl100k_base'),
+                    'truncation_strategy': llm_tokenization.get('truncation_strategy', 'start'),
+                    'source': 'llm_global'
+                }
+            
+            # BACKWARD COMPATIBILITY: Fallback a tokenization legacy
+            tokenization_config = config.get('tokenization', {})
+            print(f"⚠️  Fallback a config tokenization LEGACY per LLM")
+            return {
+                'max_tokens': tokenization_config.get('max_tokens', 8000),
+                'model_name': tokenization_config.get('model_name', 'cl100k_base'),
+                'truncation_strategy': tokenization_config.get('truncation_strategy', 'start'),
+                'source': 'legacy'
+            }
+            
+        except Exception as e:
+            print(f"⚠️  Errore caricamento config LLM per tenant {tenant_id}: {e}")
+            return {
+                'max_tokens': 8000,
+                'model_name': 'cl100k_base',
+                'truncation_strategy': 'start',
+                'source': 'fallback'
+            }

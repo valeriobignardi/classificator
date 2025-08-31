@@ -12,17 +12,16 @@ import threading
 import yaml
 from typing import Dict, List, Any, Optional
 from datetime import datetime
-from datetime import datetime
 import traceback
-from typing import Dict, List, Any, Optional
 import numpy as np
 import re
 
 # Import della classe Tenant
 sys.path.append(os.path.join(os.path.dirname(__file__), 'Utils'))
 from tenant import Tenant
-sys.path.append(os.path.join(os.path.dirname(__file__), 'Utils'))
-from tenant import Tenant
+
+# Import servizi
+from Services.llm_configuration_service import LLMConfigurationService
 
 # Aggiungi path per i moduli
 sys.path.append(os.path.join(os.path.dirname(__file__), 'Pipeline'))
@@ -1105,6 +1104,7 @@ class ClassificationService:
 
 # Istanza globale del servizio
 classification_service = ClassificationService()
+llm_config_service = LLMConfigurationService()
 
 @app.route('/', methods=['GET'])
 def home():
@@ -6543,6 +6543,371 @@ def get_clustering_metrics_trend(tenant_id):
             'success': False,
             'error': error_msg,
             'tenant_id': tenant_id
+        }), 500
+
+
+# ============================================================
+# SEZIONE API: Gestione Configurazione LLM per Tenant
+# ============================================================
+
+@app.route('/api/llm/models/<tenant_id>', methods=['GET'])
+def api_get_available_models(tenant_id: str):
+    """
+    Recupera lista modelli LLM disponibili per un tenant con limiti e capabilities
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        JSON con lista modelli disponibili
+        
+    Data ultima modifica: 2025-08-31
+    """
+    try:
+        models_info = llm_config_service.get_available_models(tenant_id)
+        
+        print(f"📋 [API] Modelli disponibili per tenant {tenant_id}: {len(models_info)}")
+        
+        return jsonify({
+            'success': True,
+            'tenant_id': tenant_id,
+            'models': models_info
+        }), 200
+        
+    except Exception as e:
+        error_msg = f'Errore recupero modelli: {str(e)}'
+        print(f"❌ [API] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': tenant_id
+        }), 500
+
+
+@app.route('/api/llm/parameters/<tenant_id>', methods=['GET'])
+def api_get_tenant_llm_parameters(tenant_id: str):
+    """
+    Recupera parametri LLM correnti per un tenant
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        JSON con parametri LLM del tenant
+        
+    Data ultima modifica: 2025-08-31
+    """
+    try:
+        tenant_info = llm_config_service.get_tenant_parameters(tenant_id)
+        
+        if 'error' in tenant_info:
+            return jsonify({
+                'success': False,
+                'error': tenant_info['error'],
+                'tenant_id': tenant_id
+            }), 500
+        
+        print(f"📋 [API] Parametri LLM per tenant {tenant_id} (fonte: {tenant_info['source']})")
+        
+        return jsonify({
+            'success': True,
+            'tenant_id': tenant_id,
+            'current_model': tenant_info['current_model'],
+            'parameters': tenant_info['parameters'],
+            'source': tenant_info['source'],
+            'last_modified': tenant_info.get('last_modified')
+        }), 200
+        
+    except Exception as e:
+        error_msg = f'Errore recupero parametri LLM: {str(e)}'
+        print(f"❌ [API] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': tenant_id
+        }), 500
+
+
+@app.route('/api/llm/parameters/<tenant_id>', methods=['PUT'])
+def api_update_tenant_llm_parameters(tenant_id: str):
+    """
+    Aggiorna parametri LLM per un tenant
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        JSON con conferma aggiornamento
+        
+    Data ultima modifica: 2025-08-31
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'parameters' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'Parametri mancanti nel body della richiesta'
+            }), 400
+        
+        parameters = data['parameters']
+        model_name = data.get('model_name')
+        
+        # Usa servizio centralizzato
+        result = llm_config_service.update_tenant_parameters(tenant_id, parameters, model_name)
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+        
+    except Exception as e:
+        error_msg = f'Errore aggiornamento parametri LLM: {str(e)}'
+        print(f"❌ [API] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': tenant_id
+        }), 500
+
+
+@app.route('/api/llm/model-info/<model_name>', methods=['GET'])
+def api_get_model_info(model_name: str):
+    """
+    Recupera informazioni specifiche su un modello LLM
+    
+    Args:
+        model_name: Nome del modello
+        
+    Returns:
+        JSON con informazioni del modello
+        
+    Data ultima modifica: 2025-08-31
+    """
+    try:
+        model_info = llm_config_service.get_model_info(model_name)
+        
+        if not model_info:
+            return jsonify({
+                'success': False,
+                'error': f'Modello {model_name} non trovato',
+                'model_name': model_name
+            }), 404
+        
+        print(f"📋 [API] Info modello {model_name} recuperate")
+        
+        return jsonify({
+            'success': True,
+            'model_name': model_name,
+            'model_info': model_info
+        }), 200
+        
+    except Exception as e:
+        error_msg = f'Errore recupero info modello: {str(e)}'
+        print(f"❌ [API] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'model_name': model_name
+        }), 500
+
+
+@app.route('/api/llm/validate-parameters', methods=['POST'])
+def api_validate_llm_parameters():
+    """
+    Valida parametri LLM prima del salvataggio
+    
+    Returns:
+        JSON con risultato validazione
+        
+    Data ultima modifica: 2025-08-31
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Body della richiesta mancante'
+            }), 400
+        
+        parameters = data.get('parameters', {})
+        model_name = data.get('model_name')
+        
+        validation_result = llm_config_service.validate_parameters(parameters, model_name)
+        
+        return jsonify({
+            'success': True,
+            'validation': validation_result
+        }), 200
+        
+    except Exception as e:
+        error_msg = f'Errore validazione parametri: {str(e)}'
+        print(f"❌ [API] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg
+        }), 500
+
+
+@app.route('/api/llm/reset-parameters/<tenant_id>', methods=['POST'])
+def api_reset_tenant_llm_parameters(tenant_id: str):
+    """
+    Ripristina parametri LLM di default per un tenant
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        JSON con conferma reset
+        
+    Data ultima modifica: 2025-08-31
+    """
+    try:
+        result = llm_config_service.reset_tenant_parameters(tenant_id)
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 500
+        
+    except Exception as e:
+        error_msg = f'Errore reset parametri LLM: {str(e)}'
+        print(f"❌ [API] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': tenant_id
+        }), 500
+
+
+@app.route('/api/llm/test-model/<tenant_id>', methods=['POST'])
+def api_test_llm_model(tenant_id: str):
+    """
+    Testa un modello LLM con parametri specifici
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        JSON con risultato test
+        
+    Data ultima modifica: 2025-08-31
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Body della richiesta mancante'
+            }), 400
+        
+        model_name = data.get('model_name')
+        test_parameters = data.get('parameters', {})
+        test_prompt = data.get('test_prompt', 'Ciao, rispondi con una frase breve per testare la connessione.')
+        
+        if not model_name:
+            return jsonify({
+                'success': False,
+                'error': 'Nome modello mancante'
+            }), 400
+        
+        # Usa servizio centralizzato per test
+        result = llm_config_service.test_model_configuration(
+            tenant_id, model_name, test_parameters, test_prompt
+        )
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 500
+        
+    except Exception as e:
+        error_msg = f'Errore test modello: {str(e)}'
+        print(f"❌ [API] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': tenant_id
+        }), 500
+
+
+@app.route('/api/llm/tenants', methods=['GET'])
+def api_get_llm_tenants():
+    """
+    Recupera lista tenant con configurazioni LLM personalizzate
+    
+    Returns:
+        JSON con lista tenant
+        
+    Data ultima modifica: 2025-01-31
+    """
+    try:
+        tenants = llm_config_service.get_tenant_list()
+        
+        return jsonify({
+            'success': True,
+            'tenants': tenants,
+            'count': len(tenants)
+        }), 200
+        
+    except Exception as e:
+        error_msg = f'Errore recupero tenant: {str(e)}'
+        print(f"❌ [API] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg
+        }), 500
+
+
+@app.route('/api/llm/tenants', methods=['GET'])
+def api_get_tenants_with_llm_config():
+    """
+    Recupera lista tenant con configurazioni LLM personalizzate
+    
+    Returns:
+        JSON con lista tenant
+        
+    Data ultima modifica: 2025-08-31
+    """
+    try:
+        tenants_list = llm_config_service.get_tenant_list()
+        
+        # Aggiungi informazioni aggiuntive per ogni tenant
+        tenants_info = []
+        for tenant_id in tenants_list:
+            tenant_info = llm_config_service.get_tenant_parameters(tenant_id)
+            tenants_info.append({
+                'tenant_id': tenant_id,
+                'current_model': tenant_info.get('current_model'),
+                'last_modified': tenant_info.get('last_modified'),
+                'source': tenant_info.get('source', 'custom')
+            })
+        
+        print(f"📋 [API] Tenant con config LLM personalizzate: {len(tenants_info)}")
+        
+        return jsonify({
+            'success': True,
+            'tenants': tenants_info,
+            'count': len(tenants_info)
+        }), 200
+        
+    except Exception as e:
+        error_msg = f'Errore recupero lista tenant: {str(e)}'
+        print(f"❌ [API] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg
         }), 500
 
 

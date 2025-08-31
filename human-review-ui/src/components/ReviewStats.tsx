@@ -60,7 +60,7 @@ interface ReviewStatsProps {
 
 const ReviewStats: React.FC<ReviewStatsProps> = ({ tenant, refreshTrigger }) => {
   const [selectedTenant, setSelectedTenant] = useState<string>(tenant?.tenant_id || '');
-  const [availableTenants, setAvailableTenants] = useState<string[]>([]);
+  const [availableTenants, setAvailableTenants] = useState<any[]>([]); // Cambiato da string[] a any[]
   const [labelStats, setLabelStats] = useState<LabelStat[]>([]);
   const [generalStats, setGeneralStats] = useState<GeneralStats | null>(null);
   const [loading, setLoading] = useState(false);
@@ -70,11 +70,25 @@ const ReviewStats: React.FC<ReviewStatsProps> = ({ tenant, refreshTrigger }) => 
   const loadAvailableTenants = useCallback(async () => {
     try {
       const response = await apiService.getAvailableTenants();
-      setAvailableTenants(response.tenants);
+      console.log('🔍 [DEBUG] Tenants ricevuti:', response.tenants);
+      
+      // L'API restituisce oggetti con struttura {name, slug, id}
+      const tenantList = response.tenants.map((t: any) => {
+        if (typeof t === 'string') {
+          return t;
+        } else if (t && typeof t === 'object') {
+          // Usa slug preferenzialmente, poi name, poi id
+          return t.slug || t.name || t.id || String(t);
+        }
+        return String(t);
+      });
+      
+      console.log('🔍 [DEBUG] Tenant list processata:', tenantList);
+      setAvailableTenants(tenantList);
       
       // Se non c'è tenant selezionato, usa il primo disponibile
-      if (!selectedTenant && response.tenants.length > 0) {
-        setSelectedTenant(response.tenants[0]);
+      if (!selectedTenant && tenantList.length > 0) {
+        setSelectedTenant(tenantList[0]);
       }
     } catch (err) {
       console.error('Error loading tenants:', err);
@@ -188,11 +202,19 @@ const ReviewStats: React.FC<ReviewStatsProps> = ({ tenant, refreshTrigger }) => 
               onChange={(e) => setSelectedTenant(e.target.value)}
               disabled={loading}
             >
-              {availableTenants.map((tenant) => (
-                <MenuItem key={tenant} value={tenant}>
-                  {tenant.charAt(0).toUpperCase() + tenant.slice(1)}
-                </MenuItem>
-              ))}
+              {availableTenants.map((tenant) => {
+                // Gestisci sia stringhe che oggetti tenant  
+                const tenantValue = String(tenant); // Converti sempre a stringa
+                const tenantDisplay = tenantValue && tenantValue.length > 0 
+                  ? tenantValue.charAt(0).toUpperCase() + tenantValue.slice(1)
+                  : 'Tenant Sconosciuto';
+                
+                return (
+                  <MenuItem key={tenantValue} value={tenantValue}>
+                    {tenantDisplay}
+                  </MenuItem>
+                );
+              })}
             </Select>
           </FormControl>
         </CardContent>

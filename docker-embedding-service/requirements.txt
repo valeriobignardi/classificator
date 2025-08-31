@@ -1,13 +1,16 @@
 # LaBSE Embedding Service Requirements
-# Ottimizzato per performance e gestione memoria
+# Ottimizzato per GPU support con CUDA 12.8
+# Autore: Valerio Bignardi - 2025-08-31
 
 # Core dependencies
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 pydantic>=2.5.0
 
-# ML/AI dependencies
-torch>=1.9.0
+# ML/AI dependencies with GPU support
+# PyTorch GPU - installazione gestita nel Dockerfile con index ufficiale CUDA 12.8
+# torch>=2.7.0  # Installato via index-url nel Dockerfile
+# torchvision>=0.22.0  # Installato via index-url nel Dockerfile
 sentence-transformers>=2.2.0
 transformers>=4.20.0
 numpy>=1.21.0

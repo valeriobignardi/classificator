@@ -108,13 +108,23 @@ async def load_model():
     
     logger.info("🚀 Inizializzazione servizio embedding LaBSE...")
     
-    # Auto-detect device
+    # Verifica disponibilità CUDA dettagliata
+    logger.info(f"🔍 Verifica CUDA:")
+    logger.info(f"   - CUDA disponibile: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        logger.info(f"   - CUDA version: {torch.version.cuda}")
+        logger.info(f"   - GPU count: {torch.cuda.device_count()}")
+        logger.info(f"   - GPU names: {[torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]}")
+        logger.info(f"   - Current GPU: {torch.cuda.current_device()}")
+    
+    # Auto-detect device con logging dettagliato
     if torch.cuda.is_available():
         device = f"cuda:{config.CUDA_DEVICE}" if config.CUDA_DEVICE.isdigit() else "cuda"
-        logger.info(f"🎯 GPU disponibile: {device}")
+        logger.info(f"🎯 GPU selezionata: {device}")
+        logger.info(f"🔧 GPU properties: {torch.cuda.get_device_properties(device)}")
     else:
         device = "cpu"
-        logger.info("💻 Utilizzo CPU")
+        logger.info("💻 Fallback su CPU - CUDA non disponibile")
     
     try:
         # Caricamento modello con gestione memoria ottimizzata

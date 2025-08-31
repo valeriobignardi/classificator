@@ -1,0 +1,63 @@
+# LaBSE Embedding Service - Versione GPU-enabled
+# Autore: Valerio Bignardi  
+# Data: 2025-08-30
+# Versione GPU con supporto CUDA per NVIDIA A10G
+FROM nvidia/cuda:11.8-runtime-ubuntu22.04
+
+# Metadata
+LABEL maintainer="Valerio Bignardi"
+LABEL description="LaBSE Embedding Service - GPU-enabled con CUDA support"
+LABEL version="3.0.0-gpu"
+
+# Variabili d'ambiente per HuggingFace
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV MODEL_NAME="sentence-transformers/LaBSE"
+ENV MAX_BATCH_SIZE=32
+ENV MAX_SEQUENCE_LENGTH=512
+ENV HF_HOME=/cache
+ENV TRANSFORMERS_CACHE=/cache
+ENV HF_HUB_CACHE=/cache
+
+# Installa Python 3.11 e dipendenze sistema
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y \
+    python3.11 \
+    python3.11-dev \
+    python3.11-distutils \
+    python3-pip \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Crea symlink per python
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python
+
+# Directory di lavoro
+WORKDIR /app
+
+# Installa dipendenze Python
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu118 && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copia applicazione
+COPY app/ .
+
+# SOLUZIONE CHIAVE: Usa volume per cache invece di directory locale
+# La cache sarà gestita come volume Docker esterno
+VOLUME ["/cache"]
+
+# Espone porta
+EXPOSE 8080
+
+# Health check ottimizzato
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Comando di avvio
+CMD ["python", "main.py"]

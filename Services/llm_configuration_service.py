@@ -26,6 +26,7 @@ Funzionalità principali:
 import os
 import yaml
 import time
+import requests
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 import threading
@@ -504,19 +505,34 @@ class LLMConfigurationService:
             # Esegui test con timeout
             start_time = time.time()
             
-            response = test_classifier.ollama_client.chat(
-                model=model_name,
-                messages=[{'role': 'user', 'content': test_prompt}],
-                options={
+            # Chiamata HTTP diretta all'API Ollama (invece di usare ollama_client inesistente)
+            ollama_url = test_classifier.ollama_url or "http://localhost:11434"
+            
+            # Costruisci payload per Ollama API
+            payload = {
+                "model": model_name,
+                "prompt": test_prompt,
+                "stream": False,
+                "options": {
                     'temperature': test_classifier.temperature,
                     'top_k': test_classifier.top_k,
                     'top_p': test_classifier.top_p,
                     'num_predict': 100  # Limitato per test rapido
                 }
+            }
+            
+            # Effettua chiamata HTTP diretta
+            response = requests.post(
+                f"{ollama_url}/api/generate",
+                json=payload,
+                timeout=30
             )
             
+            response.raise_for_status()
+            result_data = response.json()
+            
             test_duration = time.time() - start_time
-            response_text = response['message']['content']
+            response_text = result_data.get('response', '')
             
             print(f"🧪 [LLMConfigService] Test {model_name} per {tenant_id} completato ({test_duration:.2f}s)")
             

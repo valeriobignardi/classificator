@@ -23,7 +23,10 @@
 
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:5000/api/llm';
+// Usa URL relativi in development con proxy, URL assoluti in production
+const API_BASE_URL = process.env.NODE_ENV === 'development' 
+  ? '/api/llm' 
+  : 'http://localhost:5000/api/llm';
 
 /**
  * Interfacce TypeScript per tipizzazione forte

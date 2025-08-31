@@ -2058,6 +2058,7 @@ Ragionamento: {ex["motivation"]}"""
     def _call_ollama_api_structured(self, conversation_text: str) -> Dict[str, Any]:
         """
         IMPLEMENTAZIONE DEFINITIVA: Usa Function Tools di Ollama/Mistral
+        Supporta sia modalità standard che raw mode per Mistral 7B v0.3
         Elimina completamente il parsing manuale - Mistral restituisce JSON strutturato
         Recupera i tool dal database tramite il prompt e i tool ID associati
         
@@ -2066,6 +2067,9 @@ Ragionamento: {ex["motivation"]}"""
             
         Returns:
             Dict con predicted_label, confidence, motivation (JSON garantito dalle function tools)
+            
+        Aggiornamenti:
+            2025-08-31: Aggiunto supporto raw mode per Mistral 7B v0.3 con function calling
         """
         # Recupero dei function tools dal database tramite PromptManager e ToolManager
         classification_tools = []
@@ -2098,13 +2102,26 @@ Ragionamento: {ex["motivation"]}"""
                         db_tool = self.tool_manager.get_tool_by_id(tool_id)
                         
                         if db_tool:
-                            # Costruisce il tool per Ollama/Mistral usando la struttura corretta
+                            # 🔧 CORREZIONE CRITICAL: Estrai i parametri corretti dal function_schema
+                            function_schema = db_tool['function_schema']
+                            
+                            # Se il function_schema ha la struttura annidata, estraiamo solo i parametri
+                            if isinstance(function_schema, dict) and 'function' in function_schema:
+                                # Schema del database ha struttura errata con doppia nidificazione
+                                parameters = function_schema['function']['parameters']
+                                if self.enable_logging:
+                                    print(f"⚠️ Schema corretto: estratti parametri da struttura annidata")
+                            else:
+                                # Schema già nella forma corretta
+                                parameters = function_schema
+                            
+                            # Costruisce il tool per Ollama usando la struttura corretta secondo documentazione ufficiale
                             classification_tool = {
                                 "type": "function", 
                                 "function": {
                                     "name": db_tool['tool_name'],
                                     "description": db_tool['description'],
-                                    "parameters": db_tool['function_schema']
+                                    "parameters": parameters  # 🔑 SOLO i parametri, senza doppia nidificazione
                                 }
                             }
                             
@@ -2152,7 +2169,19 @@ Ragionamento: {ex["motivation"]}"""
         DEVI SEMPRE usare una delle function tools disponibili per rispondere.
         """
         
-        # Payload per function calling con Ollama/Mistral
+        # 🚀 NUOVO: Verifica se usare raw mode per Mistral 7B v0.3 function calling
+        raw_mode_config = self.config.get('llm', {}).get('ollama', {}).get('raw_mode', {})
+        use_raw_mode = (
+            raw_mode_config.get('enabled', False) and 
+            self.model_name in raw_mode_config.get('models_requiring_raw', [])
+        )
+        
+        if use_raw_mode and classification_tools:
+            if self.enable_logging:
+                print(f"🔧 Uso RAW MODE per {self.model_name} con function calling")
+            return self._call_ollama_api_raw_mode(conversation_text, classification_tools, system_message)
+        
+        # Payload per function calling con Ollama/Mistral (modalità standard)
         payload = {
             "model": self.model_name,
             "messages": [
@@ -2175,6 +2204,16 @@ Ragionamento: {ex["motivation"]}"""
             }
         }
         
+        # 🔍 DEBUG: Stampa il tool prima di mandarlo all'LLM
+        if self.enable_logging:
+            print(f"🛠️ DEBUG - Tools inviati all'LLM ({len(classification_tools)} tools):")
+            for i, tool in enumerate(classification_tools):
+                print(f"  Tool #{i+1}: {json.dumps(tool, indent=2, ensure_ascii=False)}")
+            print(f"🌐 URL Ollama: {self.ollama_url}/api/chat")
+            print(f"🤖 Modello: {self.model_name}")
+            print(f"📦 Payload completo:")
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+        
         try:
             response = self.session.post(
                 f"{self.ollama_url}/api/chat",  # Usa /api/chat per function tools
@@ -2185,11 +2224,27 @@ Ragionamento: {ex["motivation"]}"""
             response.raise_for_status()
             result = response.json()
             
+            # 🔍 DEBUG: Stampa la risposta completa di Ollama
+            if self.enable_logging:
+                print(f"📥 DEBUG - Risposta completa da Ollama:")
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+            
             # Verifica la struttura della risposta di function calling
             if 'message' not in result:
                 raise ValueError(f"Risposta API Ollama malformata: manca 'message'")
                 
             message = result['message']
+            
+            # 🔍 DEBUG: Dettaglio del messaggio ricevuto
+            if self.enable_logging:
+                print(f"🔍 DEBUG - Messaggio ricevuto:")
+                print(f"  - Chiavi disponibili: {list(message.keys())}")
+                if 'tool_calls' in message:
+                    print(f"  - tool_calls presente: {message['tool_calls']}")
+                else:
+                    print(f"  - tool_calls MANCANTE!")
+                if 'content' in message:
+                    print(f"  - content: {message['content'][:200]}...")
             
             # Controlla se il modello ha fatto una function call
             if 'tool_calls' in message and message['tool_calls']:
@@ -2243,6 +2298,142 @@ Ragionamento: {ex["motivation"]}"""
                 "predicted_label": "altro",
                 "confidence": 0.1,
                 "motivation": f"Errore API: {str(e)[:100]}"
+            }
+
+    def _call_ollama_api_raw_mode(self, conversation_text: str, tools: List[Dict], system_message: str) -> Dict[str, Any]:
+        """
+        Implementa function calling per Mistral 7B v0.3 usando raw mode di Ollama
+        Formato richiesto: [AVAILABLE_TOOLS] [tools_json][/AVAILABLE_TOOLS][INST] query [/INST]
+        
+        Args:
+            conversation_text: Testo della conversazione da classificare
+            tools: Lista dei function tools dal database
+            system_message: Messaggio di sistema
+            
+        Returns:
+            Dict con predicted_label, confidence, motivation
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-31
+        """
+        try:
+            # Costruisce il prompt raw per Mistral 7B v0.3 function calling
+            tools_json = json.dumps(tools, ensure_ascii=False)
+            
+            # Template Mistral per function calls con raw mode
+            raw_prompt = f"[AVAILABLE_TOOLS] {tools_json}[/AVAILABLE_TOOLS][INST] {system_message}\n\nClassifica questa conversazione medica:\n\n{conversation_text} [/INST]"
+            
+            # Payload per raw mode
+            payload = {
+                "model": self.model_name,
+                "prompt": raw_prompt,
+                "raw": True,  # 🔑 CHIAVE: Abilita raw mode per Mistral function calling
+                "stream": False,
+                "options": {
+                    "temperature": 0.01,
+                    "num_predict": 300,
+                    "top_p": 0.8,
+                    "top_k": 20
+                }
+            }
+            
+            if self.enable_logging:
+                print(f"🔧 RAW MODE - Prompt costruito per {self.model_name}:")
+                print(f"📝 Raw prompt: {raw_prompt[:200]}...")
+                print(f"📦 Payload: {json.dumps(payload, indent=2, ensure_ascii=False)}")
+            
+            response = self.session.post(
+                f"{self.ollama_url}/api/generate",  # Raw mode usa /api/generate
+                json=payload,
+                timeout=self.timeout
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            if 'response' not in result:
+                raise ValueError(f"Risposta API Ollama malformata: {result}")
+            
+            raw_content = result['response'].strip()
+            
+            if self.enable_logging:
+                print(f"📥 RAW MODE - Risposta ricevuta: {raw_content[:200]}...")
+            
+            # Parsing della risposta Mistral raw mode function calling
+            # Formato atteso: [TOOL_CALLS] [{"name": "classify_conversation", "arguments": {...}}]
+            # O formato alternativo: predicted_label: xxx\nconfidence: xxx\nmotivation: xxx
+            if '[TOOL_CALLS]' in raw_content:
+                # Estrai il JSON tra le parentesi quadre
+                start_idx = raw_content.find('[TOOL_CALLS]') + len('[TOOL_CALLS]')
+                tool_calls_json = raw_content[start_idx:].strip()
+                
+                # Rimuovi eventuali caratteri extra
+                if tool_calls_json.startswith('[') and tool_calls_json.endswith(']'):
+                    tool_calls = json.loads(tool_calls_json)
+                    
+                    if tool_calls and 'arguments' in tool_calls[0]:
+                        arguments = tool_calls[0]['arguments']
+                        
+                        # Valida che abbiamo tutti i campi richiesti
+                        if all(key in arguments for key in ['predicted_label', 'confidence', 'motivation']):
+                            self.logger.info(f"✅ RAW MODE Function call ricevuta: {arguments}")
+                            return arguments
+                        else:
+                            raise ValueError(f"Function call incompleta nel raw mode: {arguments}")
+            
+            # 🔧 NUOVO: Parsing formato Mistral alternativo (predicted_label: xxx)
+            elif 'predicted_label:' in raw_content and 'confidence:' in raw_content:
+                try:
+                    # Parse formato key: value
+                    lines = raw_content.strip().split('\n')
+                    result = {}
+                    
+                    for line in lines:
+                        if ':' in line:
+                            key, value = line.split(':', 1)
+                            key = key.strip()
+                            value = value.strip()
+                            
+                            if key == 'predicted_label':
+                                result['predicted_label'] = value
+                            elif key == 'confidence':
+                                result['confidence'] = float(value)
+                            elif key == 'motivation':
+                                result['motivation'] = value
+                    
+                    # Valida che abbiamo tutti i campi
+                    if all(key in result for key in ['predicted_label', 'confidence', 'motivation']):
+                        self.logger.info(f"✅ RAW MODE Formato alternativo parsato: {result}")
+                        return result
+                    else:
+                        self.logger.warning(f"⚠️ Campi mancanti nel formato alternativo: {result}")
+                        
+                except (ValueError, KeyError) as parse_error:
+                    self.logger.warning(f"⚠️ Errore parsing formato alternativo: {parse_error}")
+            
+            # Fallback: prova parsing JSON diretto
+            try:
+                parsed_content = json.loads(raw_content)
+                if all(key in parsed_content for key in ['predicted_label', 'confidence', 'motivation']):
+                    self.logger.info(f"✅ RAW MODE JSON diretto: {parsed_content}")
+                    return parsed_content
+            except json.JSONDecodeError:
+                pass
+            
+            # Fallback estremo per raw mode
+            self.logger.warning(f"⚠️ RAW MODE - Risposta non strutturata: {raw_content[:100]}")
+            return {
+                "predicted_label": "altro",
+                "confidence": 0.2,
+                "motivation": f"Raw mode parsing fallito: {raw_content[:50]}"
+            }
+                
+        except (requests.RequestException, json.JSONDecodeError, KeyError, ValueError) as e:
+            self.logger.error(f"❌ Errore RAW MODE API: {e}")
+            return {
+                "predicted_label": "altro",
+                "confidence": 0.1,
+                "motivation": f"Errore raw mode: {str(e)[:100]}"
             }
 
     def _call_ollama_api(self, prompt: str) -> str:
@@ -2358,7 +2549,15 @@ Ragionamento: {ex["motivation"]}"""
                 'timeout': self.timeout
             }
             
-            # 🚀 NUOVO: Usa Structured Outputs invece del parsing manuale
+            # � Verifica se usare raw mode per questo modello
+            raw_mode_config = self.config.get('llm', {}).get('ollama', {}).get('raw_mode', {})
+            use_raw_mode = (
+                raw_mode_config.get('enabled', False) and 
+                self.model_name in raw_mode_config.get('models_requiring_raw', [])
+            )
+            
+            # �🚀 NUOVO: Usa Structured Outputs invece del parsing manuale
+            raw_response = None  # 🔧 FIX: Inizializza raw_response per evitare errore
             try:
                 structured_result = self._call_ollama_api_structured(conversation_text)
                 
@@ -2384,7 +2583,7 @@ Ragionamento: {ex["motivation"]}"""
                 confidence=confidence,
                 motivation=motivation,
                 method="LLM_STRUCTURED" if 'structured_result' in locals() else "LLM",
-                raw_response=str(structured_result) if 'structured_result' in locals() else raw_response,
+                raw_response=str(structured_result) if 'structured_result' in locals() else (raw_response or ""),
                 processing_time=processing_time,
                 timestamp=datetime.now().isoformat()
             )
@@ -2398,7 +2597,7 @@ Ragionamento: {ex["motivation"]}"""
                     input_text=conversation_text,
                     prompt=prompt,
                     model_params=model_params,
-                    raw_response=raw_response,
+                    raw_response=str(structured_result) if 'structured_result' in locals() else (raw_response or ""),
                     parsed_response={
                         'predicted_label': predicted_label,
                         'confidence': confidence,
@@ -2412,7 +2611,8 @@ Ragionamento: {ex["motivation"]}"""
                         'cache_hit': False,
                         'context_provided': context is not None,
                         'embedding_validation_enabled': self.enable_embeddings,
-                        'client_name': self.client_name
+                        'client_name': self.client_name,
+                        'raw_mode_used': use_raw_mode if 'use_raw_mode' in locals() else False
                     }
                 )
             

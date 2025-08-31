@@ -336,14 +336,14 @@ const LLMParametersPanel: React.FC<LLMParametersPanelProps> = ({
 
           <div className="param-control">
             <label>
-              Temperature: <strong>{parameters.generation?.temperature}</strong>
+              Temperature: <strong>{(parameters.generation?.temperature || 0.1).toFixed(2)}</strong>
               <span className="param-desc">(Creatività: 0=rigido, 2=creativo)</span>
             </label>
             <input
               type="range"
               min="0"
               max="2"
-              step="0.1"
+              step="0.01"
               value={parameters.generation?.temperature || 0.1}
               onChange={(e) => updateParameter('generation', 'temperature', parseFloat(e.target.value))}
               disabled={disabled}
@@ -378,14 +378,14 @@ const LLMParametersPanel: React.FC<LLMParametersPanelProps> = ({
 
           <div className="param-control">
             <label>
-              Top P: <strong>{parameters.generation?.top_p}</strong>
+              Top P: <strong>{(parameters.generation?.top_p || 0.9).toFixed(2)}</strong>
               <span className="param-desc">(Soglia probabilità cumulativa)</span>
             </label>
             <input
               type="range"
               min="0.1"
               max="1"
-              step="0.05"
+              step="0.01"
               value={parameters.generation?.top_p || 0.9}
               onChange={(e) => updateParameter('generation', 'top_p', parseFloat(e.target.value))}
               disabled={disabled}
@@ -399,14 +399,14 @@ const LLMParametersPanel: React.FC<LLMParametersPanelProps> = ({
 
           <div className="param-control">
             <label>
-              Repeat Penalty: <strong>{parameters.generation?.repeat_penalty}</strong>
+              Repeat Penalty: <strong>{(parameters.generation?.repeat_penalty || 1.1).toFixed(2)}</strong>
               <span className="param-desc">(Penalità ripetizione)</span>
             </label>
             <input
               type="range"
               min="0.8"
               max="1.5"
-              step="0.05"
+              step="0.01"
               value={parameters.generation?.repeat_penalty || 1.1}
               onChange={(e) => updateParameter('generation', 'repeat_penalty', parseFloat(e.target.value))}
               disabled={disabled}

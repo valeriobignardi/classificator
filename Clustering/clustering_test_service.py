@@ -124,43 +124,29 @@ class ClusteringTestService:
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
     
-    def _get_pipeline(self, tenant_or_id) -> EndToEndPipeline:
+    def _get_pipeline(self, tenant: 'Tenant') -> EndToEndPipeline:
         """
         Ottiene pipeline per il tenant specificato con embedder dinamico configurato
         
-        AGGIORNAMENTO 2025-08-26: Supporto oggetto Tenant centralizzato
+        AGGIORNAMENTO 2025-08-31: Solo oggetto Tenant centralizzato - NESSUNA retrocompatibilità
         
         Args:
-            tenant_or_id: Oggetto Tenant o tenant_id per retrocompatibilità
+            tenant: Oggetto Tenant OBBLIGATORIO
             
         Returns:
             Istanza EndToEndPipeline configurata per tenant
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-31
+        Ultimo aggiornamento: 2025-08-31 - Eliminata retrocompatibilità stringhe
         """
-        # 🔧 NORMALIZZAZIONE INPUT: assicura che tenant_or_id sia sempre UUID
-        if isinstance(tenant_or_id, str) and TENANT_AVAILABLE:
-            # Verifica se è UUID o slug e normalizza a UUID
-            if not Tenant._is_valid_uuid(tenant_or_id):
-                # È uno slug - convertilo a UUID
-                try:
-                    resolved_uuid = self._resolve_uuid_from_slug(tenant_or_id)
-                    tenant_or_id = resolved_uuid
-                    print(f"🔧 [NORMALIZZAZIONE] Slug '{tenant_or_id}' convertito a UUID: {resolved_uuid}")
-                except Exception as e:
-                    print(f"❌ [NORMALIZZAZIONE] Impossibile convertire slug '{tenant_or_id}' a UUID: {e}")
-                    raise RuntimeError(f"Slug '{tenant_or_id}' non valido: {e}")
+        if not tenant or not hasattr(tenant, 'tenant_id'):
+            raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido, non stringa!")
         
-        # Gestione compatibilità Tenant vs tenant_id string
-        if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
-            # Oggetto Tenant - usa direttamente i suoi dati
-            tenant = tenant_or_id
-            tenant_id = tenant.tenant_id
-            tenant_slug = tenant.tenant_slug
-            tenant_display = f"{tenant.tenant_name} ({tenant_id})"
-        else:
-            # Retrocompatibilità: tenant_id string - normalizza
-            tenant_id = tenant_or_id
-            tenant_slug = self._resolve_tenant_slug_from_uuid(tenant_id)
-            tenant_display = str(tenant_or_id)
+        # Usa direttamente i dati del tenant
+        tenant_id = tenant.tenant_id
+        tenant_slug = tenant.tenant_slug
+        tenant_display = f"{tenant.tenant_name} ({tenant_id})"
             
         if tenant_id not in self.pipeline_cache:
             try:
@@ -178,7 +164,7 @@ class ClusteringTestService:
                 
                 # NUOVO SISTEMA: SimpleEmbeddingManager con reset automatico
                 from EmbeddingEngine.simple_embedding_manager import simple_embedding_manager
-                shared_embedder = simple_embedding_manager.get_embedder_for_tenant(tenant_id)
+                shared_embedder = simple_embedding_manager.get_embedder_for_tenant(tenant_obj)  # 🔧 PASSA OGGETTO TENANT
                 
                 # 🆕 ARCHITETTURA MODERNA: passa oggetto Tenant completo
                 if TENANT_AVAILABLE and tenant_obj:
@@ -371,53 +357,44 @@ class ClusteringTestService:
                 'metric': 'cosine'
             }
 
-    def get_sample_conversations(self, tenant_or_id = 'humanitas', limit: int = 1000) -> Dict[str, Any]:
+    def get_sample_conversations(self, tenant: 'Tenant', limit: int = 1000) -> Dict[str, Any]:
         """
         Recupera un campione di conversazioni dal database per il tenant utilizzando pipeline
         
         Scopo: Estrarre conversazioni per il test di clustering
         Parametri di input:
-            - tenant_or_id: Oggetto Tenant, tenant_slug o tenant_id per compatibilità
+            - tenant: Oggetto Tenant OBBLIGATORIO
             - limit (int): Numero massimo di conversazioni da recuperare
         Valori di ritorno:
             - Dict[str, Any]: Dizionario con sessioni per il clustering
-        Data ultima modifica: 2025-08-26
+        Data ultima modifica: 2025-08-31 - Eliminata retrocompatibilità
+        
+        Autore: Valerio Bignardi
+        Data: 2025-08-31
+        Ultimo aggiornamento: 2025-08-31
         """
         try:
-            # Gestione compatibilità Tenant vs tenant string
-            if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
-                # Oggetto Tenant - usa direttamente i suoi dati
-                tenant = tenant_or_id
-                tenant_display = f"{tenant.tenant_name}"
-                logging.info(f"📊 Estrazione {limit} conversazioni per tenant oggetto '{tenant_display}'")
-                pipeline = self._get_pipeline(tenant)  # Passa oggetto Tenant
-            else:
-                # Retrocompatibilità: tenant string
-                tenant_string = tenant_or_id
-                logging.info(f"📊 Estrazione {limit} conversazioni per tenant '{tenant_string}'")
-                
-                # 🔧 CONVERTI SLUG -> UUID per _get_pipeline se necessario
-                if tenant_string != 'humanitas':  # Skip conversione per fallback
-                    tenant_uuid = self._resolve_uuid_from_slug(tenant_string)
-                    print(f"🔄 Risoluzione tenant: slug '{tenant_string}' -> UUID '{tenant_uuid}'")
-                else:
-                    tenant_uuid = tenant_string  # Mantieni fallback per retrocompatibilità
-                
-                # Ottieni pipeline per il tenant UUID
-                pipeline = self._get_pipeline(tenant_uuid)
+            if not tenant or not hasattr(tenant, 'tenant_id'):
+                raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
+            
+            # Definisci tenant_display subito per evitare errori nell'except
+            tenant_display = f"{tenant.tenant_name}" if hasattr(tenant, 'tenant_name') else str(tenant)
+            logging.info(f"📊 Estrazione {limit} conversazioni per tenant '{tenant_display}'")
+            pipeline = self._get_pipeline(tenant)  # Passa oggetto Tenant
             
             # Estrai sessioni usando la funzione della pipeline
             sessioni = pipeline.estrai_sessioni(limit=limit)
             
             if not sessioni:
-                logging.warning(f"❌ Nessuna sessione trovata per tenant '{tenant_or_id}'")
+                logging.warning(f"❌ Nessuna sessione trovata per tenant '{tenant_display}'")
                 return {}
             
-            logging.info(f"✅ Estratte {len(sessioni)} sessioni valide per '{tenant_or_id}'")
+            logging.info(f"✅ Estratte {len(sessioni)} sessioni valide per '{tenant_display}'")
             return sessioni
             
         except Exception as e:
-            logging.error(f"❌ Errore estrazione conversazioni per {tenant_or_id}: {e}")
+            # tenant_display è ora sempre definita
+            logging.error(f"❌ Errore estrazione conversazioni per {tenant_display}: {e}")
             return {}
     
     def get_parameter_suggestions(self) -> Dict[str, Any]:
@@ -596,8 +573,8 @@ class ClusteringTestService:
                 clustering_config = base_clustering_config
                 print(f"🎛️ Uso parametri tenant: {clustering_config}")
             
-            # 3. Recupera conversazioni campione usando tenant.slug direttamente
-            sessioni = self.get_sample_conversations(tenant.tenant_slug, sample_size)
+            # 3. Recupera conversazioni campione usando l'oggetto tenant completo
+            sessioni = self.get_sample_conversations(tenant, sample_size)
             
             if len(sessioni) < self.min_conversations_required:
                 return {
@@ -629,7 +606,7 @@ class ClusteringTestService:
             print(f"🔍 Generazione embeddings per {len(texts)} conversazioni...")
             try:
                 # Usa l'oggetto tenant per la pipeline  
-                pipeline = self._get_pipeline(tenant.tenant_id)
+                pipeline = self._get_pipeline(tenant)
                 embeddings = pipeline.embedder.encode(texts, show_progress_bar=True)
                 print(f"✅ Embeddings generati: {embeddings.shape}")
             except Exception as e:

@@ -98,26 +98,26 @@ class EmbeddingManager:
             print(f"⚠️ EMBEDDING MANAGER: Errore normalizzazione '{tenant_identifier}': {e}")
             return tenant_identifier
     
-    def get_shared_embedder(self, tenant_or_id = "default") -> BaseEmbedder:
+    def get_shared_embedder(self, tenant: 'Tenant') -> BaseEmbedder:
         """
         Ottiene embedder condiviso per applicazione
         
         Args:
-            tenant_or_id: Oggetto Tenant o tenant_id (slug/UUID) per compatibilità
+            tenant: Oggetto Tenant OBBLIGATORIO
             
         Returns:
             Embedder condiviso configurato per tenant
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-31
+        Ultimo aggiornamento: 2025-08-31 - Eliminata retrocompatibilità
         """
-        # Gestione compatibilità Tenant vs tenant_id string
-        if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
-            # Oggetto Tenant - usa direttamente i suoi dati
-            tenant = tenant_or_id
-            normalized_tenant_id = tenant.tenant_id
-            tenant_display = f"{tenant.tenant_name} ({normalized_tenant_id})"
-        else:
-            # Retrocompatibilità: tenant_id string - normalizza
-            normalized_tenant_id = self._normalize_tenant_id(tenant_or_id)
-            tenant_display = str(tenant_or_id)
+        if not tenant or not hasattr(tenant, 'tenant_id'):
+            raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
+        
+        # Usa direttamente i dati del tenant
+        normalized_tenant_id = tenant.tenant_id
+        tenant_display = f"{tenant.tenant_name} ({normalized_tenant_id})"
             
         import traceback
         stack_trace = ''.join(traceback.format_stack()[-3:-1])
@@ -213,29 +213,30 @@ class EmbeddingManager:
                 self._current_embedder = None
                 self._current_tenant_id = None
     
-    def switch_tenant_embedder(self, tenant_or_id, force_reload: bool = False) -> BaseEmbedder:
+    def switch_tenant_embedder(self, tenant: 'Tenant', force_reload: bool = False) -> BaseEmbedder:
         """
         Forza switch a embedder specifico per tenant
         
         CORREZIONE 2025-08-25: Fix cache inconsistency durante force_reload
+        AGGIORNAMENTO 2025-08-31: Eliminata retrocompatibilità
         
         Args:
-            tenant_or_id: Oggetto Tenant o tenant_id (slug/UUID) per compatibilità
+            tenant: Oggetto Tenant OBBLIGATORIO
             force_reload: Se True, forza reload anche per stesso tenant
             
         Returns:
             Nuovo embedder configurato
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-31
+        Ultimo aggiornamento: 2025-08-31 - Eliminata retrocompatibilità
         """
-        # Gestione compatibilità Tenant vs tenant_id string
-        if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
-            # Oggetto Tenant - usa direttamente i suoi dati
-            tenant = tenant_or_id
-            normalized_tenant_id = tenant.tenant_id
-            tenant_display = f"{tenant.tenant_name} ({normalized_tenant_id})"
-        else:
-            # Retrocompatibilità: tenant_id string - normalizza
-            normalized_tenant_id = self._normalize_tenant_id(tenant_or_id)
-            tenant_display = str(tenant_or_id)
+        if not tenant or not hasattr(tenant, 'tenant_id'):
+            raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
+        
+        # Usa direttamente i dati del tenant
+        normalized_tenant_id = tenant.tenant_id
+        tenant_display = f"{tenant.tenant_name} ({normalized_tenant_id})"
         
         with self._manager_lock:
             print(f"🔄 Switch forzato embedder a tenant {tenant_display} -> {normalized_tenant_id} (force_reload={force_reload})")
@@ -312,25 +313,24 @@ class EmbeddingManager:
                 'factory_cache': embedding_factory.get_cache_status()
             }
     
-    def invalidate_cache_for_tenant(self, tenant_or_id):
+    def invalidate_cache_for_tenant(self, tenant: 'Tenant'):
         """
         Invalida esplicitamente la cache per un tenant specifico
         
         Scopo: Utile per debug e manutenzione, forza invalidazione cache senza reload
         
         Args:
-            tenant_or_id: Oggetto Tenant o tenant_id (slug/UUID) per compatibilità
+            tenant: Oggetto Tenant OBBLIGATORIO
             
-        Ultimo aggiornamento: 2025-08-25
+        Autore: Valerio Bignardi
+        Data: 2025-08-31
+        Ultimo aggiornamento: 2025-08-31 - Eliminata retrocompatibilità
         """
-        # Gestione compatibilità Tenant vs tenant_id string
-        if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
-            # Oggetto Tenant - usa direttamente i suoi dati
-            tenant = tenant_or_id
-            normalized_tenant_id = tenant.tenant_id
-        else:
-            # Retrocompatibilità: tenant_id string - normalizza
-            normalized_tenant_id = self._normalize_tenant_id(tenant_or_id)
+        if not tenant or not hasattr(tenant, 'tenant_id'):
+            raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
+        
+        # Usa direttamente i dati del tenant
+        normalized_tenant_id = tenant.tenant_id
         
         with self._manager_lock:
             if (self._current_embedder is not None and 

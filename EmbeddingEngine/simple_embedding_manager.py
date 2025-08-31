@@ -78,7 +78,7 @@ class SimpleEmbeddingManager:
         
         print(f"🎯 SimpleEmbeddingManager inizializzato")
     
-    def get_embedder_for_tenant(self, tenant_or_id) -> BaseEmbedder:
+    def get_embedder_for_tenant(self, tenant: 'Tenant') -> BaseEmbedder:
         """
         Ottiene embedder per tenant - LOGICA SEMPLIFICATA
         
@@ -89,21 +89,21 @@ class SimpleEmbeddingManager:
         4. Altrimenti riusa esistente
         
         Args:
-            tenant_or_id: Oggetto Tenant o tenant_id (slug/UUID) per compatibilità
+            tenant: Oggetto Tenant OBBLIGATORIO
             
         Returns:
             Embedder configurato per tenant
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-31
+        Ultimo aggiornamento: 2025-08-31 - Eliminata retrocompatibilità
         """
-        # Gestione compatibilità Tenant vs tenant_id string
-        if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
-            # Oggetto Tenant - usa direttamente i suoi dati
-            tenant = tenant_or_id
-            normalized_tenant_id = tenant.tenant_id
-            print(f"🎯 SIMPLE MANAGER: Usando oggetto Tenant {tenant.tenant_name} ({normalized_tenant_id})")
-        else:
-            # Retrocompatibilità: tenant_id string
-            normalized_tenant_id = self._normalize_tenant_id(tenant_or_id)
-            print(f"🎯 SIMPLE MANAGER: Richiesta embedder per tenant {normalized_tenant_id}")
+        if not tenant or not hasattr(tenant, 'tenant_id'):
+            raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
+        
+        # Usa direttamente i dati del tenant
+        normalized_tenant_id = tenant.tenant_id
+        print(f"🎯 SIMPLE MANAGER: Usando oggetto Tenant {tenant.tenant_name} ({normalized_tenant_id})")
         
         with self._manager_lock:
             

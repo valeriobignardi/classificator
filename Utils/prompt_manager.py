@@ -114,12 +114,12 @@ class PromptManager:
         if self.connection and self.connection.is_connected():
             self.connection.close()
     
-    def validate_tenant_prompts_strict(self, tenant_id: str, required_prompts: List[Dict[str, str]]) -> Dict[str, Any]:
+    def validate_tenant_prompts_strict(self, tenant: 'Tenant', required_prompts: List[Dict[str, str]]) -> Dict[str, Any]:
         """
         Validazione STRICT dei prompt obbligatori per un tenant
         
         Args:
-            tenant_id: ID del tenant
+            tenant: Oggetto Tenant OBBLIGATORIO
             required_prompts: Lista di dict con 'engine', 'prompt_type', 'prompt_name'
             
         Returns:
@@ -130,7 +130,13 @@ class PromptManager:
             
         Raises:
             Exception: Se tenant non ha prompt obbligatori configurati
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-25
+        Ultimo aggiornamento: 2025-08-31 - Eliminata retrocompatibilità
         """
+        if not tenant or not hasattr(tenant, 'tenant_id'):
+            raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
         try:
             validation_result = {
                 'valid': True,
@@ -138,10 +144,11 @@ class PromptManager:
                 'errors': []
             }
             
-            self.logger.info(f"🔍 Validazione STRICT prompt per tenant: {tenant_id}")
+            resolved_tenant_id = tenant.tenant_id
+            self.logger.info(f"🔍 Validazione STRICT prompt per tenant: {tenant.tenant_name} ({resolved_tenant_id})")
             
             if not self.connect():
-                raise Exception(f"Impossibile connettersi al database per validare prompt tenant {tenant_id}")
+                raise Exception(f"Impossibile connettersi al database per validare prompt tenant {tenant.tenant_name}")
             
             for prompt_req in required_prompts:
                 engine = prompt_req['engine']
@@ -149,14 +156,14 @@ class PromptManager:
                 prompt_name = prompt_req['prompt_name']
                 
                 # Cache key per il prompt
-                cache_key = f"{tenant_id}:{engine}:{prompt_type}:{prompt_name}"
+                cache_key = f"{resolved_tenant_id}:{engine}:{prompt_type}:{prompt_name}"
                 
                 # Controlla esistenza del prompt
-                prompt_data = self._load_prompt_from_db(tenant_id, engine, prompt_type, prompt_name)
+                prompt_data = self._load_prompt_from_db(tenant, engine, prompt_type, prompt_name)
                 
                 if not prompt_data:
                     missing_prompt = {
-                        'tenant_id': tenant_id,
+                        'tenant_id': resolved_tenant_id,
                         'engine': engine,
                         'prompt_type': prompt_type,
                         'prompt_name': prompt_name,
@@ -172,19 +179,19 @@ class PromptManager:
             if not validation_result['valid']:
                 total_missing = len(validation_result['missing_prompts'])
                 raise Exception(
-                    f"Tenant {tenant_id} ha {total_missing} prompt obbligatori mancanti. "
+                    f"Tenant {tenant.tenant_name} ({resolved_tenant_id}) ha {total_missing} prompt obbligatori mancanti. "
                     f"Configurazione richiesta prima di procedere."
                 )
             
-            self.logger.info(f"✅ Validazione STRICT completata per tenant {tenant_id}: tutti i prompt obbligatori sono presenti")
+            self.logger.info(f"✅ Validazione STRICT completata per tenant {tenant.tenant_name} ({resolved_tenant_id}): tutti i prompt obbligatori sono presenti")
             return validation_result
             
         except Exception as e:
-            self.logger.error(f"❌ Errore validazione STRICT prompt tenant {tenant_id}: {e}")
+            self.logger.error(f"❌ Errore validazione STRICT prompt tenant {tenant.tenant_name} ({resolved_tenant_id}): {e}")
             raise e
     
     def get_prompt_strict(self, 
-                         tenant_id: str,
+                         tenant: 'Tenant',
                          engine: str, 
                          prompt_type: str,
                          prompt_name: str,
@@ -193,7 +200,7 @@ class PromptManager:
         Recupera prompt con validazione STRICT (nessun fallback)
         
         Args:
-            tenant_id: ID del tenant
+            tenant: Oggetto Tenant OBBLIGATORIO
             engine: Tipo di engine ('LLM', 'ML', 'FINETUNING')
             prompt_type: Tipo di prompt ('SYSTEM', 'USER', 'TEMPLATE', 'SPECIALIZED')
             prompt_name: Nome identificativo del prompt
@@ -204,18 +211,24 @@ class PromptManager:
             
         Raises:
             Exception: Se prompt non trovato o non disponibile
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-31
         """
+        if not tenant or not hasattr(tenant, 'tenant_id'):
+            raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
+        
         try:
-            cache_key = f"{tenant_id}:{engine}:{prompt_type}:{prompt_name}"
+            cache_key = f"{tenant.tenant_id}:{engine}:{prompt_type}:{prompt_name}"
             self.logger.debug(f"🔍 Caricamento STRICT prompt: {cache_key}")
             
             # Utilizza il metodo standard ma con controllo strict
-            prompt_content = self.get_prompt(tenant_id, engine, prompt_type, prompt_name, variables)
+            prompt_content = self.get_prompt(tenant, engine, prompt_type, prompt_name, variables)
             
             if prompt_content is None:
                 raise Exception(
                     f"Prompt OBBLIGATORIO non trovato o non disponibile: {cache_key}. "
-                    f"Configurazione richiesta per il tenant {tenant_id}."
+                    f"Configurazione richiesta per il tenant {tenant.tenant_id}."
                 )
             
             self.logger.debug(f"✅ Prompt STRICT caricato con successo: {cache_key}")
@@ -226,7 +239,7 @@ class PromptManager:
             raise e
     
     def get_prompt(self, 
-                   tenant_or_id,
+                   tenant: 'Tenant',
                    engine: str, 
                    prompt_type: str,
                    prompt_name: str,
@@ -235,7 +248,7 @@ class PromptManager:
         Recupera e processa un prompt con variabili dinamiche
         
         Args:
-            tenant_or_id: Oggetto Tenant o tenant_id (slug/UUID) per compatibilità
+            tenant: Oggetto Tenant OBBLIGATORIO
             engine: Tipo di engine ('LLM', 'ML', 'FINETUNING')
             prompt_type: Tipo di prompt ('SYSTEM', 'USER', 'TEMPLATE', 'SPECIALIZED')
             prompt_name: Nome identificativo del prompt
@@ -243,16 +256,17 @@ class PromptManager:
             
         Returns:
             Prompt processato con variabili sostituite, o None se non trovato
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-31
+        Ultimo aggiornamento: 2025-08-31 - Eliminata retrocompatibilità
         """
+        if not tenant or not hasattr(tenant, 'tenant_id'):
+            raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
+        
         try:
-            # Gestione compatibilità Tenant vs tenant_id string
-            if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
-                # Oggetto Tenant - usa direttamente i suoi dati
-                tenant = tenant_or_id
-                resolved_tenant_id = tenant.tenant_id
-            else:
-                # Retrocompatibilità: tenant_id string - normalizza
-                resolved_tenant_id = self._resolve_tenant_id(tenant_or_id)
+            # Usa direttamente i dati del tenant
+            resolved_tenant_id = tenant.tenant_id
             
             # Cache key per il prompt
             cache_key = f"{resolved_tenant_id}:{engine}:{prompt_type}:{prompt_name}"
@@ -288,29 +302,30 @@ class PromptManager:
             self.logger.error(f"❌ Errore recupero prompt {cache_key}: {e}")
             return None
     
-    def _load_prompt_from_db(self, tenant_or_id, engine: str, 
+    def _load_prompt_from_db(self, tenant: 'Tenant', engine: str, 
                            prompt_type: str, prompt_name: str) -> Optional[Dict]:
         """
         Carica prompt dal database
         
         Args:
-            tenant_or_id: Oggetto Tenant o tenant_id per compatibilità
+            tenant: Oggetto Tenant OBBLIGATORIO
         
         Returns:
             Dict con 'content', 'dynamic_variables', 'config_parameters' o None
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-31
+        Ultimo aggiornamento: 2025-08-31 - Eliminata retrocompatibilità
         """
+        if not tenant or not hasattr(tenant, 'tenant_id'):
+            raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
+        
         if not self.connect():
             return None
         
         try:
-            # Gestione compatibilità Tenant vs tenant_id string
-            if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
-                # Oggetto Tenant - usa direttamente i suoi dati
-                tenant = tenant_or_id
-                resolved_tenant_id = tenant.tenant_id
-            else:
-                # Retrocompatibilità: tenant_id string - normalizza
-                resolved_tenant_id = self._resolve_tenant_id(tenant_or_id)
+            # Usa direttamente i dati del tenant
+            resolved_tenant_id = tenant.tenant_id
             
             cursor = self.connection.cursor()
             
@@ -806,27 +821,28 @@ Motivazione: Richiesta diretta di prenotazione"""
         except Error as e:
             self.logger.error(f"❌ Errore salvataggio history: {e}")
     
-    def list_prompts_for_tenant(self, tenant_or_id) -> List[Dict]:
+    def list_prompts_for_tenant(self, tenant: 'Tenant') -> List[Dict]:
         """
         Elenca tutti i prompt disponibili per un tenant
         
         Args:
-            tenant_or_id: Oggetto Tenant o tenant_id per compatibilità
+            tenant: Oggetto Tenant OBBLIGATORIO
         
         Returns:
             Lista di dict con info sui prompt
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-31
+        Ultimo aggiornamento: 2025-08-31 - Eliminata retrocompatibilità
         """
+        if not tenant or not hasattr(tenant, 'tenant_id'):
+            raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
+        
         if not self.connect():
             return []
         
-        # Gestione compatibilità Tenant vs tenant_id string
-        if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
-            # Oggetto Tenant - usa direttamente i suoi dati
-            tenant = tenant_or_id
-            resolved_tenant_id = tenant.tenant_id
-        else:
-            # Retrocompatibilità: tenant_id string - normalizza
-            resolved_tenant_id = self._resolve_tenant_id(tenant_or_id)
+        # Usa direttamente i dati del tenant
+        resolved_tenant_id = tenant.tenant_id
         
         try:
             cursor = self.connection.cursor()
@@ -911,29 +927,29 @@ Motivazione: Richiesta diretta di prenotazione"""
             # Fallback: restituisce l'identifier originale
             return tenant_identifier
 
-    def get_all_prompts_for_tenant(self, tenant_or_id) -> List[Dict[str, Any]]:
+    def get_all_prompts_for_tenant(self, tenant: 'Tenant') -> List[Dict[str, Any]]:
         """
         Recupera tutti i prompt di un tenant con dettagli completi
         
         Args:
-            tenant_id: ID del tenant (può essere tenant_slug o tenant_id completo)
+            tenant: Oggetto Tenant OBBLIGATORIO
             
         Returns:
             Lista completa di prompt con tutti i dettagli
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-31
+        Ultimo aggiornamento: 2025-08-31 - Eliminata retrocompatibilità
         """
+        if not tenant or not hasattr(tenant, 'tenant_id'):
+            raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
+        
         if not self.connection:
             self.connect()
         
-        # Gestione compatibilità Tenant vs tenant_id string
-        if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
-            # Oggetto Tenant - usa direttamente i suoi dati
-            tenant = tenant_or_id
-            resolved_tenant_id = tenant.tenant_id
-            tenant_display = f"{tenant.tenant_name} ({resolved_tenant_id})"
-        else:
-            # Retrocompatibilità: tenant_id string - normalizza
-            resolved_tenant_id = self._resolve_tenant_id(tenant_or_id)
-            tenant_display = str(tenant_or_id)
+        # Usa direttamente i dati del tenant
+        resolved_tenant_id = tenant.tenant_id
+        tenant_display = f"{tenant.tenant_name} ({resolved_tenant_id})"
         
         try:
             cursor = self.connection.cursor()
@@ -1686,7 +1702,7 @@ Motivazione: Richiesta diretta di prenotazione"""
     
     def get_examples_for_placeholder(
         self, 
-        tenant_or_id, 
+        tenant: 'Tenant', 
         engine: str = 'LLM', 
         esempio_type: str = 'CONVERSATION',
         limit: int = None
@@ -1695,7 +1711,7 @@ Motivazione: Richiesta diretta di prenotazione"""
         Recupera esempi formattati per sostituire placeholder {{examples_text}}
         
         Args:
-            tenant_or_id: Oggetto Tenant o tenant_id per compatibilità
+            tenant: Oggetto Tenant OBBLIGATORIO
             engine: Tipo di engine (LLM, ML, FINETUNING) 
             esempio_type: Tipo di esempio (CONVERSATION, CLASSIFICATION, TEMPLATE)
             limit: Numero massimo di esempi (opzionale)
@@ -1705,24 +1721,20 @@ Motivazione: Richiesta diretta di prenotazione"""
             
         Autore: Sistema di Classificazione AI
         Data: 2025-08-25
-        Ultimo aggiornamento: 2025-08-25
+        Ultimo aggiornamento: 2025-08-31 - Eliminata retrocompatibilità
         """
+        if not tenant or not hasattr(tenant, 'tenant_id'):
+            raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
+        
         if not self.connection:
             self.connect()
             
         try:
             cursor = self.connection.cursor()
             
-            # Gestione compatibilità Tenant vs tenant_id string
-            if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
-                # Oggetto Tenant - usa direttamente i suoi dati
-                tenant = tenant_or_id
-                resolved_tenant_id = tenant.tenant_id
-                tenant_display = f"{tenant.tenant_name} ({resolved_tenant_id})"
-            else:
-                # Retrocompatibilità: tenant_id string - normalizza
-                resolved_tenant_id = self._resolve_tenant_id(tenant_or_id)
-                tenant_display = str(tenant_or_id)
+            # Usa direttamente i dati del tenant
+            resolved_tenant_id = tenant.tenant_id
+            tenant_display = f"{tenant.tenant_name} ({resolved_tenant_id})"
             
             # Query per recuperare esempi attivi
             query = """
@@ -1762,7 +1774,7 @@ Motivazione: Richiesta diretta di prenotazione"""
     
     def create_example(
         self,
-        tenant_or_id,
+        tenant: 'Tenant',
         esempio_name: str,
         esempio_content: str,
         engine: str = 'LLM',
@@ -1775,7 +1787,7 @@ Motivazione: Richiesta diretta di prenotazione"""
         Crea nuovo esempio nel database
         
         Args:
-            tenant_or_id: Oggetto Tenant o tenant_id per compatibilità
+            tenant: Oggetto Tenant OBBLIGATORIO
             esempio_name: Nome identificativo dell'esempio
             esempio_content: Contenuto formattato UTENTE:/ASSISTENTE:
             engine: Tipo di engine (LLM, ML, FINETUNING)
@@ -1791,24 +1803,19 @@ Motivazione: Richiesta diretta di prenotazione"""
         Data: 2025-08-25
         Ultimo aggiornamento: 2025-08-25
         """
+        if not tenant or not hasattr(tenant, 'tenant_id'):
+            raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
+        
         if not self.connection:
             self.connect()
             
         try:
             cursor = self.connection.cursor()
             
-            # Gestione compatibilità Tenant vs tenant_id string
-            if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
-                # Oggetto Tenant - usa direttamente i suoi dati
-                tenant = tenant_or_id
-                resolved_tenant_id = tenant.tenant_id
-                tenant_name = tenant.tenant_name
-                tenant_display = f"{tenant.tenant_name} ({resolved_tenant_id})"
-            else:
-                # Retrocompatibilità: tenant_id string - normalizza
-                resolved_tenant_id = self._resolve_tenant_id(tenant_or_id)
-                tenant_name = self._get_tenant_name(resolved_tenant_id)
-                tenant_display = str(tenant_or_id)
+            # Usa direttamente i dati del tenant
+            resolved_tenant_id = tenant.tenant_id
+            tenant_name = tenant.tenant_name
+            tenant_display = f"{tenant.tenant_name} ({resolved_tenant_id})"
             
             # Controlla se esempio già esiste
             check_query = """
@@ -1862,7 +1869,7 @@ Motivazione: Richiesta diretta di prenotazione"""
     
     def get_examples_list(
         self,
-        tenant_or_id,
+        tenant: 'Tenant',
         engine: str = 'LLM',
         esempio_type: str = None
     ) -> List[Dict[str, Any]]:
@@ -1870,33 +1877,28 @@ Motivazione: Richiesta diretta di prenotazione"""
         Recupera lista esempi per un tenant
         
         Args:
-            tenant_or_id: Oggetto Tenant o tenant_id per compatibilità
+            tenant: Oggetto Tenant OBBLIGATORIO
             engine: Tipo di engine (LLM, ML, FINETUNING)
             esempio_type: Tipo esempio (opzionale per filtrare)
             
         Returns:
             Lista dizionari con dati esempi
             
-        Autore: Sistema di Classificazione AI  
+        Autore: Valerio Bignardi
         Data: 2025-08-25
-        Ultimo aggiornamento: 2025-08-25
+        Ultimo aggiornamento: 2025-08-31 - Eliminata retrocompatibilità
         """
+        if not tenant or not hasattr(tenant, 'tenant_id'):
+            raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
         if not self.connection:
             self.connect()
             
         try:
             cursor = self.connection.cursor()
             
-            # Gestione compatibilità Tenant vs tenant_id string  
-            if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
-                # Oggetto Tenant - usa direttamente i suoi dati
-                tenant = tenant_or_id
-                resolved_tenant_id = tenant.tenant_id
-                tenant_display = f"{tenant.tenant_name} ({resolved_tenant_id})"
-            else:
-                # Retrocompatibilità: tenant_id string - normalizza
-                resolved_tenant_id = self._resolve_tenant_id(tenant_or_id)
-                tenant_display = str(tenant_or_id)
+            # Usa direttamente i dati del tenant
+            resolved_tenant_id = tenant.tenant_id
+            tenant_display = f"{tenant.tenant_name} ({resolved_tenant_id})"
             
             # Query dinamica in base ai filtri - Solo esempi attivi
             query = """
@@ -1943,7 +1945,7 @@ Motivazione: Richiesta diretta di prenotazione"""
     def update_example(
         self,
         esempio_id: int,
-        tenant_or_id,
+        tenant: 'Tenant',
         **updates
     ) -> bool:
         """
@@ -1951,32 +1953,27 @@ Motivazione: Richiesta diretta di prenotazione"""
         
         Args:
             esempio_id: ID dell'esempio da aggiornare
-            tenant_or_id: Oggetto Tenant o tenant_id per sicurezza
+            tenant: Oggetto Tenant OBBLIGATORIO per sicurezza
             **updates: Campi da aggiornare
             
         Returns:
             True se aggiornamento riuscito, False altrimenti
             
-        Autore: Sistema di Classificazione AI
-        Data: 2025-08-25  
-        Ultimo aggiornamento: 2025-08-25
+        Autore: Valerio Bignardi
+        Data: 2025-08-31
+        Ultimo aggiornamento: 2025-08-31 - Eliminata retrocompatibilità
         """
+        if not tenant or not hasattr(tenant, 'tenant_id'):
+            raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
         if not self.connection:
             self.connect()
             
         try:
             cursor = self.connection.cursor()
             
-            # Gestione compatibilità Tenant vs tenant_id string
-            if TENANT_AVAILABLE and hasattr(tenant_or_id, 'tenant_id'):
-                # Oggetto Tenant - usa direttamente i suoi dati
-                tenant = tenant_or_id
-                resolved_tenant_id = tenant.tenant_id
-                tenant_display = f"{tenant.tenant_name} ({resolved_tenant_id})"
-            else:
-                # Retrocompatibilità: tenant_id string - normalizza
-                resolved_tenant_id = self._resolve_tenant_id(tenant_or_id)
-                tenant_display = str(tenant_or_id)
+            # Usa direttamente i dati del tenant
+            resolved_tenant_id = tenant.tenant_id
+            tenant_display = f"{tenant.tenant_name} ({resolved_tenant_id})"
             
             # Costruisci query dinamica
             set_clauses = []
@@ -2023,26 +2020,26 @@ Motivazione: Richiesta diretta di prenotazione"""
                 self.connection.rollback()
             return False
     
-    def delete_example(self, esempio_id: int, tenant_or_id) -> bool:
+    def delete_example(self, esempio_id: int, tenant: 'Tenant') -> bool:
         """
         Elimina esempio (soft delete - imposta is_active = False)
         
         Args:
             esempio_id: ID dell'esempio da eliminare
-            tenant_or_id: Oggetto Tenant o tenant_id per sicurezza
+            tenant: Oggetto Tenant OBBLIGATORIO per sicurezza
             
         Returns:
             True se eliminazione riuscita, False altrimenti
             
-        Autore: Sistema di Classificazione AI
+        Autore: Valerio Bignardi
         Data: 2025-08-25
-        Ultimo aggiornamento: 2025-08-25
+        Ultimo aggiornamento: 2025-08-31 - Eliminata retrocompatibilità
         """
-        return self.update_example(esempio_id, tenant_or_id, is_active=False)
+        return self.update_example(esempio_id, tenant, is_active=False)
     
     def get_prompt_with_examples(
         self,
-        tenant_id: str,
+        tenant: 'Tenant',
         engine: str,
         prompt_type: str,
         prompt_name: str,
@@ -2052,7 +2049,7 @@ Motivazione: Richiesta diretta di prenotazione"""
         Recupera prompt e sostituisce {{examples_text}} con esempi reali
         
         Args:
-            tenant_id: ID del tenant
+            tenant: Oggetto Tenant OBBLIGATORIO
             engine: Tipo di engine  
             prompt_type: Tipo di prompt
             prompt_name: Nome del prompt
@@ -2061,13 +2058,15 @@ Motivazione: Richiesta diretta di prenotazione"""
         Returns:
             Prompt con esempi sostituiti o None se errore
             
-        Autore: Sistema di Classificazione AI
+        Autore: Valerio Bignardi
         Data: 2025-08-25
-        Ultimo aggiornamento: 2025-08-25
+        Ultimo aggiornamento: 2025-08-31 - Eliminata retrocompatibilità
         """
+        if not tenant or not hasattr(tenant, 'tenant_id'):
+            raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
         try:
             # Carica prompt base
-            prompt = self.get_prompt_strict(tenant_id, engine, prompt_type, prompt_name)
+            prompt = self.get_prompt_strict(tenant, engine, prompt_type, prompt_name)
             
             # Se non contiene placeholder, restituisci com'è
             if '{{examples_text}}' not in prompt:
@@ -2075,7 +2074,7 @@ Motivazione: Richiesta diretta di prenotazione"""
             
             # Carica esempi
             examples = self.get_examples_for_placeholder(
-                tenant_id, engine, 'CONVERSATION', examples_limit
+                tenant, engine, 'CONVERSATION', examples_limit
             )
             
             # Sostituisci placeholder

@@ -4259,8 +4259,12 @@ def get_prompts_for_tenant(tenant_id: str):
     try:
         print(f"🔍 API: Recupero prompt per tenant_id: {tenant_id}")
         
+        from Utils.tenant import Tenant
+        tenant = Tenant.from_uuid(tenant_id)
+        print(f"✅ Tenant risolto: {tenant.tenant_name} ({tenant.tenant_id})")
+        
         prompt_manager = PromptManager()
-        prompts = prompt_manager.get_all_prompts_for_tenant(tenant_id)
+        prompts = prompt_manager.get_all_prompts_for_tenant(tenant)
         
         print(f"✅ Recuperati {len(prompts)} prompt per tenant {tenant_id}")
         
@@ -4387,10 +4391,14 @@ def get_prompts_status_by_tenant_id(tenant_identifier: str):
         print("🔍 [DEBUG] Inizializzo PromptManager...")
         prompt_manager = PromptManager()
         
-        print(f"🔍 [DEBUG] Chiamo get_all_prompts_for_tenant({tenant_id})...")
-        # Per tenant_id completo, dobbiamo trovare lo slug corrispondente
-        # Il PromptManager ora gestisce automaticamente questa conversione
-        prompts = prompt_manager.get_all_prompts_for_tenant(tenant_id)
+        print(f"🔍 [DEBUG] Creo oggetto Tenant da {tenant_id}...")
+        from Utils.tenant import Tenant
+        tenant = Tenant.from_uuid(tenant_id)
+        print(f"✅ [DEBUG] Tenant risolto: {tenant.tenant_name} ({tenant.tenant_id})")
+        
+        print(f"🔍 [DEBUG] Chiamo get_all_prompts_for_tenant con oggetto Tenant...")
+        # Ora uso l'oggetto Tenant invece del tenant_id stringa
+        prompts = prompt_manager.get_all_prompts_for_tenant(tenant)
         
         print(f"🔍 [DEBUG] Recuperati {len(prompts)} prompt dal PromptManager")
         
@@ -4637,10 +4645,16 @@ def copy_prompts_from_humanitas():
         # ID del tenant Humanitas (template)
         HUMANITAS_TENANT_ID = "015007d9-d413-11ef-86a5-96000228e7fe"
         
+        from Utils.tenant import Tenant
+        humanitas_tenant = Tenant.from_uuid(HUMANITAS_TENANT_ID)
+        target_tenant = Tenant.from_uuid(target_tenant_id)
+        print(f"✅ Tenant sorgente: {humanitas_tenant.tenant_name}")
+        print(f"✅ Tenant destinazione: {target_tenant.tenant_name}")
+        
         prompt_manager = PromptManager()
         
         # 1. Recupera tutti i prompt di Humanitas
-        humanitas_prompts = prompt_manager.get_all_prompts_for_tenant(HUMANITAS_TENANT_ID)
+        humanitas_prompts = prompt_manager.get_all_prompts_for_tenant(humanitas_tenant)
         
         if not humanitas_prompts:
             return jsonify({

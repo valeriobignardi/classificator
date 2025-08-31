@@ -101,9 +101,15 @@ class LettoreConversazioni:
         """
         
         try:
-            print(f"🔍 [DEBUG ONLY_USER] Esecuzione query per leggere conversazioni dal schema '{self.schema}'...")
-            print(f"🎯 [DEBUG ONLY_USER] Parametro only_user = {self.only_user}")
-            print(f"📋 [DEBUG ONLY_USER] Filtro applicato: {said_by_filter}")
+            print(f"🔍 [DEBUG SQL] =============================================")
+            print(f"🔍 [DEBUG SQL] Schema utilizzato: '{self.schema}'")
+            print(f"🔍 [DEBUG SQL] Tenant ID: {self.tenant_id}")
+            print(f"🔍 [DEBUG SQL] Only User: {self.only_user}")
+            print(f"� [DEBUG SQL] Filtro applicato: {said_by_filter}")
+            print(f"🔍 [DEBUG SQL] =============================================")
+            print(f"🔍 [DEBUG SQL] QUERY COMPLETA:")
+            print(f"🔍 [DEBUG SQL] {query}")
+            print(f"🔍 [DEBUG SQL] =============================================")
             
             risultati = self.connettore.esegui_query(query)
             

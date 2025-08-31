@@ -124,9 +124,12 @@ def get_examples():
         
         logger.info(f"🔍 GET /api/examples - tenant: {tenant_id}, engine: {engine}")
         
+        # Risolvi oggetto Tenant dal tenant_id
+        tenant = Tenant.from_uuid(tenant_id)
+        
         # Recupera esempi
         examples_list = prompt_manager.get_examples_list(
-            tenant_or_id=tenant_id,
+            tenant=tenant,
             engine=engine,
             esempio_type=esempio_type
         )
@@ -200,9 +203,12 @@ def create_example():
         
         logger.info(f"📝 POST /api/examples - tenant: {tenant_id}, nome: {esempio_name}")
         
+        # Risolvi oggetto Tenant dal tenant_id
+        tenant = Tenant.from_uuid(tenant_id)
+        
         # Crea esempio
         esempio_id = prompt_manager.create_example(
-            tenant_or_id=tenant_id,  # ✅ CORRETTO: parametro corretto
+            tenant=tenant,
             esempio_name=esempio_name,
             esempio_content=esempio_content,
             engine=engine,
@@ -324,10 +330,13 @@ def delete_example(esempio_id: int):
         
         logger.info(f"🗑️ DELETE /api/examples/{esempio_id} - tenant: {tenant_id}")
         
+        # Risolvi oggetto Tenant dal tenant_id
+        tenant = Tenant.from_uuid(tenant_id)
+        
         # Elimina esempio (soft delete)
         success = prompt_manager.delete_example(
             esempio_id=esempio_id,
-            tenant_or_id=tenant_id  # ✅ CORRETTO: parametro corretto
+            tenant=tenant
         )
         
         if success:

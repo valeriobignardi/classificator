@@ -19,11 +19,14 @@ import os
 import json
 import logging
 import yaml
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, TYPE_CHECKING
 from datetime import datetime
 import mysql.connector
 from mysql.connector import Error
 import uuid
+
+if TYPE_CHECKING:
+    from Database.tenant_resolver import Tenant
 
 class ToolManager:
     """
@@ -520,31 +523,27 @@ class ToolManager:
         self.logger.info(f"📤 Esportati {len(tools)} tools per tenant {tenant_id}")
         return export_data
 
-    def get_tool_by_name(self, tool_name: str, tenant_or_id=None) -> Optional[Dict[str, Any]]:
+    def get_tool_by_name(self, tool_name: str, tenant: 'Tenant' = None) -> Optional[Dict[str, Any]]:
         """
         Recupera un tool attivo per nome e tenant
         
         Args:
             tool_name: Nome del tool da cercare
-            tenant_or_id: Oggetto Tenant o tenant_id per filtrare
+            tenant: Oggetto Tenant opzionale per filtrare
             
         Returns:
             Dict con dati del tool o None se non trovato
             
         Autore: Valerio Bignardi
         Data: 2025-08-30
+        Ultimo aggiornamento: 2025-08-31 - Eliminata retrocompatibilità
         """
         try:
             connection = self._get_connection()
             cursor = connection.cursor(dictionary=True)
             
-            # Gestione compatibilità Tenant vs tenant_id string
-            if tenant_or_id is not None and hasattr(tenant_or_id, 'tenant_id'):
-                # Oggetto Tenant - usa direttamente i suoi dati
-                resolved_tenant_id = tenant_or_id.tenant_id
-            else:
-                # Retrocompatibilità: tenant_id string
-                resolved_tenant_id = tenant_or_id
+            # Usa direttamente i dati del tenant se specificato
+            resolved_tenant_id = tenant.tenant_id if tenant and hasattr(tenant, 'tenant_id') else None
             
             # Query per tool attivo
             query = """

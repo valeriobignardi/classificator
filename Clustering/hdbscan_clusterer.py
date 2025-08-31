@@ -115,9 +115,10 @@ class HDBSCANClusterer:
         self.metric = metric or clustering_config.get('metric', 'cosine')
         
         # Parametri avanzati da config o input - ESPANSI PER FRONTEND
-        self.cluster_selection_method = cluster_selection_method or clustering_config.get('cluster_selection_method', 'eom')
+        # 🔧 BUGFIX: Usa controllo esplicito per evitare sovrascrittura con default
+        self.cluster_selection_method = cluster_selection_method if cluster_selection_method is not None else clustering_config.get('cluster_selection_method', 'eom')
         self.alpha = alpha if alpha is not None else clustering_config.get('alpha', 1.0)  # Controllo noise/outlier - BUGFIX
-        self.max_cluster_size = max_cluster_size or clustering_config.get('max_cluster_size', 0)  # 0 = unlimited 
+        self.max_cluster_size = max_cluster_size if max_cluster_size is not None else clustering_config.get('max_cluster_size', 0)  # 0 = unlimited 
         self.allow_single_cluster = allow_single_cluster if allow_single_cluster is not None else clustering_config.get('allow_single_cluster', False)
         
         # Parametri performance

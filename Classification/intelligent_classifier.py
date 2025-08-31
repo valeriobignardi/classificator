@@ -185,23 +185,49 @@ class IntelligentClassifier:
             if enable_logging:
                 print(f"🎯 IntelligentClassifier: Uso tenant centralizzato {tenant}")
         elif client_name and TENANT_AVAILABLE:
-            # Legacy mode: crea Tenant da client_name
-            try:
-                # Prova prima come slug, poi come UUID
-                if Tenant._is_valid_uuid(client_name):
-                    self.tenant = Tenant.from_uuid(client_name)
-                else:
-                    self.tenant = Tenant.from_slug(client_name)
-                self.client_name = client_name
-                self.tenant_id = self.tenant.tenant_id
+            # GESTIONE TENANT DI TEST
+            if client_name.endswith('_test'):
+                # Client di test: estrae tenant reale e crea tenant temporaneo
+                base_tenant_id = client_name.replace('_test', '')
                 if enable_logging:
-                    print(f"🔄 IntelligentClassifier: Convertito client_name -> Tenant {self.tenant}")
-            except Exception as e:
-                if enable_logging:
-                    print(f"⚠️ Fallback: impossibile creare Tenant da {client_name}: {e}")
-                self.tenant = None
-                self.client_name = client_name
-                self.tenant_id = client_name or "humanitas"
+                    print(f"🧪 Rilevato tenant di test: {client_name}, base tenant: {base_tenant_id}")
+                try:
+                    # Cerca di ottenere tenant reale per copiare configurazione
+                    if Tenant._is_valid_uuid(base_tenant_id):
+                        base_tenant = Tenant.from_uuid(base_tenant_id)
+                    else:
+                        base_tenant = Tenant.from_slug(base_tenant_id)
+                    
+                    # Crea tenant temporaneo per test con configurazione base
+                    self.tenant = None  # Nessun tenant reale per i test
+                    self.client_name = client_name
+                    self.tenant_id = base_tenant_id  # Usa configurazione del tenant base
+                    if enable_logging:
+                        print(f"🧪 Tenant di test configurato: {client_name} -> config da {base_tenant.tenant_name}")
+                except Exception as e:
+                    if enable_logging:
+                        print(f"⚠️ Errore setup tenant test {client_name}: {e}, uso fallback")
+                    self.tenant = None
+                    self.client_name = client_name
+                    self.tenant_id = "humanitas"  # Fallback sicuro
+            else:
+                # Legacy mode: crea Tenant da client_name
+                try:
+                    # Prova prima come slug, poi come UUID
+                    if Tenant._is_valid_uuid(client_name):
+                        self.tenant = Tenant.from_uuid(client_name)
+                    else:
+                        self.tenant = Tenant.from_slug(client_name)
+                    self.client_name = client_name
+                    self.tenant_id = self.tenant.tenant_id
+                    if enable_logging:
+                        print(f"🔄 IntelligentClassifier: Convertito client_name -> Tenant {self.tenant}")
+                except Exception as e:
+                    if enable_logging:
+                        print(f"⚠️ Fallback: impossibile creare Tenant da {client_name}: {e}")
+                    self.tenant = None
+                    self.client_name = client_name
+                    self.tenant_id = client_name or "humanitas"
         else:
             # Fallback completo
             self.tenant = None
@@ -1141,12 +1167,9 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             raise Exception(error_msg)
         
         try:
-            # 🎯 USA TENANT CENTRALIZZATO invece di _resolve_tenant_id
-            if self.tenant:
-                resolved_tenant_id = self.tenant.tenant_id
-            else:
-                # Fallback legacy con risoluzione
-                resolved_tenant_id = self.prompt_manager._resolve_tenant_id(self.tenant_id)
+            # 🎯 USA TENANT CENTRALIZZATO - controlla che esista l'oggetto tenant
+            if not self.tenant:
+                raise Exception(f"Oggetto tenant non disponibile per {self.tenant_id}")
             
             # Riassumi se troppo lungo
             processed_text = self._summarize_if_long(conversation_text)
@@ -1171,9 +1194,9 @@ Ragionamento: {ex["motivation"]}"""
                 'processed_text': processed_text,
             }
             
-            # Carica prompt dal database con validazione STRICT
+            # Carica prompt dal database con validazione STRICT - passa l'oggetto tenant
             user_prompt = self.prompt_manager.get_prompt_strict(
-                tenant_id=resolved_tenant_id,
+                self.tenant,  # Passa l'oggetto tenant completo
                 engine="LLM",
                 prompt_type="TEMPLATE",
                 prompt_name="intelligent_classifier_user_template",
@@ -1243,22 +1266,20 @@ Ragionamento: {ex["motivation"]}"""
                 self.logger.debug("⚠️ PromptManager non disponibile per caricamento esempi")
                 return []
             
-            # 🎯 USA TENANT CENTRALIZZATO invece di _resolve_tenant_id
-            if self.tenant:
-                resolved_tenant_id = self.tenant.tenant_id
-            else:
-                # Fallback legacy con risoluzione
-                resolved_tenant_id = self.prompt_manager._resolve_tenant_id(self.tenant_id)
+            # 🎯 USA TENANT CENTRALIZZATO - passa l'oggetto tenant completo
+            if not self.tenant:
+                self.logger.error("❌ Oggetto tenant non disponibile per caricamento esempi")
+                return []
             
             # Carica esempi dal database TAG usando il prompt_manager
             esempi_list = self.prompt_manager.get_examples_list(
-                tenant_id=resolved_tenant_id,
+                self.tenant,  # Passa l'oggetto tenant completo
                 engine='LLM',
                 esempio_type='CONVERSATION'
             )
             
             if not esempi_list:
-                self.logger.debug(f"⚠️ Nessun esempio trovato nel database TAG per tenant {resolved_tenant_id}")
+                self.logger.debug(f"⚠️ Nessun esempio trovato nel database TAG per tenant {self.tenant.tenant_id}")
                 return []
             
             # Converte gli esempi dal formato database al formato richiesto
@@ -1266,7 +1287,7 @@ Ragionamento: {ex["motivation"]}"""
             for esempio in esempi_list[:max_examples]:
                 try:
                     # Carica il contenuto completo dell'esempio
-                    full_content = self._get_example_full_content(resolved_tenant_id, esempio['esempio_name'])
+                    full_content = self._get_example_full_content(self.tenant.tenant_id, esempio['esempio_name'])
                     if full_content:
                         # Estrae testo conversazione dal formato UTENTE:/ASSISTENTE:
                         conversation_text = self._extract_conversation_from_example(full_content)
@@ -1281,7 +1302,7 @@ Ragionamento: {ex["motivation"]}"""
                     continue
             
             if converted_examples:
-                self.logger.info(f"✅ Caricati {len(converted_examples)} esempi dal database TAG per tenant {resolved_tenant_id}")
+                self.logger.info(f"✅ Caricati {len(converted_examples)} esempi dal database TAG per tenant {self.tenant.tenant_id}")
             
             return converted_examples
             
@@ -1668,7 +1689,7 @@ Ragionamento: {ex["motivation"]}"""
                 print("\n" + "="*80)
                 print("👤 DEBUG PROMPT USER - DATABASE")
                 print("="*80)
-                print(f"📋 Prompt Name: LLM/TEMPLATE/intelligent_classifier_user")
+                print(f"📋 Prompt Name: LLM/TEMPLATE/intelligent_classifier_user_template")
                 print(f"🏢 Tenant ID: {self.tenant_id}")
                 print(f"📏 Text Length: {len(conversation_text)} chars")
                 print("-"*80)

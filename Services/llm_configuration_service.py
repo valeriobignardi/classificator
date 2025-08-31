@@ -65,6 +65,11 @@ class LLMConfigurationService:
         self.cache_lock = threading.Lock()
         self.reload_enabled = True
         
+        # Cache per modelli disponibili (evita chiamate ripetitive)
+        self.models_cache = {}
+        self.models_cache_timestamp = 0
+        self.models_cache_ttl = 300  # 5 minuti TTL
+        
         # Carica configurazione iniziale
         self._reload_config()
         
@@ -107,6 +112,7 @@ class LLMConfigurationService:
     def get_available_models(self, tenant_id: str = None) -> List[Dict[str, Any]]:
         """
         Recupera lista modelli LLM disponibili con informazioni complete
+        CON CACHE OTTIMIZZATA per ridurre chiamate ripetitive
         
         Args:
             tenant_id: ID tenant (per future estensioni)
@@ -117,6 +123,19 @@ class LLMConfigurationService:
         Data ultima modifica: 2025-01-31
         """
         try:
+            current_time = time.time()
+            cache_key = f"models_{tenant_id or 'global'}"
+            
+            # Controlla cache (TTL 5 minuti)
+            with self.cache_lock:
+                if (cache_key in self.models_cache and 
+                    (current_time - self.models_cache_timestamp) < self.models_cache_ttl):
+                    cached_models = self.models_cache[cache_key]
+                    if len(cached_models) > 0:  # Cache hit con dati
+                        print(f"♻️  [LLMConfigService] Uso cache modelli: {len(cached_models)} modelli (età: {int(current_time - self.models_cache_timestamp)}s)")
+                        return cached_models
+            
+            # Cache miss: ricarica da configurazione
             if self.reload_enabled:
                 self._reload_config()
             
@@ -139,7 +158,12 @@ class LLMConfigurationService:
                         'requires_raw_mode': True if 'mistral:7b' in model else False
                     })
             
-            print(f"📋 [LLMConfigService] Modelli disponibili: {len(models_info)}")
+            # Salva in cache
+            with self.cache_lock:
+                self.models_cache[cache_key] = models_info
+                self.models_cache_timestamp = current_time
+            
+            print(f"📋 [LLMConfigService] Modelli ricaricati e cached: {len(models_info)}")
             return models_info
             
         except Exception as e:

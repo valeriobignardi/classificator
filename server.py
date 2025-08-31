@@ -5693,45 +5693,24 @@ def test_clustering_preview(tenant_id):
     Data: 2025-08-25
     """
     try:
-        def _resolve_tenant_slug_from_id(tenant_uuid: str) -> str:
-            """
-            Converte tenant_id UUID nel tenant_slug per la pipeline
+        # Carica oggetto tenant completo usando la classe Tenant
+        from Utils.tenant import Tenant
+        
+        try:
+            # Carica tenant completo dall'UUID
+            tenant = Tenant.from_uuid(tenant_id)  # Metodo corretto
+            if not tenant:
+                raise ValueError(f"Tenant con ID {tenant_id} non trovato")
+                
+            print(f"🔍 Tenant caricato: {tenant.tenant_slug} ({tenant.tenant_name})")
             
-            Args:
-                tenant_uuid: UUID del tenant (es: '015007d9-d413-11ef-86a5-96000228e7fe')
-                
-            Returns:
-                tenant_slug per la pipeline (es: 'humanitas')
-            """
-            try:
-                import sys
-                import os
-                sys.path.append(os.path.join(os.path.dirname(__file__), 'MySql'))
-                from connettore import MySqlConnettore
-                
-                # Connessione al database per recuperare tenant_database (slug)
-                remote = MySqlConnettore()
-                
-                query = """
-                SELECT tenant_database, tenant_name 
-                FROM common.tenants 
-                WHERE tenant_id = %s AND tenant_status = 1
-                """
-                
-                result = remote.esegui_query(query, (tenant_uuid,))
-                remote.disconnetti()
-                
-                if result and len(result) > 0:
-                    tenant_database, tenant_name = result[0]
-                    print(f"🔍 Risoluzione tenant: '{tenant_uuid}' -> '{tenant_database}' ({tenant_name})")
-                    return tenant_database
-                else:
-                    print(f"⚠️ Tenant UUID '{tenant_uuid}' non trovato, uso fallback 'humanitas'")
-                    return "humanitas"
-                    
-            except Exception as e:
-                print(f"❌ Errore risoluzione tenant UUID '{tenant_uuid}': {e}")
-                return "humanitas"
+        except Exception as e:
+            print(f"❌ Errore caricamento tenant '{tenant_id}': {e}")
+            return jsonify({
+                'success': False,
+                'error': f'Tenant non trovato: {tenant_id}',
+                'details': str(e)
+            }), 404
         
         # Importa il servizio di test clustering
         import sys
@@ -5752,11 +5731,7 @@ def test_clustering_preview(tenant_id):
                 'blocked_reason': 'llm_change_protection'
             }), 400
         
-        print(f"🧪 [API] Test clustering richiesto per tenant: {tenant_id}")
-        
-        # CONVERTE tenant_id UUID in tenant_slug per la pipeline
-        tenant_slug = _resolve_tenant_slug_from_id(tenant_id)
-        print(f"🔄 [API] Tenant UUID {tenant_id} -> slug '{tenant_slug}'")
+        print(f"🧪 [API] Test clustering richiesto per tenant: {tenant.tenant_slug} ({tenant.tenant_name})")
         
         # Parse parametri dalla richiesta
         custom_parameters = request_data.get('parameters', None)
@@ -5770,18 +5745,19 @@ def test_clustering_preview(tenant_id):
         # Inizializza servizio test
         test_service = ClusteringTestService()
         
-        # Esegue test clustering usando il tenant_id UUID
+        # Esegue test clustering PASSANDO L'OGGETTO TENANT COMPLETO
         print(f"⚡ [API] Avvio test clustering...")
         result = test_service.run_clustering_test(
-            tenant_id=tenant_id,  # 🔧 [FIX] USA TENANT_ID UUID per config corretta
+            tenant=tenant,  # 🎯 PASSA L'OGGETTO TENANT COMPLETO
             custom_parameters=custom_parameters,
             sample_size=sample_size
         )
         
-        # Aggiunge tenant_id UUID originale al risultato per il frontend
+        # Aggiunge informazioni tenant al risultato per il frontend
         if 'tenant_id' in result:
-            result['tenant_id'] = tenant_id  # UUID originale
-            result['tenant_slug'] = tenant_slug  # Slug risolto
+            result['tenant_id'] = tenant.tenant_id  # UUID originale
+            result['tenant_slug'] = tenant.tenant_slug  # Slug
+            result['tenant_name'] = tenant.tenant_name  # Nome
         
         if result['success']:
             print(f"✅ [API] Test clustering completato con successo")

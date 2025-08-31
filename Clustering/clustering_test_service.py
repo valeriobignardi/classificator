@@ -142,7 +142,7 @@ class ClusteringTestService:
             if not Tenant._is_valid_uuid(tenant_or_id):
                 # È uno slug - convertilo a UUID
                 try:
-                    resolved_uuid = self._resolve_uuid_from_tenant_slug(tenant_or_id)
+                    resolved_uuid = self._resolve_uuid_from_slug(tenant_or_id)
                     tenant_or_id = resolved_uuid
                     print(f"🔧 [NORMALIZZAZIONE] Slug '{tenant_or_id}' convertito a UUID: {resolved_uuid}")
                 except Exception as e:
@@ -191,7 +191,7 @@ class ClusteringTestService:
                 else:
                     # Fallback retrocompatibilità
                     pipeline = EndToEndPipeline(
-                        tenant_slug=tenant_id,  # Fallback: passa UUID come tenant_slug
+                        tenant_slug=tenant_slug,  # 🔧 FIX: passa SLUG non UUID!
                         confidence_threshold=0.7,
                         auto_mode=True,
                         shared_embedder=shared_embedder  # Passa embedder con UUID
@@ -553,40 +553,40 @@ class ClusteringTestService:
             print(f"❌ Errore pulizia pipeline per tenant {tenant_id}: {e}")
 
     def run_clustering_test(self, 
-                          tenant_id: str, 
+                          tenant,  # 🎯 OGGETTO TENANT COMPLETO
                           custom_parameters: Optional[Dict] = None,
                           sample_size: Optional[int] = None) -> Dict[str, Any]:
         """
         Esegue test clustering completo utilizzando la pipeline esistente
         
         Args:
-            tenant_id: ID del tenant
+            tenant: Oggetto tenant completo (Utils.tenant.Tenant) 
             custom_parameters: Parametri clustering personalizzati (opzionale)
             sample_size: Dimensione campione (opzionale, default 100)
             
         Returns:
             Risultati completi del test clustering
+            
+        Autore: Valerio Bignardi
+        Data: 2025-08-31
+        Ultimo aggiornamento: 2025-08-31 - Refactoring per oggetto tenant
         """
         start_time = time.time()
-        print(f"🚀 Avvio test clustering per tenant {tenant_id}...")
+        print(f"🚀 Avvio test clustering per tenant {tenant.tenant_slug} ({tenant.tenant_name})...")
         
         if sample_size is None:
             sample_size = 100
         
         try:
-            # 1. Carica configurazione clustering con UUID
-            # 🔧 [FIX] Usa UUID per caricare config corretta
-            base_clustering_config = self.load_tenant_clustering_config(tenant_id)
-            print(f"📋 [DEBUG] Configurazione base tenant: {base_clustering_config}")
+            # 1. Carica configurazione clustering usando l'oggetto tenant
+            base_clustering_config = self.load_tenant_clustering_config(tenant.tenant_id)
+            print(f"📋 [DEBUG] Configurazione base tenant {tenant.tenant_slug}: {base_clustering_config}")
             
-            # 2. Risolvi tenant slug per conversazioni (schema DB)
-            # 🔧 [FIX] DB usa slug, config usa UUID
-            tenant_slug = self._resolve_tenant_slug_from_uuid(tenant_id)
-            print(f"🔄 [DEBUG] Risoluzione: UUID '{tenant_id}' -> slug '{tenant_slug}' per DB")
+            # 2. Usa direttamente lo slug dal tenant (niente risoluzione!)
+            print(f"🎯 [DEBUG] Tenant: {tenant.tenant_slug} ({tenant.tenant_name}) - ID: {tenant.tenant_id}")
             
             if custom_parameters:
-                # 🔧 [FIX] Unisci parametri personalizzati con configurazione tenant
-                # anziché sostituire completamente (preserva parametri UMAP)
+                # Unisci parametri personalizzati con configurazione tenant
                 clustering_config = base_clustering_config.copy()
                 clustering_config.update(custom_parameters)
                 print(f"🎛️ [DEBUG] Parametri personalizzati ricevuti: {custom_parameters}")
@@ -596,16 +596,15 @@ class ClusteringTestService:
                 clustering_config = base_clustering_config
                 print(f"🎛️ Uso parametri tenant: {clustering_config}")
             
-            # 3. Recupera conversazioni campione usando tenant_slug per DB
-            # 🔧 [FIX] Usa slug per query DB
-            sessioni = self.get_sample_conversations(tenant_slug, sample_size)
+            # 3. Recupera conversazioni campione usando tenant.slug direttamente
+            sessioni = self.get_sample_conversations(tenant.tenant_slug, sample_size)
             
             if len(sessioni) < self.min_conversations_required:
                 return {
                     'success': False,
                     'error': f'Troppe poche conversazioni trovate ({len(sessioni)}). Minimo richiesto: {self.min_conversations_required}',
-                    'tenant_id': tenant_id,
-                    'tenant_slug': tenant_slug,  # 🔧 [DEBUG] Aggiungi slug per debug
+                    'tenant_id': tenant.tenant_id,
+                    'tenant_slug': tenant.tenant_slug,
                     'execution_time': time.time() - start_time
                 }
             
@@ -621,24 +620,24 @@ class ClusteringTestService:
                 return {
                     'success': False,
                     'error': f'Troppe poche conversazioni valide trovate ({len(texts)}). Minimo richiesto: {self.min_conversations_required}',
-                    'tenant_id': tenant_id,
-                    'tenant_slug': tenant_slug,  # 🔧 [DEBUG] Aggiungi slug per debug
+                    'tenant_id': tenant.tenant_id,
+                    'tenant_slug': tenant.tenant_slug,
                     'execution_time': time.time() - start_time
                 }
             
             # 4. Genera embeddings
             print(f"🔍 Generazione embeddings per {len(texts)} conversazioni...")
             try:
-                # 🔧 [FIX] Usa tenant_id (UUID) per pipeline, non tenant_slug!
-                pipeline = self._get_pipeline(tenant_id)
+                # Usa l'oggetto tenant per la pipeline  
+                pipeline = self._get_pipeline(tenant.tenant_id)
                 embeddings = pipeline.embedder.encode(texts, show_progress_bar=True)
                 print(f"✅ Embeddings generati: {embeddings.shape}")
             except Exception as e:
                 return {
                     'success': False,
                     'error': f'Errore generazione embeddings: {str(e)}',
-                    'tenant_id': tenant_id,
-                    'tenant_slug': tenant_slug,  # 🔧 [DEBUG] Aggiungi slug per debug  
+                    'tenant_id': tenant.tenant_id,
+                    'tenant_slug': tenant.tenant_slug,
                     'execution_time': time.time() - start_time
                 }
             
@@ -679,8 +678,8 @@ class ClusteringTestService:
                 return {
                     'success': False,
                     'error': f'Errore clustering HDBSCAN: {str(e)}',
-                    'tenant_id': tenant_id,
-                    'tenant_slug': tenant_slug,  # 🔧 [DEBUG] Aggiungi slug per debug
+                    'tenant_id': tenant.tenant_id,
+                    'tenant_slug': tenant.tenant_slug,
                     'execution_time': time.time() - start_time
                 }
             
@@ -720,8 +719,8 @@ class ClusteringTestService:
             # Costruisci risultato finale
             result_data = {
                 'success': True,
-                'tenant_id': tenant_id,
-                'tenant_slug': tenant_slug,  # 🔧 [DEBUG] Aggiungi slug per debug
+                'tenant_id': tenant.tenant_id,
+                'tenant_slug': tenant.tenant_slug,
                 'execution_time': execution_time,
                 'statistics': {
                     'total_conversations': len(texts),
@@ -745,7 +744,7 @@ class ClusteringTestService:
             if self.results_db:
                 try:
                     saved_result = self.results_db.save_clustering_result(
-                        tenant_id=tenant_id,
+                        tenant_id=tenant.tenant_id,
                         results_data=result_data,
                         parameters_data=clustering_config,
                         execution_time=execution_time
@@ -755,7 +754,7 @@ class ClusteringTestService:
                         print(f"💾 Risultati salvati nel database con ID: {saved_result['record_id']}")
                         result_data['saved_version_id'] = saved_result['record_id']
                         result_data['version_number'] = saved_result['version_number']
-                        result_data['tenant_id'] = tenant_id
+                        result_data['tenant_id'] = tenant.tenant_id
                     else:
                         print("⚠️ Errore nel salvataggio risultati nel database")
                         
@@ -778,8 +777,8 @@ class ClusteringTestService:
             return {
                 'success': False,
                 'error': f'Errore generale nel test clustering: {str(e)}',
-                'tenant_id': tenant_id,
-                'tenant_slug': tenant_slug if 'tenant_slug' in locals() else 'unknown',  # 🔧 [DEBUG] Safe slug per debug
+                'tenant_id': tenant.tenant_id,
+                'tenant_slug': tenant.tenant_slug,
                 'execution_time': time.time() - start_time
             }
     

@@ -970,12 +970,14 @@ class AIConfigurationService:
             # Prova a ottenere modelli da Ollama
             models_result = self.get_available_llm_models()
             if models_result.get('success') and models_result.get('models'):
-                return [model['name'] for model in models_result['models']]
+                # Correzione: usa ollama_available invece di models direttamente
+                ollama_models = models_result['models'].get('ollama_available', [])
+                return [model['name'] for model in ollama_models]
         except Exception:
             pass
             
         # Fallback: modelli di default
-        return ['mistral:7b', 'llama3.1:8b', 'llama3.1:70b']
+        return ['mistral:7b', 'llama3.1:8b', 'llama3.1:70b', 'mistral-nemo:latest']
     
     def clear_tenant_cache(self, tenant_id: str = None):
         """

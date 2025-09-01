@@ -352,42 +352,52 @@ class LLMConfigurationService:
         Data ultima modifica: 2025-09-01
         """
         try:
+            print(f"🔍 [DEBUG] get_model_info cercando: {model_name}")
+            
             # Prima cerca nei modelli configurati
             available_models = self.get_available_models()
+            print(f"🔍 [DEBUG] Modelli configurati: {[m.get('name', 'NO_NAME') for m in available_models]}")
             
             for model in available_models:
                 if model.get('name') == model_name:
+                    print(f"✅ [DEBUG] Modello {model_name} trovato nei configurati")
                     return model
             
             # Se non trovato, cerca nei modelli Ollama via AIConfigurationService
+            print(f"🔍 [DEBUG] Modello {model_name} non trovato nei configurati, cercando in Ollama...")
             try:
-                from AIConfiguration.ai_configuration_service import AIConfigurationService
-                ai_config_service = AIConfigurationService()
-                
-                # Usa un tenant dummy per recuperare i modelli Ollama
+                # Chiama direttamente l'endpoint esistente che funziona
+                import requests
                 dummy_tenant = "015007d9-d413-11ef-86a5-96000228e7fe"
-                models_data = ai_config_service.get_llm_models(dummy_tenant)
+                response = requests.get(f"http://localhost:5000/api/ai-config/{dummy_tenant}/llm-models", timeout=10)
                 
-                if models_data.get('success') and 'models' in models_data:
-                    ollama_models = models_data['models']['models'].get('ollama_available', [])
+                if response.status_code == 200:
+                    models_data = response.json()
+                    print(f"🔍 [DEBUG] Risposta endpoint: {models_data.get('success', False)}")
                     
-                    for model in ollama_models:
-                        if model.get('name') == model_name:
-                            # Standardizza la struttura per compatibilità
-                            return {
-                                'name': model['name'],
-                                'display_name': model['name'],
-                                'description': model.get('description', f'Modello Ollama: {model["name"]}'),
-                                'max_input_tokens': 8000,  # Default per modelli Ollama
-                                'max_output_tokens': 4000,
-                                'context_limit': 8192,
-                                'requires_raw_mode': 'mistral:7b' in model['name'],
-                                'installed': model.get('installed', False),
-                                'size': model.get('size', 'Unknown'),
-                                'category': model.get('category', 'unknown'),
-                                'source': 'ollama'
-                            }
-                
+                    if models_data.get('success') and 'models' in models_data:
+                        ollama_models = models_data['models'].get('models', {}).get('ollama_available', [])
+                        print(f"🔍 [DEBUG] Modelli Ollama trovati: {[m.get('name', 'NO_NAME') for m in ollama_models]}")
+                        
+                        for model in ollama_models:
+                            if model.get('name') == model_name:
+                                print(f"✅ [DEBUG] Modello {model_name} trovato in Ollama")
+                                # Standardizza la struttura per compatibilità
+                                return {
+                                    'name': model['name'],
+                                    'display_name': model['name'],
+                                    'description': model.get('description', f'Modello Ollama: {model["name"]}'),
+                                    'max_input_tokens': 8000,  # Default per modelli Ollama
+                                    'max_output_tokens': 4000,
+                                    'context_limit': 8192,
+                                    'requires_raw_mode': 'mistral:7b' in model['name'],
+                                    'installed': model.get('installed', False),
+                                    'size': model.get('size', 'Unknown'),
+                                    'category': model.get('category', 'unknown'),
+                                    'source': 'ollama'
+                                }
+                else:
+                    print(f"❌ [DEBUG] Errore endpoint: {response.status_code}")
             except Exception as ollama_error:
                 print(f"⚠️ [LLMConfigService] Errore ricerca Ollama per {model_name}: {ollama_error}")
             

@@ -2125,11 +2125,8 @@ class MongoClassificationReader:
         if cluster_metadata.get('is_representative', False):
             return "RAPPRESENTANTE"
             
-        # PROPAGATO: ha propagated_from (è stato propagato da un rappresentante)
-        if 'propagated_from' in cluster_metadata:
-            return "PROPAGATO"
-            
-        # OUTLIER: cluster_id è -1 o contiene "outlier" o ha outlier_score > 0.5
+        # OUTLIER: PRIORITÀ ALTA - cluster_id è -1 o contiene "outlier" o ha outlier_score > 0.5
+        # DEVE essere controllato PRIMA di PROPAGATO perché un outlier non può essere propagato!
         cluster_id = cluster_metadata.get('cluster_id')
         outlier_score = cluster_metadata.get('outlier_score', 0.0)
         
@@ -2137,6 +2134,11 @@ class MongoClassificationReader:
             (isinstance(cluster_id, str) and 'outlier' in cluster_id.lower()) or
             outlier_score > 0.5):
             return "OUTLIER"
+            
+        # PROPAGATO: ha propagated_from (è stato propagato da un rappresentante)
+        # NOTA: Questo controllo è DOPO outlier perché un outlier non può essere propagato
+        if 'propagated_from' in cluster_metadata:
+            return "PROPAGATO"
             
         # DEFAULT: Se ha cluster_metadata ma non rientra nelle categorie sopra
         return "CLUSTER_MEMBER"

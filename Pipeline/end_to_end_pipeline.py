@@ -1451,18 +1451,22 @@ class EndToEndPipeline:
                 cluster_id = cluster_labels[i] if i < len(cluster_labels) else -1
                 suggested_label = suggested_labels.get(cluster_id, 'altro')
                 
-                # Prepara metadati per sessione propagata
+                # Prepara metadati per sessione
                 cluster_metadata = {
                     'cluster_id': cluster_id,
                     'is_representative': False,  # ✅ NON è rappresentante
-                    'propagated_from': f'cluster_{cluster_id}',
                     'suggested_label': suggested_label,
-                    'selection_reason': 'cluster_propagated'
                 }
                 
-                # Metadati speciali per outlier propagati
+                # 🚨 CORREZIONE CRITICA: Gli OUTLIER non devono essere propagati!
                 if cluster_id == -1:
-                    cluster_metadata['selection_reason'] = 'outlier_propagated'
+                    # OUTLIER - deve essere classificato individualmente
+                    cluster_metadata['selection_reason'] = 'outlier_individual_classification'
+                    # NON aggiungiamo 'propagated_from' per outlier
+                else:
+                    # MEMBRO DI CLUSTER - può essere propagato
+                    cluster_metadata['propagated_from'] = f'cluster_{cluster_id}'
+                    cluster_metadata['selection_reason'] = 'cluster_propagated'
                     cluster_metadata['is_outlier'] = True
                 
                 final_decision = {
@@ -4136,11 +4140,47 @@ class EndToEndPipeline:
                     stats['propagated_by_cluster'][cluster_id]['count'] += 1
                     
                 else:
-                    # Sessione outlier o cluster senza etichetta
-                    final_label = 'altro'
-                    confidence = 0.3  # Bassa confidenza per outlier
-                    method = 'OUTLIER_DEFAULT'
-                    notes = f"Outlier (cluster {cluster_id})" if cluster_id != -1 else "Outlier non clusterizzato"
+                    # 🔧 CORREZIONE: Outlier deve essere classificato come rappresentante di se stesso
+                    # Gli outlier ricevono classificazione completa ML+LLM invece di hardcode 'altro'
+                    session_text = session_data.get('testo_completo', '')
+                    outlier_classification_details = None  # Per salvare dettagli classificazione
+                    
+                    if session_text and hasattr(self, 'ensemble_classifier') and self.ensemble_classifier:
+                        try:
+                            # Classifica l'outlier con la stessa logica dei rappresentanti
+                            outlier_prediction = self.ensemble_classifier.predict_with_ensemble(
+                                session_text,
+                                return_details=True,
+                                embedder=self.embedder
+                            )
+                            
+                            # Salva dettagli per uso successivo nel salvataggio
+                            outlier_classification_details = outlier_prediction
+                            
+                            # Usa risultato dell'ensemble
+                            final_label = outlier_prediction.get('predicted_label', 'altro')
+                            confidence = outlier_prediction.get('ensemble_confidence', outlier_prediction.get('confidence', 0.5))
+                            method = 'OUTLIER_ENSEMBLE_CLASSIFICATION'
+                            notes = f"Outlier classificato individualmente (cluster {cluster_id})" if cluster_id != -1 else "Outlier classificato individualmente"
+                            
+                            print(f"🎯 OUTLIER CLASSIFICATO: {session_id} -> {final_label} (conf: {confidence:.3f})")
+                            
+                        except Exception as e:
+                            # Fallback in caso di errore
+                            print(f"⚠️ Errore classificazione outlier {session_id}: {e}")
+                            final_label = 'altro'
+                            confidence = 0.3
+                            method = 'OUTLIER_FALLBACK'
+                            notes = f"Outlier - fallback dopo errore classificazione (cluster {cluster_id})" if cluster_id != -1 else "Outlier - fallback dopo errore"
+                            outlier_classification_details = None
+                    else:
+                        # Fallback se ensemble non disponibile
+                        final_label = 'altro'
+                        confidence = 0.3
+                        method = 'OUTLIER_NO_ENSEMBLE'
+                        notes = f"Outlier - ensemble non disponibile (cluster {cluster_id})" if cluster_id != -1 else "Outlier - ensemble non disponibile"
+                        outlier_classification_details = None
+                    
                     stats['unlabeled_sessions'] += 1
                 
                 # Aggiorna distribuzione confidenze
@@ -4156,14 +4196,38 @@ class EndToEndPipeline:
                     mongo_reader = MongoClassificationReader(tenant=self.tenant)
                     
                     # 🆕 CLASSIFICA LA SESSIONE CON L'ENSEMBLE PRIMA DEL SALVATAGGIO
-                    # Questo risolve il problema N/A nell'interfaccia di review
+                    # Distingue tra outlier già classificati e altri casi
                     conversation_text = session_data.get('testo_completo', '')
                     
-                    # Classifica con ensemble per ottenere ml_result e llm_result reali
+                    # Inizializza ml_result e llm_result
                     ml_result = None
                     llm_result = None
                     
-                    if hasattr(self, 'ensemble') and self.ensemble and conversation_text:
+                    # 🎯 PRIORITÀ: Se è un outlier già classificato, usa quei risultati
+                    if 'outlier_classification_details' in locals() and outlier_classification_details:
+                        # Outlier già classificato - estrai ml_result e llm_result dai dettagli
+                        if outlier_classification_details.get('ml_prediction'):
+                            ml_pred = outlier_classification_details['ml_prediction']
+                            ml_result = {
+                                'predicted_label': ml_pred.get('predicted_label', 'unknown'),
+                                'confidence': ml_pred.get('confidence', 0.0),
+                                'method': 'ml_ensemble_outlier',
+                                'probabilities': ml_pred.get('probabilities', {})
+                            }
+                        
+                        if outlier_classification_details.get('llm_prediction'):
+                            llm_pred = outlier_classification_details['llm_prediction']
+                            llm_result = {
+                                'predicted_label': llm_pred.get('predicted_label', 'unknown'),
+                                'confidence': llm_pred.get('confidence', 0.0),
+                                'method': 'llm_ensemble_outlier',
+                                'reasoning': llm_pred.get('reasoning', '')
+                            }
+                        
+                        print(f"🎯 OUTLIER SALVATO: {session_id} ML={ml_result['predicted_label'] if ml_result else 'N/A'}, LLM={llm_result['predicted_label'] if llm_result else 'N/A'}")
+                    
+                    # 🔄 ALTRIMENTI: Usa logica generale per propagati e rappresentanti
+                    elif hasattr(self, 'ensemble') and self.ensemble and conversation_text:
                         try:
                             # Esegui classificazione con ensemble
                             ensemble_result = self.ensemble.classify_text(conversation_text)
@@ -4188,8 +4252,8 @@ class EndToEndPipeline:
                                         'method': 'llm_ensemble',
                                         'reasoning': llm_pred.get('reasoning', '')
                                     }
-                                    
-                            print(f"🔍 CLASSIFICAZIONE RAPPRESENTANTE {session_id}: ML={ml_result['predicted_label'] if ml_result else 'N/A'}, LLM={llm_result['predicted_label'] if llm_result else 'N/A'}")
+                            
+                            print(f"🔍 CLASSIFICAZIONE GENERALE {session_id}: ML={ml_result['predicted_label'] if ml_result else 'N/A'}, LLM={llm_result['predicted_label'] if llm_result else 'N/A'}")
                             
                         except Exception as e:
                             print(f"⚠️ Errore classificazione ensemble per {session_id}: {e}")
@@ -4238,91 +4302,6 @@ class EndToEndPipeline:
                 except Exception as e:
                     print(f"   ❌ Errore salvataggio sessione {session_id}: {e}")
                     stats['save_errors'] += 1
-                
-                # Salva anche in MongoDB per l'interfaccia web
-                try:
-                    # Usa il connettore MongoDB corretto
-                    from mongo_classification_reader import MongoClassificationReader
-                    
-                    # CAMBIO RADICALE: Usa oggetto Tenant (non più hash manuale)
-                    # tenant_id = hashlib.md5(self.tenant_slug.encode()).hexdigest()[:16]
-                    
-                    # CAMBIO RADICALE: Usa oggetto Tenant
-                    mongo_reader = MongoClassificationReader(tenant=self.tenant)
-                    
-                    # Usa il metodo corretto save_classification_result
-                    
-                    # 🆕 CLASSIFICA LA SESSIONE CON L'ENSEMBLE PRIMA DEL SALVATAGGIO
-                    # Risolve il problema N/A nell'interfaccia di review
-                    conversation_text = session_data.get('testo_completo', '')
-                    
-                    # Classifica con ensemble per ottenere risultati reali
-                    ml_result = None
-                    llm_result_ensemble = None
-                    
-                    if hasattr(self, 'ensemble') and self.ensemble and conversation_text:
-                        try:
-                            # Esegui classificazione con ensemble
-                            ensemble_result = self.ensemble.classify_text(conversation_text)
-                            
-                            if ensemble_result:
-                                # Estrai ml_result se disponibile
-                                if 'ml_result' in ensemble_result and ensemble_result['ml_result']:
-                                    ml_pred = ensemble_result['ml_result']
-                                    ml_result = {
-                                        'predicted_label': ml_pred.get('predicted_label', 'unknown'),
-                                        'confidence': ml_pred.get('confidence', 0.0),
-                                        'method': 'ml_ensemble',
-                                        'probabilities': ml_pred.get('probabilities', {})
-                                    }
-                                
-                                # Estrai llm_result se disponibile
-                                if 'llm_result' in ensemble_result and ensemble_result['llm_result']:
-                                    llm_pred = ensemble_result['llm_result']
-                                    llm_result_ensemble = {
-                                        'predicted_label': llm_pred.get('predicted_label', 'unknown'),
-                                        'confidence': llm_pred.get('confidence', 0.0),
-                                        'method': 'llm_ensemble',
-                                        'reasoning': llm_pred.get('reasoning', '')
-                                    }
-                                    
-                            print(f"🔍 CLASSIFICAZIONE SESSIONE {session_id}: ML={ml_result['predicted_label'] if ml_result else 'N/A'}, LLM={llm_result_ensemble['predicted_label'] if llm_result_ensemble else 'N/A'}")
-                            
-                        except Exception as e:
-                            print(f"⚠️ Errore classificazione ensemble per {session_id}: {e}")
-                            # Continua con ml_result=None come fallback
-                    
-                    success = mongo_reader.save_classification_result(
-                        session_id=session_id,
-                        client_name=self.tenant.tenant_slug,  # 🔧 FIX: usa tenant_slug non tenant_id
-                        # 🆕 USA RISULTATI REALI DELL'ENSEMBLE invece di simulazioni
-                        ml_result=ml_result,  # Risultato reale ML
-                        llm_result=llm_result_ensemble if llm_result_ensemble else {
-                            'predicted_label': final_label,
-                            'confidence': confidence,
-                            'method': method,
-                            'reasoning': notes
-                        },  # Usa ensemble se disponibile, altrimenti fallback
-                        final_decision={
-                            'predicted_label': final_label,
-                            'confidence': confidence,
-                            'method': method,
-                            'reasoning': notes
-                        },
-                        conversation_text=session_data['testo_completo'],
-                        needs_review=False,  # Propagazione automatica, non serve review
-                        # 🆕 METADATI CLUSTER per nuova UI
-                        cluster_metadata={
-                            'cluster_id': cluster_id,
-                            'is_representative': False,  # Sessione propagata
-                            'propagated_from': 'cluster_propagation',
-                            'propagation_confidence': confidence
-                        }
-                    )
-                    
-                    if success:
-                        stats['mongo_saves'] += 1
-                    
                 except Exception as e:
                     print(f"   ⚠️ Warning salvataggio MongoDB per {session_id}: {e}")
         

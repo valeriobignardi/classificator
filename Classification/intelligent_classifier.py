@@ -271,14 +271,24 @@ class IntelligentClassifier:
         print(f"   🔢 Top K: {self.top_k}, Top P: {self.top_p}")
         
         # Determina il modello da usare in base al cliente
+        # 🔥 PRIORITÀ 1: Parametro esplicito
         if model_name:
             self.model_name = model_name
-        elif client_name and client_name in models_config.get('clients', {}):
-            self.model_name = models_config['clients'][client_name]
-            print(f"🎯 Uso modello specifico per {client_name}: {self.model_name}")
+            print(f"🎯 Uso modello esplicito: {self.model_name}")
         else:
-            self.model_name = models_config.get('default', 'mistral:7b')
-            print(f"🎯 Uso modello default: {self.model_name}")
+            # 🔥 PRIORITÀ 2: Database (AIConfigurationService)
+            database_model = self._load_model_from_database()
+            if database_model:
+                self.model_name = database_model
+                print(f"🎯 Uso modello dal DATABASE per {client_name}: {self.model_name}")
+            elif client_name and client_name in models_config.get('clients', {}):
+                # 🔥 PRIORITÀ 3: Config.yaml legacy
+                self.model_name = models_config['clients'][client_name]
+                print(f"🎯 Uso modello specifico LEGACY per {client_name}: {self.model_name}")
+            else:
+                # 🔥 PRIORITÀ 4: Default fallback
+                self.model_name = models_config.get('default', 'mistral:7b')
+                print(f"🎯 Uso modello default: {self.model_name}")
         
         # Salva il modello base originale per confronti
         self.base_model_name = self.model_name
@@ -2349,10 +2359,31 @@ Ragionamento: {ex["motivation"]}"""
             response.raise_for_status()
             result = response.json()
             
-            # 🔍 DEBUG: Stampa la risposta completa di Ollama
+            # 🔍 DEBUG AVANZATO: Stampa la risposta RAW completa di Ollama
             if self.enable_logging:
-                print(f"📥 DEBUG - Risposta completa da Ollama:")
+                print(f"� DEBUG RAW - Status Code: {response.status_code}")
+                print(f"🔥 DEBUG RAW - Headers: {dict(response.headers)}")
+                print(f"🔥 DEBUG RAW - Risposta RAW completa da Ollama:")
+                print("="*80)
                 print(json.dumps(result, indent=2, ensure_ascii=False))
+                print("="*80)
+                print(f"🔥 DEBUG RAW - Tipo risposta: {type(result)}")
+                print(f"🔥 DEBUG RAW - Chiavi root: {list(result.keys())}")
+                if 'message' in result:
+                    print(f"🔥 DEBUG RAW - Tipo message: {type(result['message'])}")
+                    print(f"🔥 DEBUG RAW - Chiavi message: {list(result['message'].keys())}")
+                    if 'content' in result['message']:
+                        content_raw = result['message']['content']
+                        print(f"🔥 DEBUG RAW - Content RAW (lunghezza {len(content_raw)}):")
+                        print(f"'{content_raw}'")
+                        print(f"🔥 DEBUG RAW - Content tipo: {type(content_raw)}")
+                        print(f"🔥 DEBUG RAW - Content bytes: {content_raw.encode('utf-8')}")
+                    if 'tool_calls' in result['message']:
+                        print(f"🔥 DEBUG RAW - tool_calls presente: {result['message']['tool_calls']}")
+                        print(f"🔥 DEBUG RAW - tool_calls tipo: {type(result['message']['tool_calls'])}")
+                    else:
+                        print(f"🔥 DEBUG RAW - tool_calls ASSENTE!")
+                print("="*80)
             
             # Verifica la struttura della risposta di function calling
             if 'message' not in result:
@@ -2360,20 +2391,36 @@ Ragionamento: {ex["motivation"]}"""
                 
             message = result['message']
             
-            # 🔍 DEBUG: Dettaglio del messaggio ricevuto
+            # 🔍 DEBUG AVANZATO: Analisi dettagliata del messaggio
             if self.enable_logging:
-                print(f"🔍 DEBUG - Messaggio ricevuto:")
-                print(f"  - Chiavi disponibili: {list(message.keys())}")
+                print(f"� DEBUG PARSING - Inizio analisi messaggio:")
+                print(f"  - Chiavi message: {list(message.keys())}")
+                print(f"  - Ha tool_calls: {'tool_calls' in message}")
+                print(f"  - Ha content: {'content' in message}")
+                print(f"  - Ha role: {'role' in message}")
                 if 'tool_calls' in message:
-                    print(f"  - tool_calls presente: {message['tool_calls']}")
-                else:
-                    print(f"  - tool_calls MANCANTE!")
+                    print(f"  - tool_calls valore: {message['tool_calls']}")
+                    print(f"  - tool_calls tipo: {type(message['tool_calls'])}")
+                    print(f"  - tool_calls lunghezza: {len(message['tool_calls']) if message['tool_calls'] else 0}")
                 if 'content' in message:
-                    print(f"  - content: {message['content'][:200]}...")
+                    content = message['content']
+                    print(f"  - content valore: '{content}'")
+                    print(f"  - content tipo: {type(content)}")
+                    print(f"  - content lunghezza: {len(content) if content else 0}")
+                    print(f"  - content è vuoto: {not content or content.strip() == ''}")
             
             # Controlla se il modello ha fatto una function call
             if 'tool_calls' in message and message['tool_calls']:
+                if self.enable_logging:
+                    print(f"🔥 DEBUG PARSING - PERCORSO FUNCTION CALL ATTIVATO")
+                
                 tool_call = message['tool_calls'][0]  # Prima function call
+                
+                if self.enable_logging:
+                    print(f"🔥 DEBUG PARSING - Tool call ricevuta:")
+                    print(f"  - tool_call completa: {tool_call}")
+                    print(f"  - tool_call tipo: {type(tool_call)}")
+                    print(f"  - tool_call chiavi: {list(tool_call.keys()) if isinstance(tool_call, dict) else 'NON DICT'}")
                 
                 if (tool_call.get('function', {}).get('name') == 'classify_conversation' and 
                     'arguments' in tool_call['function']):
@@ -2381,37 +2428,134 @@ Ragionamento: {ex["motivation"]}"""
                     # Estrai gli argomenti della function call
                     arguments = tool_call['function']['arguments']
                     
+                    if self.enable_logging:
+                        print(f"🔥 DEBUG PARSING - Arguments ricevuti:")
+                        print(f"  - arguments raw: {arguments}")
+                        print(f"  - arguments tipo: {type(arguments)}")
+                    
                     # Se arguments è una stringa, parsala come JSON
                     if isinstance(arguments, str):
-                        arguments = json.loads(arguments)
+                        if self.enable_logging:
+                            print(f"🔥 DEBUG PARSING - Arguments è stringa, parsing JSON...")
+                        try:
+                            arguments = json.loads(arguments)
+                            if self.enable_logging:
+                                print(f"🔥 DEBUG PARSING - JSON parsed: {arguments}")
+                        except json.JSONDecodeError as e:
+                            if self.enable_logging:
+                                print(f"🔥 DEBUG PARSING - ERRORE JSON parse: {e}")
+                            raise
                     
                     # Valida che abbiamo tutti i campi richiesti
                     if all(key in arguments for key in ['predicted_label', 'confidence', 'motivation']):
+                        if self.enable_logging:
+                            print(f"🔥 DEBUG PARSING - SUCCESSO! Tutti i campi presenti: {arguments}")
                         self.logger.info(f"✅ Function call classificazione ricevuta: {arguments}")
                         return arguments
                     else:
-                        raise ValueError(f"Function call incompleta: mancano campi richiesti in {arguments}")
+                        missing_keys = [key for key in ['predicted_label', 'confidence', 'motivation'] if key not in arguments]
+                        if self.enable_logging:
+                            print(f"🔥 DEBUG PARSING - ERRORE! Campi mancanti: {missing_keys}")
+                            print(f"🔥 DEBUG PARSING - Arguments disponibili: {list(arguments.keys())}")
+                        raise ValueError(f"Function call incompleta: mancano campi richiesti {missing_keys} in {arguments}")
                 else:
+                    if self.enable_logging:
+                        print(f"🔥 DEBUG PARSING - Function call non riconosciuta o malformata")
+                        if 'function' in tool_call:
+                            print(f"  - function name: {tool_call['function'].get('name', 'MISSING')}")
+                            print(f"  - ha arguments: {'arguments' in tool_call['function']}")
                     raise ValueError(f"Function call non riconosciuta: {tool_call}")
             
             # Se non c'è function call, prova a parsare il contenuto come fallback
             elif 'content' in message:
+                if self.enable_logging:
+                    print(f"🔥 DEBUG PARSING - PERCORSO FALLBACK CONTENT ATTIVATO")
+                
                 content = message['content'].strip()
+                if self.enable_logging:
+                    print(f"🔥 DEBUG PARSING - Content per fallback: '{content}'")
+                    print(f"🔥 DEBUG PARSING - Content lunghezza: {len(content)}")
+                
                 self.logger.warning(f"⚠️ Modello non ha usato function call, tento parsing contenuto: {content[:100]}...")
                 
                 # Fallback: prova a parsare come JSON
+                if self.enable_logging:
+                    print(f"🔥 DEBUG PARSING - Tentativo 1: JSON diretto")
                 try:
                     parsed_content = json.loads(content)
+                    if self.enable_logging:
+                        print(f"🔥 DEBUG PARSING - JSON diretto riuscito: {parsed_content}")
                     if all(key in parsed_content for key in ['predicted_label', 'confidence', 'motivation']):
+                        if self.enable_logging:
+                            print(f"🔥 DEBUG PARSING - JSON diretto SUCCESSO con tutti i campi!")
                         return parsed_content
-                except json.JSONDecodeError:
+                    else:
+                        if self.enable_logging:
+                            print(f"🔥 DEBUG PARSING - JSON diretto manca campi: {list(parsed_content.keys())}")
+                except json.JSONDecodeError as e:
+                    if self.enable_logging:
+                        print(f"🔥 DEBUG PARSING - JSON diretto fallito: {e}")
                     pass
                 
-                # 🔧 NUOVO: Fallback per formato chiave-valore (YAML-like)
+                # 🔧 NUOVO: Fallback per formato Mistral-nemo pseudo function call
+                if self.enable_logging:
+                    print(f"🔥 DEBUG PARSING - Tentativo 2: Mistral-nemo pseudo function call")
+                # Formato: **{"name": "classify_conversation", "arguments": {"predicted_label": "...", "confidence": ...}}
+                try:
+                    if '**{"name": "classify_conversation"' in content:
+                        if self.enable_logging:
+                            print(f"🔥 DEBUG PARSING - Trovato pattern Mistral-nemo!")
+                        # Estrai solo la parte JSON dopo "arguments":
+                        start_idx = content.find('"arguments": ')
+                        if start_idx != -1:
+                            start_idx += len('"arguments": ')
+                            # Trova la fine del JSON degli arguments
+                            json_content = content[start_idx:]
+                            if self.enable_logging:
+                                print(f"🔥 DEBUG PARSING - JSON content estratto: '{json_content}'")
+                            # Rimuovi eventuali caratteri trailing
+                            if json_content.endswith('}}'):
+                                json_content = json_content[:-1]  # Rimuovi la } finale dell'oggetto esterno
+                                if self.enable_logging:
+                                    print(f"🔥 DEBUG PARSING - JSON content pulito: '{json_content}'")
+                            
+                            try:
+                                arguments = json.loads(json_content)
+                                if self.enable_logging:
+                                    print(f"🔥 DEBUG PARSING - Mistral arguments parsed: {arguments}")
+                                if all(key in arguments for key in ['predicted_label', 'confidence', 'motivation']):
+                                    if self.enable_logging:
+                                        print(f"🔥 DEBUG PARSING - Mistral pseudo function call SUCCESSO!")
+                                    self.logger.info(f"✅ Parsing Mistral-nemo pseudo function call riuscito: {arguments['predicted_label']} (conf: {arguments['confidence']})")
+                                    return arguments
+                                else:
+                                    if self.enable_logging:
+                                        print(f"🔥 DEBUG PARSING - Mistral manca campi: {list(arguments.keys())}")
+                            except json.JSONDecodeError as e:
+                                if self.enable_logging:
+                                    print(f"🔥 DEBUG PARSING - Errore parsing Mistral JSON: {e}")
+                                self.logger.debug(f"Errore parsing pseudo function call: {e}")
+                        else:
+                            if self.enable_logging:
+                                print(f"🔥 DEBUG PARSING - Pattern Mistral trovato ma arguments non trovato")
+                    else:
+                        if self.enable_logging:
+                            print(f"🔥 DEBUG PARSING - Pattern Mistral non trovato nel content")
+                except Exception as e:
+                    if self.enable_logging:
+                        print(f"🔥 DEBUG PARSING - Errore generale Mistral parsing: {e}")
+                    self.logger.debug(f"Errore parsing Mistral-nemo format: {e}")
+                    pass
+                
+                # 🔧 ALTRO: Fallback per formato chiave-valore (YAML-like)
+                if self.enable_logging:
+                    print(f"🔥 DEBUG PARSING - Tentativo 3: YAML-like parsing")
                 try:
                     # Parsing per formato: predicted_label: valore\nconfidence: valore\nmotivation: valore
                     parsed_result = {}
                     lines = content.strip().split('\n')
+                    if self.enable_logging:
+                        print(f"🔥 DEBUG PARSING - Linee da parsare: {lines}")
                     
                     for line in lines:
                         line = line.strip()
@@ -2420,6 +2564,9 @@ Ragionamento: {ex["motivation"]}"""
                             key = key.strip()
                             value = value.strip()
                             
+                            if self.enable_logging:
+                                print(f"🔥 DEBUG PARSING - Trovato key='{key}', value='{value}'")
+                            
                             if key == 'predicted_label':
                                 parsed_result['predicted_label'] = value
                             elif key == 'confidence':
@@ -2427,25 +2574,42 @@ Ragionamento: {ex["motivation"]}"""
                                     parsed_result['confidence'] = float(value)
                                 except ValueError:
                                     parsed_result['confidence'] = 0.5
+                                    if self.enable_logging:
+                                        print(f"🔥 DEBUG PARSING - Errore parsing confidence, uso 0.5")
                             elif key == 'motivation':
                                 parsed_result['motivation'] = value
                     
+                    if self.enable_logging:
+                        print(f"🔥 DEBUG PARSING - YAML-like risultato: {parsed_result}")
+                    
                     # Verifica che abbiamo tutti i campi richiesti
                     if all(key in parsed_result for key in ['predicted_label', 'confidence', 'motivation']):
+                        if self.enable_logging:
+                            print(f"🔥 DEBUG PARSING - YAML-like SUCCESSO!")
                         self.logger.info(f"✅ Parsing YAML-like riuscito: {parsed_result['predicted_label']} (conf: {parsed_result['confidence']})")
                         return parsed_result
+                    else:
+                        missing_yaml = [key for key in ['predicted_label', 'confidence', 'motivation'] if key not in parsed_result]
+                        if self.enable_logging:
+                            print(f"🔥 DEBUG PARSING - YAML-like manca campi: {missing_yaml}")
                         
                 except Exception as e:
+                    if self.enable_logging:
+                        print(f"🔥 DEBUG PARSING - Errore YAML-like: {e}")
                     self.logger.debug(f"Errore parsing YAML-like: {e}")
                     pass
                 
                 # Fallback estremo
+                if self.enable_logging:
+                    print(f"🔥 DEBUG PARSING - FALLBACK ESTREMO attivato")
                 return {
                     "predicted_label": "altro",
                     "confidence": 0.2,
                     "motivation": f"Risposta non strutturata: {content[:100]}"
                 }
             else:
+                if self.enable_logging:
+                    print(f"🔥 DEBUG PARSING - ERRORE: Nessun tool_calls né content nella risposta!")
                 raise ValueError("Risposta senza tool_calls né content")
                 
         except (requests.RequestException, json.JSONDecodeError, KeyError, ValueError) as e:
@@ -3588,6 +3752,38 @@ Ragionamento: {ex["motivation"]}"""
     
     # ==================== METODI GESTIONE TAG DATABASE ====================
     
+    def _load_model_from_database(self) -> Optional[str]:
+        """
+        Carica il modello LLM configurato per il tenant dal database
+        
+        Returns:
+            Nome del modello se trovato nel database, None altrimenti
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-01
+        """
+        if not self.client_name:
+            return None
+            
+        try:
+            # Import AIConfigurationService per lettura database
+            sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'AIConfiguration'))
+            from ai_configuration_service import AIConfigurationService
+            
+            ai_service = AIConfigurationService()
+            config = ai_service.get_tenant_configuration(self.client_name, force_no_cache=True)
+            
+            if config and 'llm_model' in config:
+                database_model = config['llm_model'].get('current')
+                if database_model:
+                    print(f"🎲 DATABASE: Modello trovato per {self.client_name}: {database_model}")
+                    return database_model
+                    
+        except Exception as e:
+            print(f"⚠️ Errore caricamento modello dal database per {self.client_name}: {e}")
+                
+        return None
+
     def _load_domain_labels_from_database(self):
         """
         Carica etichette esistenti dalla tabella TAG.tags

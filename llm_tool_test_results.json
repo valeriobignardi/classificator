@@ -1,0 +1,86 @@
+[
+  {
+    "model": "mistral:7b",
+    "mode": "standard",
+    "timestamp": "2025-09-01T17:04:54.882975",
+    "has_message": true,
+    "has_tool_calls": false,
+    "has_content": true,
+    "tool_calls_count": 0,
+    "content_length": 183,
+    "parsed_result": [
+      {
+        "name": "classify_conversation",
+        "arguments": {
+          "predicted_label": "prenotazione",
+          "confidence": 0.95,
+          "motivation": "La conversazione riguarda la prenotazione di un appuntamento medico"
+        }
+      }
+    ],
+    "tool_call_details": null,
+    "content_preview": " [{\"name\":\"classify_conversation\",\"arguments\":{\"predicted_label\":\"prenotazione\",\"confidence\":0.95,\"motivation\":\"La conversazione riguarda la prenotazione di un appuntamento medico\"}}]",
+    "response_time": 3.8271987438201904,
+    "success": true
+  },
+  {
+    "model": "mistral:7b",
+    "mode": "raw",
+    "timestamp": "2025-09-01T17:04:55.839569",
+    "has_response": true,
+    "response_length": 234,
+    "response_preview": "[{\"name\": \"classify_conversation\", \"arguments\": {\"predicted_label\": \"prenotazione\", \"confidence\": 1.0, \"motivation\": \"L'utente ha chiesto di prenotare una visita cardiologica e l'assistente gli ha off",
+    "parsed_result": [
+      {
+        "name": "classify_conversation",
+        "arguments": {
+          "predicted_label": "prenotazione",
+          "confidence": 1.0,
+          "motivation": "L'utente ha chiesto di prenotare una visita cardiologica e l'assistente gli ha offerto aiuto con la prenotazione"
+        }
+      }
+    ],
+    "has_tool_calls_format": false,
+    "response_time": 0.956371545791626,
+    "success": true
+  },
+  {
+    "model": "mistral-nemo:latest",
+    "mode": "standard",
+    "timestamp": "2025-09-01T17:05:01.270013",
+    "has_message": true,
+    "has_tool_calls": true,
+    "has_content": false,
+    "tool_calls_count": 1,
+    "content_length": 0,
+    "parsed_result": {
+      "confidence": 0.95,
+      "motivation": "L'utente ha esplicitamente richiesto una prenotazione",
+      "predicted_label": "prenotazione"
+    },
+    "tool_call_details": {
+      "function_name": "classify_conversation",
+      "has_arguments": true,
+      "arguments_raw": {
+        "confidence": 0.95,
+        "motivation": "L'utente ha esplicitamente richiesto una prenotazione",
+        "predicted_label": "prenotazione"
+      }
+    },
+    "content_preview": null,
+    "response_time": 5.430186033248901,
+    "success": true
+  },
+  {
+    "model": "mistral-nemo:latest",
+    "mode": "raw",
+    "timestamp": "2025-09-01T17:05:03.123477",
+    "has_response": true,
+    "response_length": 330,
+    "response_preview": "Per favore, utilizza il seguente formato per fornire i dettagli della conversazione:\n\n```json\n{\n  \"predicted_label\": \"prenotazione\",\n  \"confidence\": 0.95,\n  \"motivation\": \"L'utente ha esplicitamente r",
+    "parsed_result": null,
+    "has_tool_calls_format": false,
+    "response_time": 1.853252649307251,
+    "success": true
+  }
+]

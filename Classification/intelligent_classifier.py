@@ -2407,6 +2407,38 @@ Ragionamento: {ex["motivation"]}"""
                 except json.JSONDecodeError:
                     pass
                 
+                # 🔧 NUOVO: Fallback per formato chiave-valore (YAML-like)
+                try:
+                    # Parsing per formato: predicted_label: valore\nconfidence: valore\nmotivation: valore
+                    parsed_result = {}
+                    lines = content.strip().split('\n')
+                    
+                    for line in lines:
+                        line = line.strip()
+                        if ':' in line:
+                            key, value = line.split(':', 1)
+                            key = key.strip()
+                            value = value.strip()
+                            
+                            if key == 'predicted_label':
+                                parsed_result['predicted_label'] = value
+                            elif key == 'confidence':
+                                try:
+                                    parsed_result['confidence'] = float(value)
+                                except ValueError:
+                                    parsed_result['confidence'] = 0.5
+                            elif key == 'motivation':
+                                parsed_result['motivation'] = value
+                    
+                    # Verifica che abbiamo tutti i campi richiesti
+                    if all(key in parsed_result for key in ['predicted_label', 'confidence', 'motivation']):
+                        self.logger.info(f"✅ Parsing YAML-like riuscito: {parsed_result['predicted_label']} (conf: {parsed_result['confidence']})")
+                        return parsed_result
+                        
+                except Exception as e:
+                    self.logger.debug(f"Errore parsing YAML-like: {e}")
+                    pass
+                
                 # Fallback estremo
                 return {
                     "predicted_label": "altro",

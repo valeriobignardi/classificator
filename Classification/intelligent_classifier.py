@@ -1187,15 +1187,14 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             # Seleziona esempi dinamici
             examples = self._get_dynamic_examples(conversation_text, max_examples=5)
             
-            # Costruisce esempi con formato strutturato
+            # Costruisce esempi con formato semplificato per evitare confusione LLM
             examples_text = ""
             for i, ex in enumerate(examples, 1):
-                confidence_hint = "ALTA CERTEZZA" if i <= 2 else "MEDIA CERTEZZA"
                 examples_text += f"""
-ESEMPIO {i} ({confidence_hint}):
-Input: "{ex["text"]}"
-Output: {ex["label"]}
-Ragionamento: {ex["motivation"]}"""
+##ESEMPIO##
+{ex["text"]}
+{ex["label"]}
+"""
             
             # Variabili dinamiche per il template
             variables = {
@@ -1299,12 +1298,13 @@ Ragionamento: {ex["motivation"]}"""
                     # Carica il contenuto completo dell'esempio
                     full_content = self._get_example_full_content(self.tenant.tenant_id, esempio['esempio_name'])
                     if full_content:
-                        # Estrae testo conversazione dal formato UTENTE:/ASSISTENTE:
+                        # Estrae testo conversazione e etichetta dal nuovo formato
                         conversation_text = self._extract_conversation_from_example(full_content)
+                        label = self._extract_label_from_example(full_content)
                         
                         converted_examples.append({
                             "text": conversation_text,
-                            "label": self._infer_label_from_example_name(esempio['esempio_name']),
+                            "label": label,
                             "motivation": f"Esempio dal database: {esempio.get('description', esempio['esempio_name'])}"
                         })
                 except Exception as e:
@@ -1342,19 +1342,72 @@ Ragionamento: {ex["motivation"]}"""
             return ""
     
     def _extract_conversation_from_example(self, example_content: str) -> str:
-        """Estrae il testo della conversazione dall'esempio formattato UTENTE:/ASSISTENTE:"""
+        """
+        Estrae il testo della conversazione dall'esempio con formato user:/assistant:
+        
+        Args:
+            example_content: Contenuto esempio nel formato 'user: "..." \\n assistant: {...}'
+            
+        Returns:
+            Testo della conversazione dell'utente
+        """
         try:
-            # Cerca pattern UTENTE: ... ASSISTENTE: ...
-            import re
-            utente_match = re.search(r'UTENTE:\s*(.+?)(?:\s+ASSISTENTE:|$)', example_content, re.DOTALL)
-            if utente_match:
-                return utente_match.group(1).strip()
+            # Nuovo formato: user: "..." \n assistant: {...}
+            if 'user: "' in example_content:
+                import re
+                # Estrae il testo tra le virgolette dopo user:
+                user_match = re.search(r'user:\s*"(.+?)"', example_content, re.DOTALL)
+                if user_match:
+                    return user_match.group(1).strip()
+            
+            # Pattern legacy UTENTE: ... ASSISTENTE: ...
+            if 'UTENTE:' in example_content:
+                import re
+                utente_match = re.search(r'UTENTE:\s*(.+?)(?:\s+ASSISTENTE:|$)', example_content, re.DOTALL)
+                if utente_match:
+                    return utente_match.group(1).strip()
             
             # Fallback: restituisce l'esempio così com'è
             return example_content[:200]  # Limita lunghezza
         except Exception:
             return example_content[:100]
     
+    def _extract_label_from_example(self, example_content: str) -> str:
+        """
+        Estrae l'etichetta dal JSON dell'assistente nell'esempio
+        
+        Args:
+            example_content: Contenuto esempio nel formato 'user: "..." \\n assistant: {...}'
+            
+        Returns:
+            Etichetta estratta dal JSON dell'assistente
+        """
+        try:
+            import json
+            import re
+            
+            # Estrae il JSON dell'assistente
+            assistant_match = re.search(r'assistant:\s*(\{.+\})', example_content, re.DOTALL)
+            if assistant_match:
+                json_str = assistant_match.group(1).strip()
+                # Converte single quotes in double quotes per JSON valido
+                json_str = json_str.replace("'", '"')
+                
+                try:
+                    assistant_data = json.loads(json_str)
+                    if 'predicted_label' in assistant_data:
+                        return assistant_data['predicted_label']
+                except json.JSONDecodeError:
+                    # Fallback: estrazione con regex
+                    label_match = re.search(r'"predicted_label":\s*"([^"]+)"', json_str)
+                    if label_match:
+                        return label_match.group(1)
+            
+            # Fallback usando il nome dell'esempio
+            return "altro"
+        except Exception:
+            return "altro"
+
     def _infer_label_from_example_name(self, esempio_name: str) -> str:
         """Deduce una label dall'nome dell'esempio"""
         # Mapping nomi esempio -> etichette standard Wopta
@@ -2882,6 +2935,9 @@ Ragionamento: {ex["motivation"]}"""
             try:
                 structured_result = self._call_ollama_api_structured(conversation_text)
                 
+                # 🐛 DEBUG: Stampa in console la risposta come richiesto
+                print(f"🔍 STRUCTURED RESPONSE DEBUG: {structured_result}")
+                
                 # Estrai i risultati dal JSON strutturato (garantito valido)
                 predicted_label = structured_result["predicted_label"]
                 confidence = float(structured_result["confidence"])
@@ -2892,6 +2948,8 @@ Ragionamento: {ex["motivation"]}"""
                 
             except Exception as e:
                 # Fallback solo per errori critici di connessione
+                print(f"🚨 EXCEPTION IN STRUCTURED OUTPUT: {e}")
+                print(f"🔍 EXCEPTION TYPE: {type(e).__name__}")
                 self.logger.error(f"❌ Structured Outputs fallito, uso metodo tradizionale: {e}")
                 raw_response = self._call_ollama_api_with_retry(prompt)
                 predicted_label, confidence, motivation, original_llm_label = self._parse_llm_response(raw_response, conversation_text)

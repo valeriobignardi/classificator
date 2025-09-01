@@ -1008,7 +1008,7 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 # Carica prompt dal database con validazione STRICT
                 try:
                     system_prompt = self.prompt_manager.get_prompt_strict(
-                        tenant_id=self.tenant_id,
+                        self.tenant,  # 🔧 FIX: Passa oggetto Tenant invece di tenant_id
                         engine="LLM",
                         prompt_type="SYSTEM", 
                         prompt_name="intelligent_classifier_system",
@@ -1116,7 +1116,7 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             
             # Carica prompt dal database con validazione STRICT
             system_prompt = self.prompt_manager.get_prompt_strict(
-                tenant_id=resolved_tenant_id,
+                self.tenant,  # 🔧 FIX: Passa oggetto Tenant invece di tenant_id
                 engine="LLM",
                 prompt_type="SYSTEM",
                 prompt_name="intelligent_classifier_system",

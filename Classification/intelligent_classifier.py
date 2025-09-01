@@ -244,8 +244,9 @@ class IntelligentClassifier:
         models_config = llm_config.get('models', {})
         generation_config = llm_config.get('generation', {})
         
-        # Configurazione client_name
-        self.client_name = client_name
+        # Configurazione client_name: mantieni quello impostato dall'oggetto tenant
+        if not hasattr(self, 'client_name') or self.client_name is None:
+            self.client_name = client_name
         
         # Carica configurazione tenant-specific LLM
         tenant_llm_config = self.load_tenant_llm_config(self.tenant_id)
@@ -1187,13 +1188,19 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             # Seleziona esempi dinamici
             examples = self._get_dynamic_examples(conversation_text, max_examples=5)
             
-            # Costruisce esempi con formato semplificato per evitare confusione LLM
+            # 🔧 CORREZIONE CRITICA: USA IL FORMATO ORIGINALE DAL DATABASE!
+            # Non convertire in ##ESEMPIO##, usa il formato user:/assistant: originale
             examples_text = ""
             for i, ex in enumerate(examples, 1):
-                examples_text += f"""
-##ESEMPIO##
+                if 'raw_content' in ex:
+                    # 🎯 USA CONTENUTO ORIGINALE COMPLETO dal database
+                    examples_text += f"{ex['raw_content']}\n\n"
+                else:
+                    # Fallback per esempi hardcoded nel vecchio formato
+                    examples_text += f"""##ESEMPIO##
 {ex["text"]}
 {ex["label"]}
+
 """
             
             # Variabili dinamiche per il template
@@ -1291,24 +1298,23 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 self.logger.debug(f"⚠️ Nessun esempio trovato nel database TAG per tenant {self.tenant.tenant_id}")
                 return []
             
-            # Converte gli esempi dal formato database al formato richiesto
+            # Converte gli esempi dal formato database al formato richiesto per il prompt
             converted_examples = []
             for esempio in esempi_list[:max_examples]:
                 try:
-                    # Carica il contenuto completo dell'esempio
+                    # 🔧 CORREZIONE CRITICA: USA IL FORMATO ORIGINALE COMPLETO!
+                    # Carica il contenuto completo dell'esempio così com'è dal database
                     full_content = self._get_example_full_content(self.tenant.tenant_id, esempio['esempio_name'])
                     if full_content:
-                        # Estrae testo conversazione e etichetta dal nuovo formato
-                        conversation_text = self._extract_conversation_from_example(full_content)
-                        label = self._extract_label_from_example(full_content)
-                        
+                        # 🎯 NON CONVERTIRE! Usa il formato originale dal database:
+                        # user: "testo"
+                        # assistant: {"predicted_label": "...", "confidence": ..., "motivation": "..."}
                         converted_examples.append({
-                            "text": conversation_text,
-                            "label": label,
-                            "motivation": f"Esempio dal database: {esempio.get('description', esempio['esempio_name'])}"
+                            "raw_content": full_content,  # 🔑 CONTENUTO ORIGINALE COMPLETO
+                            "esempio_name": esempio['esempio_name']
                         })
                 except Exception as e:
-                    self.logger.debug(f"⚠️ Errore conversione esempio {esempio['esempio_name']}: {e}")
+                    self.logger.debug(f"⚠️ Errore caricamento esempio {esempio['esempio_name']}: {e}")
                     continue
             
             if converted_examples:
@@ -2385,10 +2391,10 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             "tools": classification_tools,  # 🔑 ARRAY DI FUNCTION TOOLS dal database
             "stream": False,
             "options": {
-                "temperature": 0.01,  # Molto deterministico per function calling
-                "num_predict": 200,   # Sufficiente per function call
-                "top_p": 0.8,
-                "top_k": 20
+                "temperature": self.temperature,  # 🔧 USA CONFIG TENANT!
+                "num_predict": self.max_tokens,   # 🔧 USA CONFIG TENANT!
+                "top_p": self.top_p,              # 🔧 USA CONFIG TENANT!
+                "top_k": self.top_k               # 🔧 USA CONFIG TENANT!
             }
         }
         
@@ -2566,11 +2572,34 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                             json_content = content[start_idx:]
                             if self.enable_logging:
                                 print(f"🔥 DEBUG PARSING - JSON content estratto: '{json_content}'")
-                            # Rimuovi eventuali caratteri trailing
+                            
+                            # 🔧 NUOVO: Gestione JSON troncato - prova a completarlo
                             if json_content.endswith('}}'):
                                 json_content = json_content[:-1]  # Rimuovi la } finale dell'oggetto esterno
+                            elif json_content.endswith('...'):
+                                # JSON troncato - prova a ricostruirlo
                                 if self.enable_logging:
-                                    print(f"🔥 DEBUG PARSING - JSON content pulito: '{json_content}'")
+                                    print(f"🔥 DEBUG PARSING - JSON troncato rilevato, tento ricostruzione")
+                                # Estrai quello che c'è e completa con valori di default
+                                truncated_json = json_content.replace('...', '').rstrip(',')
+                                try:
+                                    partial = json.loads(truncated_json + '}')
+                                    # Completa con valori mancanti
+                                    if 'predicted_label' not in partial:
+                                        partial['predicted_label'] = 'altro'
+                                    if 'confidence' not in partial:
+                                        partial['confidence'] = 0.3
+                                    if 'motivation' not in partial:
+                                        partial['motivation'] = 'Risposta incompleta dal modello'
+                                    if self.enable_logging:
+                                        print(f"🔥 DEBUG PARSING - JSON ricostruito: {partial}")
+                                    return partial
+                                except:
+                                    if self.enable_logging:
+                                        print(f"🔥 DEBUG PARSING - Impossibile ricostruire JSON troncato")
+                            
+                            if self.enable_logging:
+                                print(f"🔥 DEBUG PARSING - JSON content pulito: '{json_content}'")
                             
                             try:
                                 arguments = json.loads(json_content)
@@ -2594,6 +2623,42 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                     else:
                         if self.enable_logging:
                             print(f"🔥 DEBUG PARSING - Pattern Mistral non trovato nel content")
+                            
+                    # 🔧 NUOVO: Parsing per formato semplice **Motivazione:** ...
+                    if '**Motivazione:**' in content or '**Risposta:**' in content:
+                        if self.enable_logging:
+                            print(f"🔥 DEBUG PARSING - Trovato formato testo descrittivo")
+                        # Prova a estrarre qualche informazione dal testo
+                        lines = content.split('\n')
+                        motivation = ""
+                        predicted_label = "altro"
+                        confidence = 0.3
+                        
+                        for line in lines:
+                            if 'categoria' in line.lower() or 'appartiene' in line.lower():
+                                # Cerca pattern come "categoria X" o "appartiene alla categoria Y"
+                                words = line.split()
+                                for i, word in enumerate(words):
+                                    if word.strip('"').lower() in [label.lower() for label in self.domain_labels]:
+                                        predicted_label = word.strip('"')
+                                        confidence = 0.6
+                                        if self.enable_logging:
+                                            print(f"🔥 DEBUG PARSING - Trovata categoria nel testo: {predicted_label}")
+                                        break
+                            elif 'motivazione' in line.lower():
+                                motivation = line.split(':', 1)[-1].strip() if ':' in line else line
+                        
+                        if not motivation:
+                            motivation = "Estratto da risposta descrittiva"
+                            
+                        result = {
+                            "predicted_label": predicted_label,
+                            "confidence": confidence,
+                            "motivation": motivation[:150]  # Limita lunghezza
+                        }
+                        if self.enable_logging:
+                            print(f"🔥 DEBUG PARSING - Risultato da testo descrittivo: {result}")
+                        return result
                 except Exception as e:
                     if self.enable_logging:
                         print(f"🔥 DEBUG PARSING - Errore generale Mistral parsing: {e}")
@@ -3818,7 +3883,7 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             Nome del modello se trovato nel database, None altrimenti
             
         Autore: Valerio Bignardi
-        Data: 2025-09-01
+        Data: 2025-09-01 (Aggiornato: fix llm_engine field)
         """
         if not self.client_name:
             return None
@@ -3831,10 +3896,19 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             ai_service = AIConfigurationService()
             config = ai_service.get_tenant_configuration(self.client_name, force_no_cache=True)
             
-            if config and 'llm_model' in config:
+            print(f"🔍 DATABASE CONFIG DEBUG per {self.client_name}: {config}")
+            
+            # FIX: Cerca 'llm_engine' invece di 'llm_model.current'
+            if config and 'llm_engine' in config:
+                database_model = config['llm_engine']
+                if database_model:
+                    print(f"🎲 DATABASE: Modello LLM trovato per {self.client_name}: {database_model}")
+                    return database_model
+            elif config and 'llm_model' in config:
+                # Fallback legacy per struttura vecchia
                 database_model = config['llm_model'].get('current')
                 if database_model:
-                    print(f"🎲 DATABASE: Modello trovato per {self.client_name}: {database_model}")
+                    print(f"🎲 DATABASE LEGACY: Modello trovato per {self.client_name}: {database_model}")
                     return database_model
                     
         except Exception as e:

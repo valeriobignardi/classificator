@@ -341,6 +341,7 @@ class LLMConfigurationService:
     def get_model_info(self, model_name: str) -> Optional[Dict[str, Any]]:
         """
         Recupera informazioni specifiche per un modello
+        Cerca sia nei modelli configurati che in quelli Ollama disponibili
         
         Args:
             model_name: Nome del modello
@@ -348,16 +349,49 @@ class LLMConfigurationService:
         Returns:
             Dizionario con info modello o None se non trovato
             
-        Data ultima modifica: 2025-01-31
+        Data ultima modifica: 2025-09-01
         """
         try:
+            # Prima cerca nei modelli configurati
             available_models = self.get_available_models()
             
             for model in available_models:
                 if model.get('name') == model_name:
                     return model
             
-            print(f"⚠️ [LLMConfigService] Modello {model_name} non trovato")
+            # Se non trovato, cerca nei modelli Ollama via AIConfigurationService
+            try:
+                from AIConfiguration.ai_configuration_service import AIConfigurationService
+                ai_config_service = AIConfigurationService()
+                
+                # Usa un tenant dummy per recuperare i modelli Ollama
+                dummy_tenant = "015007d9-d413-11ef-86a5-96000228e7fe"
+                models_data = ai_config_service.get_llm_models(dummy_tenant)
+                
+                if models_data.get('success') and 'models' in models_data:
+                    ollama_models = models_data['models']['models'].get('ollama_available', [])
+                    
+                    for model in ollama_models:
+                        if model.get('name') == model_name:
+                            # Standardizza la struttura per compatibilità
+                            return {
+                                'name': model['name'],
+                                'display_name': model['name'],
+                                'description': model.get('description', f'Modello Ollama: {model["name"]}'),
+                                'max_input_tokens': 8000,  # Default per modelli Ollama
+                                'max_output_tokens': 4000,
+                                'context_limit': 8192,
+                                'requires_raw_mode': 'mistral:7b' in model['name'],
+                                'installed': model.get('installed', False),
+                                'size': model.get('size', 'Unknown'),
+                                'category': model.get('category', 'unknown'),
+                                'source': 'ollama'
+                            }
+                
+            except Exception as ollama_error:
+                print(f"⚠️ [LLMConfigService] Errore ricerca Ollama per {model_name}: {ollama_error}")
+            
+            print(f"⚠️ [LLMConfigService] Modello {model_name} non trovato né in config né in Ollama")
             return None
             
         except Exception as e:

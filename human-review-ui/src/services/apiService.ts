@@ -28,9 +28,13 @@ class ApiService {
     }
   }
 
-  async getReviewCases(tenant: string, limit: number = 20, includePropagated: boolean = false, includeOutliers: boolean = false, includeRepresentatives: boolean = true): Promise<{ cases: ReviewCase[]; total: number }> {
+  async getReviewCases(tenant_id: string, limit: number = 20, includePropagated: boolean = false, includeOutliers: boolean = false, includeRepresentatives: boolean = true): Promise<{ cases: ReviewCase[]; total: number }> {
+    console.log('🔍 [DEBUG] ApiService.getReviewCases() - Avvio richiesta');
+    console.log('🔍 [DEBUG] Tenant ID:', tenant_id);
+    console.log('🔍 [DEBUG] URL chiamata:', `${API_BASE_URL}/review/${tenant_id}/cases`);
+    
     return this.handleRequest(
-      axios.get(`${API_BASE_URL}/review/${tenant}/cases`, {
+      axios.get(`${API_BASE_URL}/review/${tenant_id}/cases`, {
         params: { 
           limit,
           include_propagated: includePropagated,
@@ -42,9 +46,12 @@ class ApiService {
   }
 
   // 🆕 Nuovo metodo per cluster view - mostra solo rappresentanti per default
-  async getClusterCases(tenant: string, limit: number = 20, includePropagated: boolean = false, includeOutliers: boolean = false): Promise<{ clusters: any[]; total: number }> {
+  async getClusterCases(tenant_id: string, limit: number = 20, includePropagated: boolean = false, includeOutliers: boolean = false): Promise<{ clusters: any[]; total: number }> {
+    console.log('🔍 [DEBUG] ApiService.getClusterCases() - Avvio richiesta');
+    console.log('🔍 [DEBUG] Tenant ID:', tenant_id);
+    
     return this.handleRequest(
-      axios.get(`${API_BASE_URL}/review/${tenant}/clusters`, {
+      axios.get(`${API_BASE_URL}/review/${tenant_id}/clusters`, {
         params: { 
           limit,
           include_propagated: includePropagated,
@@ -54,21 +61,28 @@ class ApiService {
     );
   }
 
-  async getCaseDetail(tenant: string, caseId: string): Promise<{ case: ReviewCase }> {
+  async getCaseDetail(tenant_id: string, caseId: string): Promise<{ case: ReviewCase }> {
+    console.log('🔍 [DEBUG] ApiService.getCaseDetail() - Avvio richiesta');
+    console.log('🔍 [DEBUG] Tenant ID:', tenant_id, 'Case ID:', caseId);
+    
     return this.handleRequest(
-      axios.get(`${API_BASE_URL}/review/${tenant}/cases/${caseId}`)
+      axios.get(`${API_BASE_URL}/review/${tenant_id}/cases/${caseId}`)
     );
   }
 
   async resolveCase(
-    tenant: string, 
+    tenant_id: string, 
     caseId: string, 
     humanDecision: string, 
     confidence: number, 
     notes?: string
   ): Promise<{ message: string }> {
+    console.log('🔍 [DEBUG] ApiService.resolveCase() - Avvio richiesta');
+    console.log('🔍 [DEBUG] Tenant ID:', tenant_id, 'Case ID:', caseId);
+    console.log('🔍 [DEBUG] URL chiamata:', `${API_BASE_URL}/review/${tenant_id}/cases/${caseId}/resolve`);
+    
     return this.handleRequest(
-      axios.post(`${API_BASE_URL}/review/${tenant}/cases/${caseId}/resolve`, {
+      axios.post(`${API_BASE_URL}/review/${tenant_id}/cases/${caseId}/resolve`, {
         human_decision: humanDecision,
         confidence,
         notes
@@ -76,9 +90,12 @@ class ApiService {
     );
   }
 
-  async getReviewStats(tenant: string): Promise<{ stats: ReviewStats }> {
+  async getReviewStats(tenant_id: string): Promise<{ stats: ReviewStats }> {
+    console.log('🔍 [DEBUG] ApiService.getReviewStats() - Avvio richiesta');
+    console.log('🔍 [DEBUG] Tenant ID:', tenant_id);
+    
     return this.handleRequest(
-      axios.get(`${API_BASE_URL}/review/${tenant}/stats`)
+      axios.get(`${API_BASE_URL}/review/${tenant_id}/stats`)
     );
   }
 
@@ -105,9 +122,12 @@ class ApiService {
     return response.tenants;
   }
 
-  async getLabelStatistics(tenant: string): Promise<any> {
+  async getLabelStatistics(tenant_id: string): Promise<any> {
+    console.log('🔍 [DEBUG] ApiService.getLabelStatistics() - Avvio richiesta');
+    console.log('🔍 [DEBUG] Tenant ID:', tenant_id);
+    
     return this.handleRequest(
-      axios.get(`${API_BASE_URL}/stats/labels/${tenant}`)
+      axios.get(`${API_BASE_URL}/stats/labels/${tenant_id}`)
     );
   }
 
@@ -142,9 +162,13 @@ class ApiService {
     );
   }
 
-  async getAvailableTags(tenant: string): Promise<{ tags: Array<{tag: string, count: number, source: string, avg_confidence: number}> }> {
+  async getAvailableTags(tenant_id: string): Promise<{ tags: Array<{tag: string, count: number, source: string, avg_confidence: number}> }> {
+    console.log('🔍 [DEBUG] ApiService.getAvailableTags() - Avvio richiesta');
+    console.log('🔍 [DEBUG] Tenant ID:', tenant_id);
+    console.log('🔍 [DEBUG] URL chiamata:', `${API_BASE_URL}/review/${tenant_id}/available-tags`);
+    
     return this.handleRequest(
-      axios.get(`${API_BASE_URL}/review/${tenant}/available-tags`)
+      axios.get(`${API_BASE_URL}/review/${tenant_id}/available-tags`)
     );
   }
 

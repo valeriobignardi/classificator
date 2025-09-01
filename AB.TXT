@@ -1,0 +1,16 @@
+🎛️ Configurazioni AI saranno salvate su DATABASE MySQL
+🎛️ AIConfigurationService inizializzato
+   � Backend: DATABASE MySQL
+   🔑 OpenAI API Key: ✅ Configurata
+🏭 EmbeddingEngineFactory inizializzata
+🎯 EmbeddingManager inizializzato
+🚀 UMAP disponibile per riduzione dimensionale!
+🚀 cuML GPU clustering disponibile!
+💥 EmbeddingDestroyer inizializzato - Ready to destroy and rebuild!
+🎯 SimpleEmbeddingManager inizializzato
+✅ Blueprint esempi inizializzato correttamente
+🔄 [LLMConfigService] Configurazione ricaricata
+🔧 [LLMConfigService] Servizio inizializzato con config: /home/ubuntu/classificatore/config.yaml
+🚀 Avvio server Flask - Debug: True
+ * Serving Flask app 'server'
+ * Debug mode: on

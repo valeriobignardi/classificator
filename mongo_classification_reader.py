@@ -1372,6 +1372,8 @@ class MongoClassificationReader:
             
             # 🆕 AGGIUNGI METADATI CLUSTER per Review Queue
             if cluster_metadata:
+                print(f"🐛 DEBUG save_classification_result - cluster_metadata ricevuto: {cluster_metadata}")
+                
                 # Crea sezione metadata se non esiste
                 if "metadata" not in doc:
                     doc["metadata"] = {}
@@ -1387,6 +1389,7 @@ class MongoClassificationReader:
                     
                 if "is_representative" in cluster_metadata:
                     doc["metadata"]["is_representative"] = bool(cluster_metadata["is_representative"])
+                    print(f"🐛 DEBUG save_classification_result - SALVATO is_representative: {bool(cluster_metadata['is_representative'])}")
                     
                 if "propagated_from" in cluster_metadata:
                     doc["metadata"]["propagated_from"] = str(cluster_metadata["propagated_from"])
@@ -1399,11 +1402,16 @@ class MongoClassificationReader:
                     else:
                         doc["metadata"]["propagation_confidence"] = float(confidence_value)
                 
+                print(f"🐛 DEBUG save_classification_result - doc[metadata] finale: {doc['metadata']}")
+                
                 # Log per debug
                 print(f"🏷️  Salvati metadati cluster per sessione {session_id}: cluster_id={cluster_metadata.get('cluster_id', 'N/A')}, is_representative={cluster_metadata.get('is_representative', False)}")
                 
                 # 🆕 DETERMINA CLASSIFICATION_TYPE per Review Queue
-                classification_type = self._determine_classification_type(cluster_metadata)
+                # FIX: Usa doc["metadata"] (metadati salvati nel DB) invece di cluster_metadata (parametro originale)
+                saved_metadata = doc.get("metadata", {})
+                print(f"🐛 DEBUG save_classification_result - saved_metadata passato a _determine_classification_type: {saved_metadata}")
+                classification_type = self._determine_classification_type(saved_metadata)
                 doc["classification_type"] = classification_type
                 print(f"🎯 Classification type determinato: {classification_type}")
                 
@@ -1526,19 +1534,20 @@ class MongoClassificationReader:
                                   show_outliers: bool = True) -> List[Dict[str, Any]]:
         """
         Scopo: Recupera sessioni per Review Queue a 3 livelli (Rappresentanti/Propagate/Outliers)
+        🔧 OPZIONE 1: Mostra solo casi con review_status = "pending" (non auto_classified)
         
         Parametri input:
             - client_name: Nome del cliente
             - limit: Numero massimo di risultati
             - label_filter: Filtro per etichetta specifica
             - show_representatives: Include rappresentanti di cluster (review_status: pending)
-            - show_propagated: Include conversazioni propagate dai cluster
-            - show_outliers: Include outliers (cluster_id: -1)
+            - show_propagated: Include conversazioni propagate dai cluster (review_status: pending)
+            - show_outliers: Include outliers (cluster_id: -1, review_status: pending)
             
         Output:
-            - Lista di sessioni filtrate per Review Queue
+            - Lista di sessioni filtrate per Review Queue (solo status "pending")
             
-        Ultimo aggiornamento: 2025-08-24
+        Ultimo aggiornamento: 2025-09-01 - Valerio Bignardi - Fix OPZIONE 1
         """
         try:
             if not self.ensure_connection():
@@ -1550,19 +1559,22 @@ class MongoClassificationReader:
             # 🆕 NUOVA LOGICA: Usa il campo classification_type
             or_conditions = []
             
-            # 1. RAPPRESENTANTI: classification_type = "RAPPRESENTANTE"
+            # 1. RAPPRESENTANTI: classification_type = "RAPPRESENTANTE" 
+            # 🔧 FIX OPZIONE 1: review_status è già filtrato nella base_query
             if show_representatives:
                 or_conditions.append({
                     "classification_type": "RAPPRESENTANTE"
                 })
             
             # 2. PROPAGATE: classification_type = "PROPAGATO"
+            # 🔧 FIX OPZIONE 1: review_status è già filtrato nella base_query
             if show_propagated:
                 or_conditions.append({
                     "classification_type": "PROPAGATO"
                 })
             
             # 3. OUTLIERS: classification_type = "OUTLIER"
+            # 🔧 FIX OPZIONE 1: review_status è già filtrato nella base_query
             if show_outliers:
                 or_conditions.append({
                     "classification_type": "OUTLIER"
@@ -1570,10 +1582,14 @@ class MongoClassificationReader:
             
             # Query base per tenant
             # CON OGGETTO TENANT: Usa sempre collection tenant-specifica
-            base_query = {}  # Nessun filtro client necessario
+            # 🔧 FIX OPZIONE 1: Filtra SEMPRE solo casi che necessitano review umana
+            base_query = {
+                "review_status": "pending"  # Solo casi realmente da rivedere
+            }
             
-            # Combina filtri
+            # Se abbiamo filtri di classificazione, li combiniamo con AND
             if or_conditions:
+                # Aggiungi i filtri di classificazione in AND con review_status
                 base_query["$or"] = or_conditions
             
             # Aggiungi filtro etichetta se specificato
@@ -1591,6 +1607,10 @@ class MongoClassificationReader:
             sessions = []
             for doc in cursor:
                 doc['_id'] = str(doc['_id'])
+                
+                print(f"🐛 DEBUG get_review_queue_sessions - DOC LETTO: session_id={doc.get('session_id', 'N/A')}")
+                print(f"🐛 DEBUG get_review_queue_sessions - classification_type: {doc.get('classification_type', 'N/A')}")
+                print(f"🐛 DEBUG get_review_queue_sessions - metadata: {doc.get('metadata', {})}")
                 
                 # Determina il tipo di sessione per metadata UI
                 session_type = "unknown"
@@ -2116,13 +2136,20 @@ class MongoClassificationReader:
         Output:
             - Stringa che indica il tipo: RAPPRESENTANTE, OUTLIER, PROPAGATO, NORMALE
             
-        Ultimo aggiornamento: 2025-08-29
+        Ultimo aggiornamento: 2025-09-01
         """
+        print(f"🐛 DEBUG _determine_classification_type - Input: {cluster_metadata}")
+        
         if not cluster_metadata:
+            print(f"🐛 DEBUG _determine_classification_type - Nessun metadata → NORMALE")
             return "NORMALE"
             
         # RAPPRESENTANTE: è esplicitamente marcato come rappresentativo
-        if cluster_metadata.get('is_representative', False):
+        is_representative = cluster_metadata.get('is_representative', False)
+        print(f"🐛 DEBUG _determine_classification_type - is_representative: {is_representative} (type: {type(is_representative)})")
+        
+        if is_representative:
+            print(f"🐛 DEBUG _determine_classification_type - RISULTATO: RAPPRESENTANTE")
             return "RAPPRESENTANTE"
             
         # OUTLIER: PRIORITÀ ALTA - cluster_id è -1 o contiene "outlier" o ha outlier_score > 0.5
@@ -2130,17 +2157,25 @@ class MongoClassificationReader:
         cluster_id = cluster_metadata.get('cluster_id')
         outlier_score = cluster_metadata.get('outlier_score', 0.0)
         
+        print(f"🐛 DEBUG _determine_classification_type - cluster_id: {cluster_id}, outlier_score: {outlier_score}")
+        
         if (cluster_id == -1 or 
             (isinstance(cluster_id, str) and 'outlier' in cluster_id.lower()) or
             outlier_score > 0.5):
+            print(f"🐛 DEBUG _determine_classification_type - RISULTATO: OUTLIER")
             return "OUTLIER"
             
         # PROPAGATO: ha propagated_from (è stato propagato da un rappresentante)
         # NOTA: Questo controllo è DOPO outlier perché un outlier non può essere propagato
-        if 'propagated_from' in cluster_metadata:
+        propagated_from = cluster_metadata.get('propagated_from')
+        print(f"🐛 DEBUG _determine_classification_type - propagated_from: {propagated_from}")
+        
+        if propagated_from:
+            print(f"🐛 DEBUG _determine_classification_type - RISULTATO: PROPAGATO")
             return "PROPAGATO"
             
         # DEFAULT: Se ha cluster_metadata ma non rientra nelle categorie sopra
+        print(f"🐛 DEBUG _determine_classification_type - RISULTATO: CLUSTER_MEMBER")
         return "CLUSTER_MEMBER"
 
 

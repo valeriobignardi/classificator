@@ -1839,10 +1839,14 @@ def create_mock_cases(client_name: str):
 # API ENDPOINTS FOR REACT FRONTEND - Endpoint API per frontend React
 # ============================================================================
 
-@app.route('/api/review/<client_name>/cases', methods=['GET'])
-def api_get_review_cases(client_name: str):
+@app.route('/api/review/<tenant_id>/cases', methods=['GET'])
+def api_get_review_cases(tenant_id: str):
     """
     API per ottenere tutte le sessioni classificate con supporto Review Queue a 3 livelli.
+    CORREZIONE: Usa tenant_id (UUID) come parametro univoco
+    
+    Parametri input:
+        - tenant_id: UUID del tenant (chiave univoca)
     
     Query Parameters:
         limit: Numero massimo di casi da restituire (default: 100)
@@ -1857,12 +1861,37 @@ def api_get_review_cases(client_name: str):
             "success": true,
             "cases": [...],
             "total": 5,
-            "client": "humanitas",
+            "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+            "tenant_name": "Humanitas",
             "labels": [...],
             "statistics": {...}
         }
+        
+    Ultimo aggiornamento: 2025-09-01 - Valerio Bignardi
     """
     try:
+        # 1. RISOLUZIONE TENANT DA UUID
+        print(f"🔍 [DEBUG] GET review cases per tenant_id: {tenant_id}")
+        tenant = None
+        try:
+            tenant = Tenant.from_uuid(tenant_id)
+            if not tenant:
+                return jsonify({
+                    'success': False,
+                    'error': f'Tenant non trovato per UUID: {tenant_id}',
+                    'cases': [],
+                    'total': 0
+                }), 404
+            
+            print(f"✅ [DEBUG] Tenant risolto: {tenant.tenant_name} ({tenant.tenant_slug})")
+        except Exception as e:
+            print(f"❌ [DEBUG] Errore risoluzione tenant: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': f'Errore nella risoluzione tenant: {str(e)}',
+                'cases': [],
+                'total': 0
+            }), 500
         limit = int(request.args.get('limit', 100))
         label_filter = request.args.get('label', None)
         
@@ -1889,14 +1918,15 @@ def api_get_review_cases(client_name: str):
             # Usa il nuovo parametro se specificato, altrimenti fallback al vecchio
             show_representatives = show_representatives_new or show_representatives
         
-        # Ottieni reader MongoDB tenant-aware - AGGIORNATO
-        mongo_reader = classification_service.get_mongo_reader(client_name)
+        # Ottieni reader MongoDB tenant-aware - AGGIORNATO (usa tenant_slug)
+        print(f"🔍 [DEBUG] Ottieni mongo reader per tenant: {tenant.tenant_slug}")
+        mongo_reader = classification_service.get_mongo_reader(tenant.tenant_slug)
         
         # 🆕 RECUPERA SESSIONI CON FILTRI REVIEW QUEUE
         if show_representatives or show_propagated or show_outliers:
-            # Usa metodo specializzato per Review Queue
+            # Usa metodo specializzato per Review Queue (usa tenant_slug)
             sessions = mongo_reader.get_review_queue_sessions(
-                client_name, 
+                tenant.tenant_slug, 
                 limit=limit,
                 label_filter=label_filter,
                 show_representatives=show_representatives,
@@ -1927,7 +1957,8 @@ def api_get_review_cases(client_name: str):
                 'reason': session.get('motivation', session.get('motivazione', '')),
                 'notes': session.get('notes', session.get('motivation', session.get('motivazione', ''))),  # Campo notes per UI
                 'created_at': str(session.get('timestamp', session.get('classified_at', ''))),
-                'tenant': client_name,
+                'tenant': tenant.tenant_slug,  # Usa tenant_slug per compatibilità con il resto del sistema
+                'tenant_id': tenant_id,         # Aggiunge anche tenant_id per il frontend
                 'cluster_id': str(session.get('cluster_id', session.get('metadata', {}).get('cluster_id', ''))) if session.get('cluster_id') or session.get('metadata', {}).get('cluster_id') else None,
                 
                 # 🆕 NUOVI CAMPI REVIEW QUEUE
@@ -1952,17 +1983,20 @@ def api_get_review_cases(client_name: str):
             'success': True,
             'cases': formatted_cases,
             'total': len(formatted_cases),
-            'client': client_name,
+            'tenant_id': tenant_id,                    # UUID del tenant
+            'tenant_name': tenant.tenant_name,         # Nome leggibile
+            'tenant_slug': tenant.tenant_slug,         # Per compatibilità legacy
             'labels': available_labels,
             'statistics': stats
         }), 200
         
     except Exception as e:
+        import traceback
         traceback.print_exc()
         return jsonify({
             'success': False,
             'error': str(e),
-            'client': client_name,
+            'tenant_id': tenant_id if 'tenant_id' in locals() else None,
             'labels': [],
             'statistics': {}
         }), 500
@@ -2145,54 +2179,82 @@ def api_get_clusters(client_name: str):
             'clusters': []
         }), 500
 
-@app.route('/api/review/<client_name>/cases/<case_id>', methods=['GET'])
-def api_get_case_detail(client_name: str, case_id: str):
+@app.route('/api/review/<tenant_id>/cases/<case_id>', methods=['GET'])
+def api_get_case_detail(tenant_id: str, case_id: str):
     """
-    API per ottenere i dettagli di un caso specifico.
+    API per ottenere i dettagli di un caso specifico usando tenant_id (UUID).
+    CORREZIONE: Usa tenant_id UUID come parametro univoco
     
+    Parametri input:
+        - tenant_id: UUID del tenant (chiave univoca)
+        - case_id: ID del caso MongoDB
+        
     Returns:
         {
             "success": true,
             "case": {...},
-            "client": "humanitas"
+            "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+            "tenant_name": "Humanitas"
         }
+        
+    Ultimo aggiornamento: 2025-09-01 - Valerio Bignardi
     """
     try:
-        # Ottieni il QualityGateEngine e MongoReader
-        quality_gate = classification_service.get_quality_gate(client_name)
-        mongo_reader = classification_service.get_mongo_reader(client_name)
+        # 1. RISOLUZIONE TENANT DA UUID
+        print(f"🔍 [DEBUG] GET case detail per tenant_id: {tenant_id}, case_id: {case_id}")
+        tenant = None
+        try:
+            tenant = Tenant.from_uuid(tenant_id)
+            if not tenant:
+                return jsonify({
+                    'success': False,
+                    'error': f'Tenant non trovato per UUID: {tenant_id}'
+                }), 404
+            
+            print(f"✅ [DEBUG] Tenant risolto: {tenant.tenant_name} ({tenant.tenant_slug})")
+        except Exception as e:
+            print(f"❌ [DEBUG] Errore risoluzione tenant: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': f'Errore nella risoluzione tenant: {str(e)}'
+            }), 500
         
-        print(f"🔍 Ricerca caso {case_id} per tenant {client_name}")
-        print(f"🔍 Case ID tipo: {type(case_id)}, valore: '{case_id}'")
-        print(f"🔍 Case ID lunghezza: {len(case_id)}")
+        # 2. OTTIENI QUALITY GATE E MONGO READER (usando tenant_slug per compatibilità)
+        quality_gate = classification_service.get_quality_gate(tenant.tenant_slug)
+        mongo_reader = classification_service.get_mongo_reader(tenant.tenant_slug)
         
-        # Prima cerca nei casi pending
-        pending_cases = quality_gate.get_pending_reviews(tenant=client_name, limit=100)
+        # 3. CERCA IL CASO
+        print(f"🔍 [DEBUG] Ricerca caso {case_id} per tenant {tenant.tenant_name}")
+        print(f"🔍 [DEBUG] Case ID tipo: {type(case_id)}, valore: '{case_id}'")
+        print(f"🔍 [DEBUG] Case ID lunghezza: {len(case_id)}")
+        
+        # Prima cerca nei casi pending (usa tenant_slug per compatibilità)
+        pending_cases = quality_gate.get_pending_reviews(tenant=tenant.tenant_slug, limit=100)
         target_case = None
         
-        print(f"🔍 Casi pending trovati: {len(pending_cases)}")
+        print(f"🔍 [DEBUG] Casi pending trovati: {len(pending_cases)}")
         
         for case in pending_cases:
             if case.case_id == case_id:
                 target_case = case
-                print(f"✅ Caso trovato nei pending: {case_id}")
+                print(f"✅ [DEBUG] Caso trovato nei pending: {case_id}")
                 break
         
         # Se non trovato nei pending, cerca direttamente nel database
         if not target_case:
             try:
-                print(f"🔍 Caso non trovato nei pending, cerco nel database...")
+                print(f"🔍 [DEBUG] Caso non trovato nei pending, cerco nel database...")
                 # Cerca nel database usando l'ObjectId MongoDB
                 from bson import ObjectId
-                print(f"🔍 Provo conversione a ObjectId: {case_id}")
+                print(f"🔍 [DEBUG] Provo conversione a ObjectId: {case_id}")
                 obj_id = ObjectId(case_id)
-                print(f"✅ ObjectId creato: {obj_id}")
+                print(f"✅ [DEBUG] ObjectId creato: {obj_id}")
                 
                 db_case = mongo_reader.get_case_by_id(obj_id)
-                print(f"🔍 Risultato query database: {db_case is not None}")
+                print(f"🔍 [DEBUG] Risultato query database: {db_case is not None}")
                 
                 if db_case:
-                    print(f"✅ Documento trovato nel database: {db_case.get('_id', 'NO_ID')}")
+                    print(f"✅ [DEBUG] Documento trovato nel database: {db_case.get('_id', 'NO_ID')}")
                     # Crea un oggetto semplice simile a ReviewCase senza import
                     class SimpleCase:
                         def __init__(self, **kwargs):
@@ -2211,7 +2273,8 @@ def api_get_case_detail(client_name: str, case_id: str):
                         novelty_score=float(db_case.get('novelty_score', 0.0)),
                         reason=db_case.get('reason', ''),
                         created_at=db_case.get('created_at', ''),
-                        tenant=client_name,
+                        tenant=tenant.tenant_slug,  # Usa tenant_slug per compatibilità
+                        tenant_id=tenant_id,        # Aggiunge tenant_id per frontend
                         cluster_id=db_case.get('cluster_id')
                     )
                     print(f"✅ Caso trovato nel database: {case_id}")
@@ -2220,14 +2283,16 @@ def api_get_case_detail(client_name: str, case_id: str):
                 import traceback
                 traceback.print_exc()
         
+        # 4. CONTROLLO RISULTATO
         if not target_case:
             return jsonify({
                 'success': False,
                 'error': f'Caso {case_id} non trovato',
-                'client': client_name
+                'tenant_id': tenant_id,
+                'tenant_name': tenant.tenant_name
             }), 404
         
-        # Converti in dict
+        # 5. CONVERTI IN DICT PER RISPOSTA
         case_data = {
             'case_id': target_case.case_id,
             'session_id': target_case.session_id,
@@ -2240,17 +2305,17 @@ def api_get_case_detail(client_name: str, case_id: str):
             'novelty_score': round(target_case.novelty_score, 3),
             'reason': target_case.reason,
             'created_at': target_case.created_at.strftime('%Y-%m-%d %H:%M:%S') if hasattr(target_case.created_at, 'strftime') else str(target_case.created_at),
-            'tenant': target_case.tenant,
+            'tenant': target_case.tenant if hasattr(target_case, 'tenant') else tenant.tenant_slug,
+            'tenant_id': tenant_id,  # Aggiunge tenant_id per frontend
             'cluster_id': int(target_case.cluster_id) if target_case.cluster_id is not None else None  # Converti numpy.int64 a int
         }
         
-        # 🆕 AGGIUNGI TAG SUGGERITI per il frontend
+        # 6. AGGIUNGI TAG SUGGERITI per il frontend (usa oggetto tenant)
         try:
             from TAGS.tag import IntelligentTagSuggestionManager
             tag_manager = IntelligentTagSuggestionManager()
             
-            # CORREZIONE: Ottieni oggetto tenant e passalo alla funzione
-            tenant = resolve_tenant_from_identifier(client_name)
+            # CORREZIONE: Usa oggetto tenant già risolto
             raw_suggested_tags = tag_manager.get_suggested_tags_for_client(tenant=tenant)
             
             # Converti il formato per il frontend
@@ -2267,10 +2332,10 @@ def api_get_case_detail(client_name: str, case_id: str):
             case_data['suggested_tags'] = suggested_tags
             case_data['total_suggested_tags'] = len(suggested_tags)
             
-            print(f"✅ Tag suggeriti recuperati per {client_name}: {len(suggested_tags)}")
+            print(f"✅ [DEBUG] Tag suggeriti recuperati per {tenant.tenant_name}: {len(suggested_tags)}")
             
         except Exception as tag_error:
-            print(f"⚠️ Errore recupero tag suggeriti per {client_name}: {tag_error}")
+            print(f"⚠️ [DEBUG] Errore recupero tag suggeriti per {tenant.tenant_name}: {tag_error}")
             import traceback
             traceback.print_exc()
             case_data['suggested_tags'] = []
@@ -2279,20 +2344,29 @@ def api_get_case_detail(client_name: str, case_id: str):
         return jsonify({
             'success': True,
             'case': case_data,
-            'client': client_name
+            'tenant_id': tenant_id,
+            'tenant_name': tenant.tenant_name,
+            'tenant_slug': tenant.tenant_slug
         }), 200
         
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False,
             'error': str(e),
-            'client': client_name
+            'tenant_id': tenant_id if 'tenant_id' in locals() else None
         }), 500
 
-@app.route('/api/review/<client_name>/cases/<case_id>/resolve', methods=['POST'])
-def api_resolve_case(client_name: str, case_id: str):
+@app.route('/api/review/<tenant_id>/cases/<case_id>/resolve', methods=['POST'])
+def api_resolve_case(tenant_id: str, case_id: str):
     """
-    API per risolvere un caso con la decisione umana.
+    API per risolvere un caso con la decisione umana usando tenant_id (UUID).
+    CORREZIONE: Riceve tenant_id UUID e risolve il tenant completo internamente
+    
+    Parametri input:
+        - tenant_id: UUID del tenant (chiave univoca)
+        - case_id: ID del caso MongoDB
     
     Body:
         {
@@ -2307,9 +2381,31 @@ def api_resolve_case(client_name: str, case_id: str):
             "message": "Caso risolto",
             "case_id": "uuid"
         }
+        
+    Ultimo aggiornamento: 2025-09-01 - Valerio Bignardi
     """
     try:
-        # Recupera dati dal body
+        # 1. RISOLUZIONE TENANT DA UUID (usando metodo esistente)
+        print(f"🔍 [DEBUG] Risoluzione caso per tenant_id: {tenant_id}")
+        tenant = None
+        try:
+            # Usa il metodo statico esistente della classe Tenant
+            tenant = Tenant.from_uuid(tenant_id)
+            if not tenant:
+                return jsonify({
+                    'success': False,
+                    'error': f'Tenant non trovato per UUID: {tenant_id}'
+                }), 404
+            
+            print(f"✅ [DEBUG] Tenant risolto: {tenant.tenant_name} ({tenant.tenant_slug})")
+        except Exception as e:
+            print(f"❌ [DEBUG] Errore risoluzione tenant: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': f'Errore nella risoluzione tenant: {str(e)}'
+            }), 500
+        
+        # 2. RECUPERA DATI DAL BODY
         if not request.is_json:
             return jsonify({
                 'success': False,
@@ -2327,10 +2423,12 @@ def api_resolve_case(client_name: str, case_id: str):
                 'error': 'human_decision è richiesto'
             }), 400
         
-        # Ottieni il QualityGateEngine
-        quality_gate = classification_service.get_quality_gate(client_name)
+        # 3. OTTIENI QualityGateEngine CON OGGETTO TENANT
+        print(f"🔍 [DEBUG] Ottengo QualityGateEngine per tenant: {tenant.tenant_slug}")
+        quality_gate = classification_service.get_quality_gate(tenant.tenant_slug)
         
-        # Risolvi il caso con propagazione cluster
+        # 4. RISOLVI IL CASO CON PROPAGAZIONE CLUSTER (usando oggetto tenant)
+        print(f"🔍 [DEBUG] Risoluzione caso {case_id} per tenant {tenant.tenant_name}")
         result = quality_gate.resolve_review_case(
             case_id=case_id,
             human_decision=human_decision,
@@ -2338,22 +2436,25 @@ def api_resolve_case(client_name: str, case_id: str):
             notes=notes
         )
         
-        # Controlla se la risoluzione è avvenuta con successo
+        # 5. CONTROLLA SUCCESSO RISOLUZIONE
         if not result.get("case_resolved", False):
             error = result.get("error", "Errore sconosciuto nella risoluzione")
             return jsonify({
                 'success': False,
                 'error': error,
                 'case_id': case_id,
-                'client': client_name
+                'tenant_id': tenant_id,
+                'tenant_name': tenant.tenant_name
             }), 500
         
-        # Prepara risposta dettagliata con informazioni di propagazione
+        # 6. PREPARA RISPOSTA DETTAGLIATA CON INFORMAZIONI TENANT
         response_data = {
             'success': True,
             'message': f'Caso {case_id} risolto con decisione: {human_decision}',
             'case_id': case_id,
-            'client': client_name,
+            'tenant_id': tenant_id,
+            'tenant_name': tenant.tenant_name,
+            'tenant_slug': tenant.tenant_slug,
             'human_decision': human_decision,
             'confidence': confidence,
             'cluster_info': {
@@ -2363,7 +2464,7 @@ def api_resolve_case(client_name: str, case_id: str):
             }
         }
         
-        # Aggiungi messaggio specifico se c'è stata propagazione
+        # 7. AGGIUNGI MESSAGGIO SPECIFICO SE PROPAGAZIONE
         if result.get("is_representative", False) and result.get("propagated_cases", 0) > 0:
             cluster_id = result.get("cluster_id")
             propagated_count = result.get("propagated_cases", 0)
@@ -2371,14 +2472,18 @@ def api_resolve_case(client_name: str, case_id: str):
         elif result.get("is_representative", False):
             response_data['message'] += ' - Caso rappresentante (nessun membro da propagare)'
         
+        print(f"✅ [DEBUG] Caso {case_id} risolto con successo per tenant {tenant.tenant_name}")
         return jsonify(response_data), 200
         
     except Exception as e:
+        print(f"❌ [DEBUG] Errore nella risoluzione caso: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False,
             'error': str(e),
             'case_id': case_id,
-            'client': client_name
+            'tenant_id': tenant_id
         }), 500
 
 @app.route('/api/review/<client_name>/stats', methods=['GET'])

@@ -162,12 +162,13 @@ class QualityGateEngine:
         Returns:
             Embedder configurato per il tenant
         """
-        # Usa l'oggetto Tenant della classe per estrarre tenant_name
-        effective_tenant = self.tenant.tenant_name if self.tenant else "humanitas"
+        # Usa direttamente l'oggetto Tenant della classe
+        if not self.tenant:
+            raise ValueError("QualityGateEngine deve essere inizializzato con oggetto Tenant valido")
         
         try:
             from EmbeddingEngine.simple_embedding_manager import simple_embedding_manager
-            return simple_embedding_manager.get_embedder_for_tenant(effective_tenant)
+            return simple_embedding_manager.get_embedder_for_tenant(self.tenant)
         except Exception as e:
             # AGGIORNAMENTO 2025-08-29: Fallback coerente con servizio Docker
             print(f"⚠️ QualityGate fallback embedder: {e}")

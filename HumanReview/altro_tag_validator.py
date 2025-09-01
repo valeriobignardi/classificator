@@ -175,10 +175,10 @@ class AltroTagValidator:
         try:
             # ✅ Usa il simple_embedding_manager (istanza singleton)
             if EMBEDDING_MANAGER_AVAILABLE:
-                # Ottiene embedder configurato per il tenant
-                embedder = simple_embedding_manager.get_embedder_for_tenant(self.tenant_id)
+                # Ottiene embedder configurato per il tenant - usa oggetto Tenant completo
+                embedder = simple_embedding_manager.get_embedder_for_tenant(self.tenant)
                 
-                self.logger.info(f"✅ Embedder dinamico inizializzato per tenant {self.tenant_id}")
+                self.logger.info(f"✅ Embedder dinamico inizializzato per tenant {self.tenant.tenant_name} ({self.tenant.tenant_id})")
                 return embedder
             else:
                 # Fallback al LaBSE embedder

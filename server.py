@@ -285,7 +285,27 @@ class ClassificationService:
             Embedder configurato per tenant specifico
         """
         from EmbeddingEngine.simple_embedding_manager import simple_embedding_manager
-        return simple_embedding_manager.get_embedder_for_tenant(tenant_id)
+        from Database.tenant_resolver import Tenant
+        
+        # Converte tenant_id stringa in oggetto Tenant
+        try:
+            if isinstance(tenant_id, str) and tenant_id != "default":
+                # Se è un UUID, usa from_uuid, altrimenti usa from_slug
+                if len(tenant_id) == 36 and tenant_id.count('-') == 4:  # formato UUID
+                    tenant_obj = Tenant.from_uuid(tenant_id)
+                else:
+                    tenant_obj = Tenant.from_slug(tenant_id)
+                    
+                return simple_embedding_manager.get_embedder_for_tenant(tenant_obj)
+            else:
+                # Per "default" o altri casi, usa fallback
+                raise ValueError(f"tenant_id '{tenant_id}' non supportato - richiesto UUID o slug valido")
+                
+        except Exception as e:
+            print(f"⚠️ Errore conversione tenant_id '{tenant_id}' in oggetto Tenant: {e}")
+            # Fallback critico - per ora restituisce errore invece di fallback silenzioso
+            raise ValueError(f"Impossibile inizializzare embedder per tenant '{tenant_id}': {e}")
+        
     
     def get_mongo_reader(self, client_name: str) -> MongoClassificationReader:
         """

@@ -164,7 +164,17 @@ class ClusteringTestService:
                 
                 # NUOVO SISTEMA: SimpleEmbeddingManager con reset automatico
                 from EmbeddingEngine.simple_embedding_manager import simple_embedding_manager
-                shared_embedder = simple_embedding_manager.get_embedder_for_tenant(tenant_obj)  # 🔧 PASSA OGGETTO TENANT
+                
+                # Usa oggetto Tenant se disponibile, altrimenti fallback
+                if TENANT_AVAILABLE and tenant_obj:
+                    shared_embedder = simple_embedding_manager.get_embedder_for_tenant(tenant_obj)
+                else:
+                    # Fallback - crea oggetto Tenant minimo o errore
+                    try:
+                        temp_tenant = Tenant.from_uuid(tenant_id)
+                        shared_embedder = simple_embedding_manager.get_embedder_for_tenant(temp_tenant)
+                    except:
+                        raise ValueError(f"Impossibile creare embedder per tenant {tenant_id} - oggetto Tenant richiesto")
                 
                 # 🆕 ARCHITETTURA MODERNA: passa oggetto Tenant completo
                 if TENANT_AVAILABLE and tenant_obj:
@@ -205,7 +215,9 @@ class ClusteringTestService:
                     else:
                         # Se non ha load_model, ottieni un nuovo embedder
                         from EmbeddingEngine.simple_embedding_manager import simple_embedding_manager
-                        new_embedder = simple_embedding_manager.get_embedder_for_tenant(tenant_id)
+                        # Converte tenant_id in oggetto Tenant
+                        tenant_obj = Tenant.from_uuid(tenant_id)
+                        new_embedder = simple_embedding_manager.get_embedder_for_tenant(tenant_obj)
                         pipeline.embedder = new_embedder
                         print(f"✅ Nuovo embedder ottenuto per {tenant_id}")
                         
@@ -217,7 +229,9 @@ class ClusteringTestService:
                     print(f"❌ Test embedder fallito per {tenant_id}: {test_error}")
                     # Forza ricaricamento completo
                     from EmbeddingEngine.simple_embedding_manager import simple_embedding_manager
-                    pipeline.embedder = simple_embedding_manager.get_embedder_for_tenant(tenant_id)
+                    # Converte tenant_id in oggetto Tenant
+                    tenant_obj = Tenant.from_uuid(tenant_id)
+                    pipeline.embedder = simple_embedding_manager.get_embedder_for_tenant(tenant_obj)
                     print(f"🔄 Embedder sostituito completamente per {tenant_id}")
             
         except Exception as embedder_check_error:

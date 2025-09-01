@@ -553,9 +553,9 @@ class EndToEndPipeline:
                 from simple_embedding_manager import simple_embedding_manager
                 
                 # NUOVO SISTEMA: SimpleEmbeddingManager con reset automatico
-                # Il tenant_slug in EndToEndPipeline ora contiene l'UUID, non lo slug human-readable
-                self.embedder = simple_embedding_manager.get_embedder_for_tenant(self.tenant_slug)
-                print(f"✅ Embedder caricato per tenant UUID '{self.tenant_slug}': {type(self.embedder).__name__}")
+                # Passa l'oggetto Tenant corretto invece della stringa tenant_slug
+                self.embedder = simple_embedding_manager.get_embedder_for_tenant(self.tenant)
+                print(f"✅ Embedder caricato per tenant {self.tenant.tenant_name} ({self.tenant.tenant_id}): {type(self.embedder).__name__}")
                 
             except ImportError as e:
                 print(f"⚠️ Fallback: Impossibile importare simple_embedding_manager: {e}")

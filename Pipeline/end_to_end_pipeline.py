@@ -4181,6 +4181,32 @@ class EndToEndPipeline:
                         notes = f"Outlier - ensemble non disponibile (cluster {cluster_id})" if cluster_id != -1 else "Outlier - ensemble non disponibile"
                         outlier_classification_details = None
                     
+                    # 🆕 VALIDAZIONE "ALTRO" PER OUTLIER - STESSA LOGICA DEI RAPPRESENTANTI
+                    if final_label == 'altro' and hasattr(self, 'interactive_trainer') and self.interactive_trainer.altro_validator:
+                        try:
+                            conversation_text = session_data.get('testo_completo', '')
+                            if conversation_text:
+                                print(f"🔍 VALIDAZIONE ALTRO per outlier {session_id}")
+                                # Esegui validazione del tag "altro" per l'outlier
+                                validated_label, validated_confidence, validation_info = self.interactive_trainer.handle_altro_classification(
+                                    conversation_text=conversation_text,
+                                    force_human_decision=False  # Automatico durante propagazione
+                                )
+                                
+                                # Usa il risultato della validazione se diverso da "altro"
+                                if validated_label != 'altro':
+                                    final_label = validated_label
+                                    confidence = validated_confidence
+                                    method = f"{method}_ALTRO_VAL"  # Marca che è stato validato
+                                    notes = f"{notes} - Validato da 'altro' a '{validated_label}'"
+                                    print(f"✅ OUTLIER RICLASSIFICATO: {session_id} 'altro' -> '{validated_label}' (conf: {confidence:.3f})")
+                                else:
+                                    print(f"🔄 OUTLIER CONFERMATO ALTRO: {session_id} rimane 'altro'")
+                                    
+                        except Exception as e:
+                            print(f"⚠️ Errore validazione altro per outlier {session_id}: {e}")
+                            # Il final_label rimane quello precedente in caso di errore
+                    
                     stats['unlabeled_sessions'] += 1
                 
                 # Aggiorna distribuzione confidenze

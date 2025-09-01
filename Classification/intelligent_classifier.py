@@ -2537,6 +2537,16 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 
                 self.logger.warning(f"⚠️ Modello non ha usato function call, tento parsing contenuto: {content[:100]}...")
                 
+                # 🔍 DEBUG AGGIUNTO: Stampa la risposta LLM completa che ha causato l'errore di parsing
+                if self.enable_logging:
+                    print(f"🚨 RISPOSTA LLM COMPLETA CHE HA CAUSATO ERRORE PARSING:")
+                    print("=" * 100)
+                    print(content)
+                    print("=" * 100)
+                    print(f"📊 Lunghezza totale: {len(content)} caratteri")
+                    print(f"📊 Tipo: {type(content)}")
+                    print("=" * 100)
+                
                 # Fallback: prova a parsare come JSON
                 if self.enable_logging:
                     print(f"🔥 DEBUG PARSING - Tentativo 1: JSON diretto")
@@ -2573,30 +2583,65 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                             if self.enable_logging:
                                 print(f"🔥 DEBUG PARSING - JSON content estratto: '{json_content}'")
                             
-                            # 🔧 NUOVO: Gestione JSON troncato - prova a completarlo
-                            if json_content.endswith('}}'):
-                                json_content = json_content[:-1]  # Rimuovi la } finale dell'oggetto esterno
-                            elif json_content.endswith('...'):
-                                # JSON troncato - prova a ricostruirlo
+                            # 🔧 MIGLIORATO: Gestione JSON troncato - ricostruisce automaticamente
+                            # Controlla se è troncato (mancano chiusure, virgole dangling, etc.)
+                            if (json_content.endswith('}}') or 
+                                json_content.endswith('...') or 
+                                json_content.endswith(', ') or
+                                json_content.endswith(',') or
+                                not json_content.strip().endswith('}')):
+                                
                                 if self.enable_logging:
-                                    print(f"🔥 DEBUG PARSING - JSON troncato rilevato, tento ricostruzione")
-                                # Estrai quello che c'è e completa con valori di default
-                                truncated_json = json_content.replace('...', '').rstrip(',')
+                                    print(f"🔥 DEBUG PARSING - JSON troncato/malformato rilevato, tento ricostruzione")
+                                
+                                # Pulisce e estrae quello che c'è
+                                clean_json = json_content.replace('...', '').replace('}}', '').rstrip(', ')
+                                if not clean_json.strip().endswith('}'):
+                                    clean_json += '}'
+                                
+                                if self.enable_logging:
+                                    print(f"🔥 DEBUG PARSING - JSON pulito: '{clean_json}'")
+                                
                                 try:
-                                    partial = json.loads(truncated_json + '}')
+                                    partial = json.loads(clean_json)
                                     # Completa con valori mancanti
                                     if 'predicted_label' not in partial:
                                         partial['predicted_label'] = 'altro'
                                     if 'confidence' not in partial:
                                         partial['confidence'] = 0.3
                                     if 'motivation' not in partial:
-                                        partial['motivation'] = 'Risposta incompleta dal modello'
+                                        partial['motivation'] = 'Risposta incompleta/troncata dal modello'
+                                    
                                     if self.enable_logging:
-                                        print(f"🔥 DEBUG PARSING - JSON ricostruito: {partial}")
+                                        print(f"🔥 DEBUG PARSING - JSON ricostruito con successo: {partial}")
                                     return partial
-                                except:
+                                    
+                                except json.JSONDecodeError as e:
                                     if self.enable_logging:
-                                        print(f"🔥 DEBUG PARSING - Impossibile ricostruire JSON troncato")
+                                        print(f"🔥 DEBUG PARSING - Errore JSON decode: {e}")
+                                        print(f"🔥 DEBUG PARSING - Tentativo ricostruzione manuale...")
+                                    
+                                    # Ultimo tentativo: ricostruzione manuale
+                                    if '"predicted_label":' in clean_json:
+                                        try:
+                                            # Estrai almeno la label
+                                            import re
+                                            label_match = re.search(r'"predicted_label":\s*"([^"]*)"', clean_json)
+                                            if label_match:
+                                                label = label_match.group(1)
+                                                if self.enable_logging:
+                                                    print(f"🔥 DEBUG PARSING - Label estratta manualmente: {label}")
+                                                return {
+                                                    'predicted_label': label,
+                                                    'confidence': 0.5,
+                                                    'motivation': f'Label estratta da risposta malformata: {label}'
+                                                }
+                                        except Exception as manual_ex:
+                                            if self.enable_logging:
+                                                print(f"🔥 DEBUG PARSING - Anche ricostruzione manuale fallita: {manual_ex}")
+                                
+                                if self.enable_logging:
+                                    print(f"🔥 DEBUG PARSING - Tutte le ricostruzioni fallite")
                             
                             if self.enable_logging:
                                 print(f"🔥 DEBUG PARSING - JSON content pulito: '{json_content}'")

@@ -1271,7 +1271,30 @@ class MongoClassificationReader:
             
         Ultimo aggiornamento: 2025-08-23
         """
-        # 🔍 DEBUG: Import utility debug e trace del salvataggio
+        # � DEBUG CLASSIFIED_BY: Traccia TUTTI i parametri ricevuti dalla funzione
+        print(f"🚨 [MONGO-DEBUG] save_classification_result chiamata per session {session_id}:")
+        print(f"   📋 client_name: '{client_name}'")
+        print(f"   📋 classified_by: '{classified_by}' (type: {type(classified_by)})")
+        print(f"   📋 cluster_metadata: {cluster_metadata is not None} ({type(cluster_metadata)})")
+        if cluster_metadata:
+            print(f"   📋 cluster_metadata keys: {list(cluster_metadata.keys())}")
+        print(f"   📋 final_decision: {final_decision is not None}")
+        if final_decision:
+            print(f"   📋 final_decision method: '{final_decision.get('method', 'N/A')}'")
+        print(f"   📋 needs_review: {needs_review}")
+        print(f"   📋 review_reason: '{review_reason}'")
+        
+        # � DEBUG STACK TRACE: Se classified_by è None o unknown, traccia chi ha chiamato
+        if not classified_by or classified_by == "unknown":
+            print(f"🚨 [STACK-TRACE] CLASSIFIED_BY='{classified_by}' per session {session_id}")
+            import traceback
+            print(f"🚨 [STACK-TRACE] Call stack:")
+            stack = traceback.format_stack()
+            # Mostra solo le ultime 5 chiamate per non intasare il log
+            for i, line in enumerate(stack[-6:-1]):  # Esclude questa riga
+                print(f"   📋 #{i+1}: {line.strip()}")
+        
+        # �🔍 DEBUG: Import utility debug e trace del salvataggio
         try:
             import sys
             import os
@@ -1457,7 +1480,11 @@ class MongoClassificationReader:
                     'cluster', 'optimized', 'ens_pipe', 'ensemble'
                 ])
                 
-                print(f"🚨 [DEBUG CRITICO] is_cluster_based={is_cluster_based} (keywords: cluster, optimized, ens_pipe, ensemble)")
+                print(f"🚨 [DEBUG CRITICO] CONTROLLO CLUSTER-BASED per session {session_id}:")
+                print(f"   📋 classified_by: '{classified_by}' (type: {type(classified_by)})")
+                print(f"   📋 is_cluster_based: {is_cluster_based}")
+                print(f"   📋 cluster_metadata: {cluster_metadata is not None}")
+                print(f"   📋 keywords check: cluster={('cluster' in classified_by.lower())}, optimized={('optimized' in classified_by.lower())}, ens_pipe={('ens_pipe' in classified_by.lower())}, ensemble={('ensemble' in classified_by.lower())}")
                 
                 if is_cluster_based:
                     # 🎯 CLUSTERING-BASED: Sessione senza cluster metadata = outlier

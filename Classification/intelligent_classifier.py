@@ -3597,7 +3597,8 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                     'reasoning': result.motivation
                 },
                 conversation_text=conversation_text,
-                needs_review=False  # Per ora auto-classifica sempre
+                needs_review=False,  # Per ora auto-classifica sempre
+                classified_by='intelligent_clustering'  # 🔧 FIX: Specifica la provenienza per evitare LLM_STRUCTURED
             )
             
             if success:

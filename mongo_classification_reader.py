@@ -1271,6 +1271,28 @@ class MongoClassificationReader:
             
         Ultimo aggiornamento: 2025-08-23
         """
+        # 🔍 DEBUG: Import utility debug e trace del salvataggio
+        try:
+            import sys
+            import os
+            pipeline_path = os.path.join(os.path.dirname(__file__), 'Pipeline')
+            if pipeline_path not in sys.path:
+                sys.path.append(pipeline_path)
+            from debug_pipeline import debug_metadata, debug_pipeline
+            
+            debug_metadata(session_id, cluster_metadata, classified_by or "unknown", "save_classification_result")
+            
+            debug_pipeline("save_classification_result", f"SAVING session {session_id}", {
+                "client_name": client_name,
+                "classified_by": classified_by,
+                "has_cluster_metadata": bool(cluster_metadata),
+                "cluster_metadata_content": cluster_metadata if cluster_metadata else "None"
+            }, "INFO")
+            
+        except ImportError as e:
+            print(f"⚠️ DEBUG: Impossibile importare debug_pipeline: {e}")
+            # Continua senza debug se il modulo non è disponibile
+        
         try:
             if not self.ensure_connection():
                 return []
@@ -1416,7 +1438,12 @@ class MongoClassificationReader:
                 print(f"🎯 Classification type determinato: {classification_type}")
                 
             else:
-                # 🔧 FIX CRITICO: cluster_metadata None può significare:
+                # � PUNTO CRITICO: cluster_metadata è None - qui si attiva LLM_STRUCTURED!
+                print(f"🚨 [DEBUG CRITICO] cluster_metadata=None per session_id={session_id}")
+                print(f"🚨 [DEBUG CRITICO] classified_by='{classified_by}'")
+                print(f"🚨 [DEBUG CRITICO] QUESTO CAUSERÀ LLM_STRUCTURED!")
+                
+                # �🔧 FIX CRITICO: cluster_metadata None può significare:
                 # 1. Classificazione normale (senza clustering) - NON è outlier
                 # 2. Classificazione ottimizzata ma fallback - potrebbe essere outlier
                 # 
@@ -1430,8 +1457,11 @@ class MongoClassificationReader:
                     'cluster', 'optimized', 'ens_pipe', 'ensemble'
                 ])
                 
+                print(f"🚨 [DEBUG CRITICO] is_cluster_based={is_cluster_based} (keywords: cluster, optimized, ens_pipe, ensemble)")
+                
                 if is_cluster_based:
                     # 🎯 CLUSTERING-BASED: Sessione senza cluster metadata = outlier
+                    print(f"🚨 [DEBUG CRITICO] ASSEGNAZIONE AUTOMATICA A OUTLIER per {session_id}")
                     outlier_counter = self._get_next_outlier_counter()
                     outlier_cluster_id = f"outlier_{outlier_counter}"
                     

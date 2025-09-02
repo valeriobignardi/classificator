@@ -61,6 +61,11 @@ debug:
     log_decisions: true
     log_human_review: true
     log_thresholds: true
+  mysql_debug:
+    enabled: true
+    log_credentials: true
+    log_connections: true
+    log_queries: true
 hierarchical_clustering:
   boundary_refinement: true
   boundary_threshold: 0.45
@@ -314,6 +319,10 @@ quality_gate:
   novelty_threshold: 0.6
   retraining_threshold: 5
   uncertainty_threshold: 0.2
+altro_tag_validator:
+  semantic_similarity_threshold: 0.80
+  enable_embedding_cache: true
+  max_embedding_cache_size: 1000
 semantic_memory:
   cache_path: semantic_cache/
   enable_detailed_logging: true

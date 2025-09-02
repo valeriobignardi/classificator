@@ -2,8 +2,8 @@ clustering_parameters:
   allow_single_cluster: false
   alpha: 0.4
   cluster_selection_epsilon: 0.28
-  cluster_selection_method: leaf
-  max_cluster_size: 0
+  cluster_selection_method: eom
+  max_cluster_size: null
   metric: euclidean
   min_cluster_size: 13
   min_samples: 16
@@ -19,8 +19,8 @@ previous_config_backup:
   allow_single_cluster: false
   alpha: 0.7
   cluster_selection_epsilon: 0.13
-  cluster_selection_method: leaf
-  max_cluster_size: 0
+  cluster_selection_method: eom
+  max_cluster_size: null
   metric: euclidean
   min_cluster_size: 21
   min_samples: 14

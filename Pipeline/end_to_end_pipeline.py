@@ -254,7 +254,10 @@ class EndToEndPipeline:
         cluster_selection_epsilon = float(clustering_config.get('cluster_selection_epsilon', 0.05))
         cluster_metric = clustering_config.get('metric', 'cosine')
         cluster_allow_single = clustering_config.get('allow_single_cluster', False)
-        cluster_max_size = int(clustering_config.get('max_cluster_size', 0))
+        # Fix per max_cluster_size: gestisce None e 0 correttamente (dalle API)
+        max_cluster_raw = clustering_config.get('max_cluster_size', 0)
+        # Converte sia None che 0 a None (nessun limite per HDBSCAN)
+        cluster_max_size = None if max_cluster_raw is None or max_cluster_raw == 0 else int(max_cluster_raw)
         
         # 🆕 PARAMETRI UMAP da tenant config
         umap_params = self.config_helper.get_umap_parameters(self.tenant_id)
@@ -2004,6 +2007,18 @@ class EndToEndPipeline:
         Autore: Valerio Bignardi
         Data: 2025-08-29
         """
+        # 🔍 DEBUG: Import e trace della funzione
+        from Pipeline.debug_pipeline import debug_pipeline, debug_flow
+        
+        debug_pipeline("classifica_e_salva_sessioni", "ENTRY - Avvio classificazione e salvataggio", {
+            "num_sessioni": len(sessioni),
+            "batch_size": batch_size,
+            "use_ensemble": use_ensemble,
+            "optimize_clusters": optimize_clusters,
+            "force_review": force_review,
+            "tenant": self.tenant_slug
+        }, "ENTRY")
+        
         print(f"🏷️  CLASSIFICAZIONE POST-TRAINING di {len(sessioni)} sessioni...")
         print(f"📊 Batch size: {batch_size}")
         print(f"🔄 Force review: {force_review}")
@@ -2060,12 +2075,40 @@ class EndToEndPipeline:
         print(f"🚀 Classificazione ottimizzata con ensemble LLM+ML in corso...")
         
         try:
+            debug_pipeline("classifica_e_salva_sessioni", "TENTATIVO - Chiamata _classifica_ottimizzata_cluster", {
+                "num_sessioni": len(sessioni),
+                "num_session_ids": len(session_ids),
+                "num_session_texts": len(session_texts),
+                "batch_size": batch_size
+            }, "INFO")
+            
             predictions = self._classifica_ottimizzata_cluster(sessioni, session_ids, session_texts, batch_size)
+            
+            debug_pipeline("classifica_e_salva_sessioni", "SUCCESS - _classifica_ottimizzata_cluster completata", {
+                "num_predictions": len(predictions),
+                "predictions_with_cluster_metadata": sum(1 for p in predictions if p.get('cluster_metadata')),
+                "predictions_without_cluster_metadata": sum(1 for p in predictions if not p.get('cluster_metadata'))
+            }, "SUCCESS")
+            
             print(f"✅ Classificazione ottimizzata completata: {len(predictions)} risultati")
             
         except Exception as e:
+            from Pipeline.debug_pipeline import debug_exception
+            
+            debug_exception("classifica_e_salva_sessioni", e, {
+                "num_sessioni": len(sessioni),
+                "batch_size": batch_size,
+                "optimize_clusters": optimize_clusters,
+                "use_ensemble": use_ensemble
+            })
+            
             print(f"❌ ERRORE nella classificazione ottimizzata: {e}")
-            print(f"� Fallback alla classificazione ensemble tradizionale...")
+            print(f"🔄 Fallback alla classificazione ensemble tradizionale...")
+            
+            debug_pipeline("classifica_e_salva_sessioni", "FALLBACK - Tentativo batch_predict", {
+                "num_texts": len(session_texts),
+                "batch_size": batch_size
+            }, "WARNING")
             
             # Fallback: classificazione ensemble tradizionale
             try:
@@ -2075,9 +2118,17 @@ class EndToEndPipeline:
                     embedder=self.embedder
                 )
                 predictions = batch_predictions
+                
+                debug_pipeline("classifica_e_salva_sessioni", "FALLBACK SUCCESS - batch_predict completato", {
+                    "num_predictions": len(predictions),
+                    "predictions_type": "batch_predict_fallback"
+                }, "WARNING")
+                
                 print(f"✅ Fallback completato: {len(predictions)} risultati")
                 
             except Exception as e2:
+                debug_exception("classifica_e_salva_sessioni_fallback", e2)
+                
                 print(f"❌ ERRORE anche nel fallback: {e2}")
                 # Fallback finale: predizioni singole
                 predictions = []
@@ -2345,8 +2396,24 @@ class EndToEndPipeline:
                     # 🆕 FIX: Se optimize_clusters=False o prediction senza cluster info,
                     # NON costruire cluster_metadata per evitare auto-assegnazione a outlier_X
                     # Il sistema di salvataggio gestirà correttamente i casi senza cluster info
+                    debug_pipeline("classifica_e_salva_sessioni", f"CLUSTER_METADATA=None per {session_id}", {
+                        "optimize_clusters": optimize_clusters,
+                        "prediction_method": prediction.get('method') if prediction else 'No prediction',
+                        "prediction_has_cluster_info": bool(prediction and prediction.get('cluster_id'))
+                    }, "WARNING")
+                    
                     print(f"   ⚠️ Sessione {session_id}: nessun cluster metadata (optimize_clusters={optimize_clusters})")
                     cluster_metadata = None
+                
+                # 🔍 DEBUG: Trace prima del salvataggio
+                debug_pipeline("classifica_e_salva_sessioni", f"PRE-SAVE session {session_id}", {
+                    "predicted_label": predicted_label,
+                    "confidence": confidence,
+                    "method": method,
+                    "has_cluster_metadata": bool(cluster_metadata),
+                    "cluster_metadata": cluster_metadata,
+                    "classified_by": 'post_training_pipeline'
+                }, "INFO")
                 
                 success = mongo_reader.save_classification_result(
                     session_id=session_id,
@@ -2469,6 +2536,19 @@ class EndToEndPipeline:
         Returns:
             Risultati completi della pipeline
         """
+        # 🔍 DEBUG: Import utility debug
+        from Pipeline.debug_pipeline import debug_pipeline, debug_flow
+        
+        debug_pipeline("esegui_pipeline_completa", "ENTRY - Pipeline completa avviata", {
+            "giorni_indietro": giorni_indietro,
+            "limit": limit,
+            "batch_size": batch_size, 
+            "interactive_mode": interactive_mode,
+            "use_ensemble": use_ensemble,
+            "force_full_extraction": force_full_extraction,
+            "tenant": self.tenant_slug
+        }, "ENTRY")
+        
         start_time = datetime.now()
         print(f"🚀 AVVIO PIPELINE END-TO-END")
         print(f"📅 Periodo: ultimi {giorni_indietro} giorni")
@@ -3711,6 +3791,17 @@ class EndToEndPipeline:
         Returns:
             Lista predizioni per tutte le sessioni (stesso ordine di session_ids)
         """
+        # 🔍 DEBUG: Trace dell'ingresso nel metodo ottimizzato
+        from Pipeline.debug_pipeline import debug_pipeline, debug_flow, debug_exception
+        
+        debug_pipeline("_classifica_ottimizzata_cluster", "ENTRY - Avvio classificazione ottimizzata", {
+            "num_sessioni": len(sessioni),
+            "num_session_ids": len(session_ids),
+            "num_session_texts": len(session_texts),
+            "batch_size": batch_size,
+            "tenant": self.tenant_slug
+        }, "ENTRY")
+        
         print(f"🎯 CLASSIFICAZIONE OTTIMIZZATA PER CLUSTER")
         print(f"   📊 Sessioni totali: {len(sessioni)}")
         
@@ -4005,6 +4096,18 @@ class EndToEndPipeline:
                 
                 all_predictions.append(prediction)
             
+            # 🔍 DEBUG: Analisi delle predizioni generate
+            metadata_stats = {
+                "total_predictions": len(all_predictions),
+                "with_cluster_metadata": sum(1 for p in all_predictions if p.get('cluster_metadata')),
+                "without_cluster_metadata": sum(1 for p in all_predictions if not p.get('cluster_metadata')),
+                "representative_count": sum(1 for p in all_predictions if 'REPRESENTATIVE' in p.get('method', '')),
+                "propagated_count": sum(1 for p in all_predictions if p.get('method') == 'CLUSTER_PROPAGATED'),
+                "outlier_count": sum(1 for p in all_predictions if 'OUTLIER' in p.get('method', ''))
+            }
+            
+            debug_pipeline("_classifica_ottimizzata_cluster", "SUCCESS - Predizioni generate con metadata", metadata_stats, "SUCCESS")
+            
             # Statistiche finali
             propagated_count = sum(1 for p in all_predictions if p.get('method') == 'CLUSTER_PROPAGATED')
             representative_count = sum(1 for p in all_predictions if 'REPRESENTATIVE' in p.get('method', ''))
@@ -4020,8 +4123,17 @@ class EndToEndPipeline:
             return all_predictions
             
         except Exception as e:
+            debug_exception("_classifica_ottimizzata_cluster", e, {
+                "num_sessioni": len(sessioni),
+                "tenant": self.tenant_slug if hasattr(self, 'tenant_slug') else 'N/A'
+            })
+            
             print(f"❌ ERRORE in classificazione ottimizzata: {e}")
             print(f"🔄 Fallback alla classificazione standard...")
+            
+            debug_pipeline("_classifica_ottimizzata_cluster", "FALLBACK - Generazione predizioni senza cluster_metadata", {
+                "num_texts": len(session_texts)
+            }, "WARNING")
             
             # Fallback: classificazione standard di tutte le sessioni
             predictions = []
@@ -4033,6 +4145,8 @@ class EndToEndPipeline:
                         embedder=self.embedder
                     )
                     pred['method'] = 'OPTIMIZE_FALLBACK'
+                    pred['classified_by'] = 'fallback_ensemble'  # ✅ FIX: aggiungo classified_by
+                    # ❌ ATTENZIONE: Questo fallback NON genera cluster_metadata!
                     predictions.append(pred)
                 except Exception as e2:
                     predictions.append({
@@ -4040,9 +4154,15 @@ class EndToEndPipeline:
                         'confidence': 0.1,
                         'ensemble_confidence': 0.1,
                         'method': 'OPTIMIZE_FALLBACK_ERROR',
+                        'classified_by': 'fallback_error',  # ✅ FIX: aggiungo classified_by
                         'llm_prediction': None,
                         'ml_prediction': {'predicted_label': 'altro', 'confidence': 0.1}
                     })
+            
+            debug_pipeline("_classifica_ottimizzata_cluster", "FALLBACK COMPLETE - Predizioni senza metadata", {
+                "num_predictions": len(predictions),
+                "all_missing_cluster_metadata": True
+            }, "WARNING")
             
             return predictions
 

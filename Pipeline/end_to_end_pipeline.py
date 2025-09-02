@@ -254,10 +254,18 @@ class EndToEndPipeline:
         cluster_selection_epsilon = float(clustering_config.get('cluster_selection_epsilon', 0.05))
         cluster_metric = clustering_config.get('metric', 'cosine')
         cluster_allow_single = clustering_config.get('allow_single_cluster', False)
-        # Fix per max_cluster_size: gestisce None e 0 correttamente (dalle API)
+        # 🔧 FIX CRITICO: max_cluster_size=None causa TypeError in HDBSCAN
+        # Protezione robusta: None o 0 -> 0 (unlimited), altrimenti valore intero
         max_cluster_raw = clustering_config.get('max_cluster_size', 0)
-        # Converte sia None che 0 a None (nessun limite per HDBSCAN)
-        cluster_max_size = None if max_cluster_raw is None or max_cluster_raw == 0 else int(max_cluster_raw)
+        # CAMBIO: None viene convertito a 0 invece che mantenuto None per evitare errori HDBSCAN
+        if max_cluster_raw is None or max_cluster_raw == 0:
+            cluster_max_size = 0  # 0 = unlimited in HDBSCAN (comportamento equivalente a None ma senza errori)
+        else:
+            cluster_max_size = int(max_cluster_raw)  # Valore esplicito
+        
+        # Debug della correzione
+        if max_cluster_raw is None:
+            print(f"🔧 [FIX] max_cluster_size: None -> 0 (protezione anti-errore HDBSCAN)")
         
         # 🆕 PARAMETRI UMAP da tenant config
         umap_params = self.config_helper.get_umap_parameters(self.tenant_id)
@@ -2058,6 +2066,20 @@ class EndToEndPipeline:
         
         print(f"🎯 MODALITÀ UNIFICATA: Ensemble LLM+ML + Clustering Ottimizzato")
         
+        # 🚨 DEBUG PARAMETRI: Verifica configurazione pre-classificazione
+        print(f"")
+        print(f"🔍 [PRE-CLASSIFICATION DEBUG]")
+        print(f"   📊 Sessioni da classificare: {len(sessioni)}")
+        print(f"   🎯 optimize_clusters: {optimize_clusters} (FORZA SEMPRE)")
+        print(f"   🔧 use_ensemble: {use_ensemble} (FORZA SEMPRE)")
+        print(f"   📦 batch_size: {batch_size}")
+        print(f"   🔄 force_review: {force_review}")
+        if len(sessioni) < 10:
+            print(f"   ⚠️  ATTENZIONE: Dataset piccolo ({len(sessioni)} < 10 sessioni)")
+            print(f"   ⚠️  Potrebbero esserci problemi di clustering")
+        print(f"🔍 [/PRE-CLASSIFICATION DEBUG]")
+        print(f"")
+        
         # Connetti al database TAG (legacy, potrebbe non essere più necessario)
         print(f"💾 Connessione al database TAG...")
         try:
@@ -2079,10 +2101,27 @@ class EndToEndPipeline:
                 "num_sessioni": len(sessioni),
                 "num_session_ids": len(session_ids),
                 "num_session_texts": len(session_texts),
-                "batch_size": batch_size
+                "batch_size": batch_size,
+                "optimize_clusters": optimize_clusters,
+                "use_ensemble": use_ensemble
             }, "INFO")
             
+            print(f"🎯 [CLUSTERING DEBUG] Iniziando classificazione ottimizzata...")
+            print(f"🎯 [CLUSTERING DEBUG] Sessioni: {len(sessioni)}, optimize_clusters: {optimize_clusters}")
+            
+            # 🚨 DEBUG SUPER CRITICO: Traccia chiamata cluster ottimizzato
+            print(f"🚨 [SUPER DEBUG] CHIAMATA _classifica_ottimizzata_cluster INIZIATA")
+            print(f"   📊 Input sessioni: {len(sessioni)}")
+            print(f"   📊 Input session_ids: {len(session_ids)}")
+            print(f"   📊 Input session_texts: {len(session_texts)}")
+            
             predictions = self._classifica_ottimizzata_cluster(sessioni, session_ids, session_texts, batch_size)
+            
+            # 🚨 DEBUG SUPER CRITICO: Verifica risultato
+            print(f"🚨 [SUPER DEBUG] _classifica_ottimizzata_cluster COMPLETATA!")
+            print(f"   📊 Output predictions: {len(predictions)}")
+            print(f"   ✅ Con cluster_metadata: {sum(1 for p in predictions if p.get('cluster_metadata'))}")
+            print(f"   ❌ Senza cluster_metadata: {sum(1 for p in predictions if not p.get('cluster_metadata'))}")
             
             debug_pipeline("classifica_e_salva_sessioni", "SUCCESS - _classifica_ottimizzata_cluster completata", {
                 "num_predictions": len(predictions),
@@ -2095,11 +2134,29 @@ class EndToEndPipeline:
         except Exception as e:
             from Pipeline.debug_pipeline import debug_exception
             
+            # 🚨 DEBUG FALLBACK: Cattura l'errore esatto
+            print(f"")
+            print(f"🚨🚨🚨 [FALLBACK TRIGGER] 🚨🚨🚨")
+            print(f"🚨 ERRORE NELLA CLASSIFICAZIONE OTTIMIZZATA!")
+            print(f"🚨 Tipo errore: {type(e).__name__}")
+            print(f"🚨 Messaggio: {str(e)}")
+            print(f"🚨 Parametri attuali:")
+            print(f"   📊 Sessioni: {len(sessioni)}")
+            print(f"   🎯 optimize_clusters: {optimize_clusters}")
+            print(f"   🔧 use_ensemble: {use_ensemble}")
+            print(f"   📦 batch_size: {batch_size}")
+            print(f"🚨 ATTIVANDO FALLBACK LLM_STRUCTURED")
+            print(f"🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨")
+            print(f"")
+            
             debug_exception("classifica_e_salva_sessioni", e, {
                 "num_sessioni": len(sessioni),
                 "batch_size": batch_size,
                 "optimize_clusters": optimize_clusters,
-                "use_ensemble": use_ensemble
+                "use_ensemble": use_ensemble,
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "FALLBACK_REASON": "CLUSTERING_OPTIMIZATION_FAILED"
             })
             
             print(f"❌ ERRORE nella classificazione ottimizzata: {e}")
@@ -2107,7 +2164,9 @@ class EndToEndPipeline:
             
             debug_pipeline("classifica_e_salva_sessioni", "FALLBACK - Tentativo batch_predict", {
                 "num_texts": len(session_texts),
-                "batch_size": batch_size
+                "batch_size": batch_size,
+                "fallback_trigger": "clustering_optimization_failed",
+                "original_error": str(e)
             }, "WARNING")
             
             # Fallback: classificazione ensemble tradizionale
@@ -2414,6 +2473,15 @@ class EndToEndPipeline:
                     "cluster_metadata": cluster_metadata,
                     "classified_by": 'post_training_pipeline'
                 }, "INFO")
+                
+                # 🚨 DEBUG CLASSIFIED_BY: Traccia parametro classified_by
+                classified_by_param = 'post_training_pipeline'
+                print(f"🚨 [DEBUG-CLASSIFIED_BY] Session {session_id}:")
+                print(f"   📋 classified_by parameter: '{classified_by_param}'")
+                print(f"   📋 method: '{method}'")
+                print(f"   📋 has_cluster_metadata: {bool(cluster_metadata)}")
+                if cluster_metadata:
+                    print(f"   📋 cluster_metadata keys: {list(cluster_metadata.keys())}")
                 
                 success = mongo_reader.save_classification_result(
                     session_id=session_id,
@@ -4117,6 +4185,31 @@ class EndToEndPipeline:
                 "propagated_count": sum(1 for p in all_predictions if p.get('method') == 'CLUSTER_PROPAGATED'),
                 "outlier_count": sum(1 for p in all_predictions if 'OUTLIER' in p.get('method', ''))
             }
+            
+            # 🚨 DEBUG CRITICO: Verifica predizioni prima del return
+            print(f"🚨 [DEBUG CRITICO] ANALISI PREDIZIONI PRE-RETURN:")
+            print(f"   📊 Total predictions: {metadata_stats['total_predictions']}")
+            print(f"   ✅ With cluster_metadata: {metadata_stats['with_cluster_metadata']}")
+            print(f"   ❌ Without cluster_metadata: {metadata_stats['without_cluster_metadata']}")
+            print(f"   🎯 Representatives: {metadata_stats['representative_count']}")
+            print(f"   📡 Propagated: {metadata_stats['propagated_count']}")
+            print(f"   🔍 Outliers: {metadata_stats['outlier_count']}")
+            
+            # 🚨 DEBUG SUPER CRITICO: Controllo prime 3 predizioni
+            print(f"🚨 [DEBUG SUPER CRITICO] CAMPIONE PRIME 3 PREDIZIONI:")
+            for i, pred in enumerate(all_predictions[:3]):
+                session_id = session_ids[i]
+                has_metadata = pred.get('cluster_metadata') is not None
+                method = pred.get('method', 'UNKNOWN')
+                print(f"   #{i+1} Session {session_id}:")
+                print(f"      method: {method}")
+                print(f"      has_cluster_metadata: {has_metadata}")
+                if has_metadata:
+                    cluster_id = pred['cluster_metadata'].get('cluster_id', 'N/A')
+                    reason = pred['cluster_metadata'].get('selection_reason', 'N/A')
+                    print(f"      cluster_id: {cluster_id}, reason: {reason}")
+                else:
+                    print(f"      ❌ NESSUN CLUSTER_METADATA!")
             
             debug_pipeline("_classifica_ottimizzata_cluster", "SUCCESS - Predizioni generate con metadata", metadata_stats, "SUCCESS")
             

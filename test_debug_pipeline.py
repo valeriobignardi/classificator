@@ -2,8 +2,24 @@
 """
 Test Debug Pipeline
 
-Autore: Valerio Bignardi  
-Data creazione: 2025-09-02
+Autore: Valeri        # Legge le conversazioni e raggruppa per sessioni
+        print("� [TEST] Lettura conversazioni dal database...")
+        conversazioni = lettore.leggi_conversazioni()
+        
+        # Usa SessionAggregator per convertire nel formato corretto
+        print("🔄 [TEST] Aggregazione sessioni...")
+        sessioni_aggregate = pipeline.aggregator._raggruppa_per_sessioni(conversazioni)
+        sessioni_filtrate = pipeline.aggregator.filtra_sessioni_vuote(sessioni_aggregate)
+        
+        # Prendi solo le prime 100 sessioni
+        session_keys = list(sessioni_filtrate.keys())[:100]
+        sessioni_dict = {k: sessioni_filtrate[k] for k in session_keys}
+        
+        print(f"📊 [TEST] Sessioni caricate: {len(sessioni_dict)}")
+        
+        if len(sessioni_dict) == 0:
+            print("❌ ERRORE: Nessuna sessione trovata nel database")
+            return Falseeazione: 2025-09-02
 Storia aggiornamenti:
 - 2025-09-02: Creazione script per testare il sistema di debug
 
@@ -53,16 +69,45 @@ def test_debug_pipeline():
             "tenant_slug": pipeline.tenant_slug
         }, "SUCCESS")
         
-        # Test con 100 sessioni per vedere clustering ottimizzato
-        print("🔍 [TEST] Esecuzione pipeline completa con debug attivato...")
-        print("🔍 [TEST] Limite: 100 sessioni per testare clustering ottimizzato")
+        # Carica ESATTAMENTE 100 sessioni dal database
+        from LettoreConversazioni.lettore import LettoreConversazioni
         
-        risultati = pipeline.esegui_pipeline_completa(
-            giorni_indietro=7,  # 7 giorni per avere più sessioni
-            limit=100,          # 100 sessioni per superare il threshold di 10
-            interactive_mode=False,  # No review interattiva per test
+        print("🔍 [TEST] Caricamento sessioni da database...")
+        print("🎯 [TEST] Usando schema 'humanitas' per le conversazioni")
+        lettore = LettoreConversazioni(tenant=tenant, schema='humanitas')
+        
+        # Legge le conversazioni e raggruppa per sessioni
+        print("� [TEST] Lettura conversazioni dal database...")
+        conversazioni = lettore.leggi_conversazioni()
+        
+        # Raggruppa per sessioni e prendi le prime 100
+        sessioni_dict = {}
+        for conv in conversazioni:
+            session_id = conv[0]  # session_id è il primo elemento
+            if session_id not in sessioni_dict:
+                sessioni_dict[session_id] = []
+                # Limita a 100 sessioni
+                if len(sessioni_dict) > 100:
+                    break
+            sessioni_dict[session_id].append(conv)
+        
+        print(f"📊 [TEST] Sessioni caricate: {len(sessioni_dict)}")
+        
+        if len(sessioni_dict) == 0:
+            print("❌ ERRORE: Nessuna sessione trovata nel database")
+            return False
+        
+        # Test con 100 sessioni per vedere clustering ottimizzato
+        print("🔍 [TEST] Esecuzione classificazione con debug attivato...")
+        print(f"🔍 [TEST] Sessioni: {len(sessioni_dict)} (dovrebbe usare clustering ottimizzato)")
+        
+        # Usa il metodo diretto di classificazione
+        risultati = pipeline.classifica_e_salva_sessioni(
+            sessioni=sessioni_dict,
+            batch_size=32,
             use_ensemble=True,
-            force_full_extraction=False
+            optimize_clusters=True,
+            force_review=False
         )
         
         debug_pipeline("test_debug_pipeline", "Pipeline completata", {

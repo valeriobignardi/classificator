@@ -2098,64 +2098,51 @@ Motivazione: Richiesta diretta di prenotazione"""
 
     def _get_tenant_tags_formatted(self, tenant_id: str) -> str:
         """
-        Recupera i tag attivi per il tenant dal database TAG locale e li formatta come enum JSON
+        Recupera i tag attivi di un tenant e li formatta come enum JSON
         
         Args:
             tenant_id: ID del tenant
             
         Returns:
-            Lista di tag formattata come enum JSON (es: "tag1", "tag2", "tag3")
+            Stringa formattata come enum JSON: "tag1", "tag2", "tag3"
         """
         try:
-            import mysql.connector
+            if not self.connect():
+                self.logger.error("❌ Impossibile connettersi al database per recuperare i tag")
+                return '"altro"'  # Fallback di default
             
-            # Connessione al database TAG locale
-            tag_db_config = self.config.get('tag_database', {})
-            connection = mysql.connector.connect(
-                host=tag_db_config.get('host', 'localhost'),
-                port=tag_db_config.get('port', 3306),
-                database=tag_db_config.get('database', 'TAG'),
-                user=tag_db_config.get('user', 'root'),
-                password=tag_db_config.get('password', '')
-            )
+            cursor = self.connection.cursor()
             
-            cursor = connection.cursor()
-            
-            # Query per recuperare i tag unici del tenant dalla tabella tags
+            # Query per recuperare i tag del tenant
             query = """
-                SELECT DISTINCT tag_name 
+                SELECT tag_name 
                 FROM tags 
                 WHERE tenant_id = %s 
-                ORDER BY tag_name
+                ORDER BY tag_name ASC
             """
             
             cursor.execute(query, (tenant_id,))
             results = cursor.fetchall()
             
-            cursor.close()
-            connection.close()
-            
             if not results:
-                # Se non ci sono tag, ritorna una lista di default
                 self.logger.warning(f"⚠️ Nessun tag trovato per tenant {tenant_id}, uso fallback")
                 return '"altro"'
             
-            # Estrai i nomi dei tag e rimuovi le virgolette se presenti
-            tag_names = []
-            for row in results:
-                tag_name = row[0]
-                # Rimuovi le virgolette se il tag è salvato con le virgolette
-                if tag_name.startswith('"') and tag_name.endswith('"'):
-                    tag_name = tag_name[1:-1]  # Rimuovi prima e ultima virgoletta
-                tag_names.append(tag_name)
+            # Estrai i nomi dei tag e formatta come enum JSON
+            tag_names = [row[0] for row in results]
             
-            # Formatta come elenco puntato con un tag per riga
-            formatted_tags = '\n'.join([f'- "{tag}"' for tag in tag_names])
+            # Formatta come stringa enum JSON
+            formatted_tags = ', '.join([f'"{tag}"' for tag in tag_names])
             
-            self.logger.info(f"✅ Recuperati {len(tag_names)} tag per tenant {tenant_id} (formattati come elenco puntato)")
+            self.logger.info(f"✅ Recuperati {len(tag_names)} tag per tenant {tenant_id}: {formatted_tags}")
             
             return formatted_tags
             
         except Exception as e:
             self.logger.error(f"❌ Errore recupero tag per tenant {tenant_id}: {e}")
             return '"altro"'  # Fallback di default
+            
+        finally:
+            if cursor:
+                cursor.close()
+            self.disconnect()

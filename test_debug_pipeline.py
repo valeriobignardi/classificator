@@ -53,13 +53,13 @@ def test_debug_pipeline():
             "tenant_slug": pipeline.tenant_slug
         }, "SUCCESS")
         
-        # Test con un numero limitato di sessioni per il debug
+        # Test con 100 sessioni per vedere clustering ottimizzato
         print("🔍 [TEST] Esecuzione pipeline completa con debug attivato...")
-        print("🔍 [TEST] Limite: 10 sessioni per test rapido")
+        print("🔍 [TEST] Limite: 100 sessioni per testare clustering ottimizzato")
         
         risultati = pipeline.esegui_pipeline_completa(
-            giorni_indietro=3,  # Solo 3 giorni per test rapido
-            limit=10,           # Solo 10 sessioni per debug
+            giorni_indietro=7,  # 7 giorni per avere più sessioni
+            limit=100,          # 100 sessioni per superare il threshold di 10
             interactive_mode=False,  # No review interattiva per test
             use_ensemble=True,
             force_full_extraction=False

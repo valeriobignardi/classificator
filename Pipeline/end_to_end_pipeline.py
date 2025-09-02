@@ -3817,8 +3817,20 @@ class EndToEndPipeline:
                 testi = [sessioni[sid]['testo_completo'] for sid in session_ids]
                 embeddings = self._get_embedder().encode(testi, session_ids=session_ids)
                 
-                # Clustering semplice con HDBSCAN sui puri embeddings
-                cluster_labels = self.clusterer.fit_predict(embeddings)
+                # 🐛 DEBUG CRITICO: Clustering semplice con HDBSCAN sui puri embeddings
+                print(f"🐛 [DEBUG CRITICO] Chiamata clusterer.fit_predict con {embeddings.shape} embeddings")
+                print(f"🐛 [DEBUG CRITICO] Clusterer type: {type(self.clusterer)}")
+                try:
+                    cluster_labels = self.clusterer.fit_predict(embeddings)
+                    print(f"🐛 [DEBUG CRITICO] SUCCESS - fit_predict completato, labels shape: {cluster_labels.shape}")
+                except Exception as cluster_error:
+                    print(f"🚨 [DEBUG CRITICO] ERRORE in clusterer.fit_predict: {cluster_error}")
+                    print(f"🚨 [DEBUG CRITICO] Tipo errore: {type(cluster_error)}")
+                    import traceback
+                    print(f"🚨 [DEBUG CRITICO] Stack trace:")
+                    traceback.print_exc()
+                    raise  # Rilancia l'errore per attivare il fallback
+                
                 cluster_info = self._generate_cluster_info_from_labels(cluster_labels, session_texts)
                 
                 # Salva dati per visualizzazione statistiche finali

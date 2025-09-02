@@ -3593,12 +3593,21 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 final_decision={
                     'predicted_label': result.predicted_label,
                     'confidence': result.confidence,
-                    'method': result.method,
+                    'method': 'INTELLIGENT_CLUSTERING',  # 🔧 FIX 3: Sostituisci LLM_STRUCTURED con metodo clustering
                     'reasoning': result.motivation
                 },
                 conversation_text=conversation_text,
                 needs_review=False,  # Per ora auto-classifica sempre
-                classified_by='intelligent_clustering'  # 🔧 FIX: Specifica la provenienza per evitare LLM_STRUCTURED
+                classified_by='intelligent_clustering',  # 🔧 FIX: Specifica la provenienza per evitare LLM_STRUCTURED
+                cluster_metadata={  # 🔧 FIX 2: Aggiungi cluster_metadata per outlier intelligenti
+                    'cluster_id': -1,
+                    'is_representative': False,
+                    'is_outlier': True,
+                    'outlier_score': 1.0 - result.confidence,  # Outlier score inversamente correlato alla confidenza
+                    'method': 'intelligent_clustering_outlier',
+                    'classified_individually': True,
+                    'clustering_stage': 'intelligent_intent_extraction'
+                }
             )
             
             if success:

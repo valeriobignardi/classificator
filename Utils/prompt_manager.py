@@ -1882,15 +1882,19 @@ Motivazione: Richiesta diretta di prenotazione"""
         
         Args:
             tenant: Oggetto Tenant OBBLIGATORIO
-            engine: Tipo di engine (LLM, ML, FINETUNING)
+            engine: Tipo di engine (mantenuto per compatibilità, non usato in query)
             esempio_type: Tipo esempio (opzionale per filtrare)
             
         Returns:
             Lista dizionari con dati esempi
             
+        Note:
+            Gli esempi sono specifici per tenant, non per engine.
+            Il parametro engine viene mantenuto per compatibilità API.
+            
         Autore: Valerio Bignardi
         Data: 2025-08-25
-        Ultimo aggiornamento: 2025-08-31 - Eliminata retrocompatibilità
+        Ultimo aggiornamento: 2025-09-02 - Rimosso filtro engine dalla query
         """
         if not tenant or not hasattr(tenant, 'tenant_id'):
             raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
@@ -1905,14 +1909,15 @@ Motivazione: Richiesta diretta di prenotazione"""
             tenant_display = f"{tenant.tenant_name} ({resolved_tenant_id})"
             
             # Query dinamica in base ai filtri - Solo esempi attivi
+            # ✅ CORREZIONE: Rimosso filtro engine - gli esempi sono specifici solo per tenant
             query = """
             SELECT id, esempio_name, esempio_type, categoria, livello_difficolta, 
                    description, esempio_content, is_active, created_at, updated_at
             FROM esempi 
-            WHERE tenant_id = %s AND engine = %s AND is_active = TRUE
+            WHERE tenant_id = %s AND is_active = TRUE
             """
             
-            params = [resolved_tenant_id, engine]
+            params = [resolved_tenant_id]
             
             if esempio_type:
                 query += " AND esempio_type = %s"

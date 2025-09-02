@@ -66,7 +66,6 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
   const [showClusterView, setShowClusterView] = useState(false); // Default: mostra vista tradizionale
   // 🆕 NUOVA LOGICA FILTRI: Di base vedi tutto, flag per nascondere categorie specifiche
   const [hideOutliers, setHideOutliers] = useState(false);        // Flag per nascondere outliers
-  const [hidePropagated, setHidePropagated] = useState(false);    // Flag per nascondere casi propagati
   const [hideRepresentatives, setHideRepresentatives] = useState(false); // Flag per nascondere rappresentanti
   const [expandedClusters, setExpandedClusters] = useState<Set<string>>(new Set());
   
@@ -152,10 +151,11 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
     try {
       const effectiveLimit = limit || currentLimit;
       
-      // 🆕 NUOVA LOGICA: Converti i flag "hide" in parametri "include" per l'API
-      // Di base includiamo tutto, poi escludiamo le categorie specifiche
+      // 🔧 LOGICA CORRETTA: I propagati non arrivano mai automaticamente in Review Queue
+      // Arrivano SOLO se aggiunti manualmente da "Tutte le Sessioni"
+      // Quindi includePropagated è sempre true (se ci sono, l'utente li ha messi)
       const includeOutliers = !hideOutliers;
-      const includePropagated = !hidePropagated; 
+      const includePropagated = true; // Sempre true - i propagati ci sono solo se aggiunti manualmente
       const includeRepresentatives = !hideRepresentatives;
       
       if (showClusterView) {
@@ -175,7 +175,7 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
     } finally {
       setDashboardLoading(false);
     }
-  }, [tenant, currentLimit, showClusterView, hideOutliers, hidePropagated, hideRepresentatives]);
+  }, [tenant, currentLimit, showClusterView, hideOutliers, hideRepresentatives]);
 
   // 🆕 Funzione per espandere/contrarre cluster
   const toggleCluster = (clusterId: string) => {
@@ -198,10 +198,6 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
   // 🆕 Gestori per i nuovi flag di esclusione
   const handleHideOutliersToggle = () => {
     setHideOutliers(!hideOutliers);
-  };
-
-  const handleHidePropagatedToggle = () => {
-    setHidePropagated(!hidePropagated);
   };
 
   const handleHideRepresentativesToggle = () => {
@@ -539,18 +535,6 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
                       />
                     }
                     label={<Typography variant="body2">🚫 Nascondi Outliers</Typography>}
-                  />
-                  <FormControlLabel
-                    control={
-                      <Switch
-                        checked={hidePropagated}
-                        onChange={handleHidePropagatedToggle}
-                        disabled={dashboardLoading}
-                        size="small"
-                        color="info"
-                      />
-                    }
-                    label={<Typography variant="body2">🚫 Nascondi Propagati</Typography>}
                   />
                   <FormControlLabel
                     control={

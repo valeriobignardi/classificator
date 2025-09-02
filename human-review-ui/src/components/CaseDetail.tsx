@@ -109,7 +109,9 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
     return 'default';
   };
 
-  const isAgreement = caseItem.ml_prediction === caseItem.llm_prediction;
+  // 🔧 Gestione speciale per casi propagati da clustering
+  const isClusterPropagated = caseItem.ml_prediction === "unknown" || caseItem.ml_prediction === "N/A";
+  const isAgreement = !isClusterPropagated && (caseItem.ml_prediction === caseItem.llm_prediction);
 
   if (success) {
     return (
@@ -212,11 +214,17 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
                     🧠 ML Prediction:
                   </Typography>
                   <Typography variant="h6" sx={{ mt: 0.5, mb: 1 }}>
-                    {caseItem.ml_prediction || 'N/A'}
+                    {isClusterPropagated ? '🔄 Non classificato (Propagato)' : caseItem.ml_prediction}
                   </Typography>
                   <Chip
-                    label={`Confidenza: ${(caseItem.ml_confidence * 100).toFixed(1)}%`}
-                    color={caseItem.ml_confidence > 0.8 ? 'success' : caseItem.ml_confidence > 0.6 ? 'warning' : 'error'}
+                    label={isClusterPropagated 
+                      ? 'Propagato da cluster' 
+                      : `Confidenza: ${(caseItem.ml_confidence * 100).toFixed(1)}%`
+                    }
+                    color={isClusterPropagated 
+                      ? 'info' 
+                      : (caseItem.ml_confidence > 0.8 ? 'success' : caseItem.ml_confidence > 0.6 ? 'warning' : 'error')
+                    }
                     size="small"
                   />
                 </Box>
@@ -237,17 +245,22 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
 
               {/* Agreement/Disagreement Indicator */}
               <Box mt={2} p={2} sx={{ 
-                backgroundColor: isAgreement ? 'success.light' : 'warning.light',
+                backgroundColor: isClusterPropagated ? 'info.light' : (isAgreement ? 'success.light' : 'warning.light'),
                 borderRadius: 1,
-                border: `2px solid ${isAgreement ? '#4caf50' : '#ff9800'}`
+                border: `2px solid ${isClusterPropagated ? '#2196f3' : (isAgreement ? '#4caf50' : '#ff9800')}`
               }}>
                 <Typography variant="subtitle2" fontWeight="bold">
-                  {isAgreement ? '✅ Accordo' : '⚠️ Disaccordo'} tra ML e LLM
+                  {isClusterPropagated 
+                    ? '🔄 Classificazione da Clustering' 
+                    : (isAgreement ? '✅ Accordo' : '⚠️ Disaccordo')} tra ML e LLM
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                  {isAgreement 
-                    ? 'I modelli sono d\'accordo sulla classificazione'
-                    : 'I modelli hanno predizioni diverse - necessaria supervisione umana'
+                  {isClusterPropagated 
+                    ? 'Questo caso è stato classificato tramite propagazione da cluster - solo il modello LLM ha una predizione valida'
+                    : (isAgreement 
+                      ? 'I modelli sono d\'accordo sulla classificazione'
+                      : 'I modelli hanno predizioni diverse - necessaria supervisione umana'
+                    )
                   }
                 </Typography>
               </Box>
@@ -350,16 +363,18 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
                 <Typography variant="subtitle2" gutterBottom>
                   Scelte Rapide:
                 </Typography>
-                <Button
-                  variant={humanDecision === caseItem.ml_prediction ? 'contained' : 'outlined'}
-                  color="primary"
-                  size="small"
-                  startIcon={<ThumbUpIcon />}
-                  onClick={() => handleQuickDecision(caseItem.ml_prediction)}
-                  sx={{ mr: 1, mb: 1 }}
-                >
-                  Conferma ML
-                </Button>
+                {!isClusterPropagated && (
+                  <Button
+                    variant={humanDecision === caseItem.ml_prediction ? 'contained' : 'outlined'}
+                    color="primary"
+                    size="small"
+                    startIcon={<ThumbUpIcon />}
+                    onClick={() => handleQuickDecision(caseItem.ml_prediction)}
+                    sx={{ mr: 1, mb: 1 }}
+                  >
+                    Conferma ML
+                  </Button>
+                )}
                 <Button
                   variant={humanDecision === caseItem.llm_prediction ? 'contained' : 'outlined'}
                   color="warning"

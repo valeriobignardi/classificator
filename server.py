@@ -2261,21 +2261,44 @@ def api_get_case_detail(tenant_id: str, case_id: str):
                             for k, v in kwargs.items():
                                 setattr(self, k, v)
                     
+                    # 🔧 FIX: Gestione intelligente per casi propagati
+                    # Per casi propagati, ml_prediction/llm_prediction possono essere N/A o None
+                    # Usa la classificazione finale come fallback per visualizzazione
+                    final_classification = db_case.get('classification', db_case.get('classificazione', 'unknown'))
+                    
+                    # ML data - usa fallback intelligente per casi propagati  
+                    ml_pred = db_case.get('ml_prediction')
+                    if not ml_pred or ml_pred == 'N/A':
+                        # Per casi propagati, ML non ha mai classificato → usa "N/A" esplicito
+                        ml_pred = "N/A"
+                        ml_conf = 0.0
+                    else:
+                        ml_conf = float(db_case.get('ml_confidence', 0.0))
+                    
+                    # LLM data - usa fallback intelligente per casi propagati
+                    llm_pred = db_case.get('llm_prediction')
+                    if not llm_pred or llm_pred == 'N/A':
+                        # Per casi propagati, mostra la classificazione finale come LLM
+                        llm_pred = final_classification
+                        llm_conf = float(db_case.get('confidence', 0.85))  # Usa confidence generale
+                    else:
+                        llm_conf = float(db_case.get('llm_confidence', 0.0))
+                    
                     target_case = SimpleCase(
                         case_id=str(db_case['_id']),
                         session_id=db_case.get('session_id', ''),
-                        conversation_text=db_case.get('conversation_text', ''),
-                        ml_prediction=db_case.get('ml_prediction', 'unknown'),
-                        ml_confidence=float(db_case.get('ml_confidence', 0.0)),
-                        llm_prediction=db_case.get('llm_prediction', 'unknown'),
-                        llm_confidence=float(db_case.get('llm_confidence', 0.0)),
-                        uncertainty_score=float(db_case.get('uncertainty_score', 0.0)),
+                        conversation_text=db_case.get('testo_completo', db_case.get('testo', db_case.get('conversation_text', ''))),
+                        ml_prediction=ml_pred,
+                        ml_confidence=ml_conf,
+                        llm_prediction=llm_pred,
+                        llm_confidence=llm_conf,
+                        uncertainty_score=float(db_case.get('uncertainty_score', 1.0 - float(db_case.get('confidence', 0.0)))),
                         novelty_score=float(db_case.get('novelty_score', 0.0)),
-                        reason=db_case.get('reason', ''),
-                        created_at=db_case.get('created_at', ''),
+                        reason=db_case.get('motivazione', db_case.get('reason', '')),
+                        created_at=db_case.get('classified_at', db_case.get('created_at', '')),
                         tenant=tenant.tenant_slug,  # Usa tenant_slug per compatibilità
                         tenant_id=tenant_id,        # Aggiunge tenant_id per frontend
-                        cluster_id=db_case.get('cluster_id')
+                        cluster_id=db_case.get('metadata', {}).get('cluster_id')
                     )
                     print(f"✅ Caso trovato nel database: {case_id}")
             except Exception as db_error:

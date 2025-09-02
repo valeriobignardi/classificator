@@ -94,6 +94,21 @@ class PromptManager:
                 return True
                 
             db_config = self.config['tag_database']
+            
+            # 🔍 DEBUG MySQL configurabile per credenziali
+            mysql_debug = self.config.get('debug', {}).get('mysql_debug', {})
+            if mysql_debug.get('enabled', False):
+                if mysql_debug.get('log_credentials', False):
+                    self.logger.info("🔍 [MySQL DEBUG] Credenziali utilizzate per connessione:")
+                    self.logger.info(f"   📡 Host: {db_config['host']}")
+                    self.logger.info(f"   🔢 Port: {db_config['port']}")
+                    self.logger.info(f"   👤 User: {db_config['user']}")
+                    self.logger.info(f"   🏢 Database: {db_config['database']}")
+                    self.logger.info(f"   🔐 Password: {'*' * len(str(db_config['password']))}")
+                
+                if mysql_debug.get('log_connections', False):
+                    self.logger.info("🔍 [MySQL DEBUG] Tentativo di connessione al database TAG...")
+            
             self.connection = mysql.connector.connect(
                 host=db_config['host'],
                 port=db_config['port'],
@@ -102,10 +117,16 @@ class PromptManager:
                 database=db_config['database']
             )
             
+            if mysql_debug.get('enabled', False) and mysql_debug.get('log_connections', False):
+                self.logger.info("🔍 [MySQL DEBUG] ✅ Connessione stabilita con successo")
+            
             self.logger.debug("✅ Connesso al database TAG")
             return True
             
         except Error as e:
+            mysql_debug = self.config.get('debug', {}).get('mysql_debug', {})
+            if mysql_debug.get('enabled', False) and mysql_debug.get('log_connections', False):
+                self.logger.error("🔍 [MySQL DEBUG] ❌ Connessione fallita")
             self.logger.error(f"❌ Errore connessione database TAG: {e}")
             return False
     
@@ -895,8 +916,11 @@ Motivazione: Richiesta diretta di prenotazione"""
         Returns:
             tenant_id corretto da usare nelle query
         """
-        if not self.connection:
-            self.connect()
+        if not self.connection or not self.connection.is_connected():
+            connection_result = self.connect()
+            if not connection_result:
+                self.logger.error("❌ Impossibile stabilire connessione MySQL")
+                return []
         
         try:
             # Se sembra già un tenant_id completo (UUID format), usalo direttamente
@@ -948,8 +972,11 @@ Motivazione: Richiesta diretta di prenotazione"""
         if not tenant or not hasattr(tenant, 'tenant_id'):
             raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
         
-        if not self.connection:
-            self.connect()
+        if not self.connection or not self.connection.is_connected():
+            connection_result = self.connect()
+            if not connection_result:
+                self.logger.error("❌ Impossibile stabilire connessione MySQL")
+                return []
         
         # Usa direttamente i dati del tenant
         resolved_tenant_id = tenant.tenant_id
@@ -1031,8 +1058,11 @@ Motivazione: Richiesta diretta di prenotazione"""
         Returns:
             ID del prompt creato, None se errore
         """
-        if not self.connection:
-            self.connect()
+        if not self.connection or not self.connection.is_connected():
+            connection_result = self.connect()
+            if not connection_result:
+                self.logger.error("❌ Impossibile stabilire connessione MySQL")
+                return []
         
         try:
             cursor = self.connection.cursor()
@@ -1096,8 +1126,11 @@ Motivazione: Richiesta diretta di prenotazione"""
         Returns:
             ID del prompt creato, None se errore
         """
-        if not self.connection:
-            self.connect()
+        if not self.connection or not self.connection.is_connected():
+            connection_result = self.connect()
+            if not connection_result:
+                self.logger.error("❌ Impossibile stabilire connessione MySQL")
+                return []
         
         try:
             cursor = self.connection.cursor()
@@ -1166,8 +1199,11 @@ Motivazione: Richiesta diretta di prenotazione"""
         Returns:
             True se aggiornamento riuscito, False altrimenti
         """
-        if not self.connection:
-            self.connect()
+        if not self.connection or not self.connection.is_connected():
+            connection_result = self.connect()
+            if not connection_result:
+                self.logger.error("❌ Impossibile stabilire connessione MySQL")
+                return []
         
         try:
             cursor = self.connection.cursor()
@@ -1243,8 +1279,11 @@ Motivazione: Richiesta diretta di prenotazione"""
         Returns:
             True se eliminazione riuscita, False altrimenti
         """
-        if not self.connection:
-            self.connect()
+        if not self.connection or not self.connection.is_connected():
+            connection_result = self.connect()
+            if not connection_result:
+                self.logger.error("❌ Impossibile stabilire connessione MySQL")
+                return []
         
         try:
             cursor = self.connection.cursor()
@@ -1303,8 +1342,11 @@ Motivazione: Richiesta diretta di prenotazione"""
         Returns:
             Dati del prompt o None se non trovato
         """
-        if not self.connection:
-            self.connect()
+        if not self.connection or not self.connection.is_connected():
+            connection_result = self.connect()
+            if not connection_result:
+                self.logger.error("❌ Impossibile stabilire connessione MySQL")
+                return []
         
         try:
             cursor = self.connection.cursor()
@@ -1597,8 +1639,11 @@ Motivazione: Richiesta diretta di prenotazione"""
         Data: 2025-08-25
         Ultimo aggiornamento: 2025-08-25
         """
-        if not self.connection:
-            self.connect()
+        if not self.connection or not self.connection.is_connected():
+            connection_result = self.connect()
+            if not connection_result:
+                self.logger.error("❌ Impossibile stabilire connessione MySQL")
+                return []
         
         try:
             cursor = self.connection.cursor()
@@ -1730,8 +1775,11 @@ Motivazione: Richiesta diretta di prenotazione"""
         if not tenant or not hasattr(tenant, 'tenant_id'):
             raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
         
-        if not self.connection:
-            self.connect()
+        if not self.connection or not self.connection.is_connected():
+            connection_result = self.connect()
+            if not connection_result:
+                self.logger.error("❌ Impossibile stabilire connessione MySQL")
+                return []
             
         try:
             cursor = self.connection.cursor()
@@ -1810,8 +1858,11 @@ Motivazione: Richiesta diretta di prenotazione"""
         if not tenant or not hasattr(tenant, 'tenant_id'):
             raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
         
-        if not self.connection:
-            self.connect()
+        if not self.connection or not self.connection.is_connected():
+            connection_result = self.connect()
+            if not connection_result:
+                self.logger.error("❌ Impossibile stabilire connessione MySQL")
+                return []
             
         try:
             cursor = self.connection.cursor()
@@ -1898,8 +1949,13 @@ Motivazione: Richiesta diretta di prenotazione"""
         """
         if not tenant or not hasattr(tenant, 'tenant_id'):
             raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
-        if not self.connection:
-            self.connect()
+        
+        # ✅ CORREZIONE: Verifica che la connessione sia attiva, non solo che esista
+        if not self.connection or not self.connection.is_connected():
+            connection_result = self.connect()
+            if not connection_result:
+                self.logger.error("❌ Impossibile stabilire connessione MySQL")
+                return []
             
         try:
             cursor = self.connection.cursor()
@@ -1924,6 +1980,12 @@ Motivazione: Richiesta diretta di prenotazione"""
                 params.append(esempio_type)
             
             query += " ORDER BY created_at DESC"
+            
+            # 🔍 DEBUG MySQL configurabile per query
+            mysql_debug = self.config.get('debug', {}).get('mysql_debug', {})
+            if mysql_debug.get('enabled', False) and mysql_debug.get('log_queries', False):
+                self.logger.info(f"🔍 [MySQL DEBUG] Query esempi: {query}")
+                self.logger.info(f"🔍 [MySQL DEBUG] Parametri: {params}")
             
             cursor.execute(query, params)
             esempi = cursor.fetchall()
@@ -1974,8 +2036,11 @@ Motivazione: Richiesta diretta di prenotazione"""
         """
         if not tenant or not hasattr(tenant, 'tenant_id'):
             raise ValueError("❌ ERRORE: Deve essere passato un oggetto Tenant valido!")
-        if not self.connection:
-            self.connect()
+        if not self.connection or not self.connection.is_connected():
+            connection_result = self.connect()
+            if not connection_result:
+                self.logger.error("❌ Impossibile stabilire connessione MySQL")
+                return False
             
         try:
             cursor = self.connection.cursor()

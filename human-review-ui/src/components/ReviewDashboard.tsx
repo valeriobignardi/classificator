@@ -215,7 +215,20 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
     setTrainingDialogOpen(false);
 
     try {
-      const response = await apiService.startSupervisedTraining(tenant.tenant_id, trainingConfig);
+      // 🔧 FIX MAPPING: Mappa confidence_threshold → min_confidence per compatibilità API
+      const apiConfig = {
+        max_sessions: trainingConfig.max_sessions,
+        min_confidence: trainingConfig.confidence_threshold,  // FIX: mapping corretto
+        disagreement_threshold: trainingConfig.disagreement_threshold,
+        force_review: trainingConfig.force_review
+      };
+      
+      console.log('🔍 [DEBUG] Mapping frontend → API:', {
+        'frontend confidence_threshold': trainingConfig.confidence_threshold,
+        'API min_confidence': apiConfig.min_confidence
+      });
+      
+      const response = await apiService.startSupervisedTraining(tenant.tenant_id, apiConfig);
       
       // Messaggio di successo basato sulla nuova struttura della risposta
       const isNewClient = response.client_type === 'new';

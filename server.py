@@ -1689,6 +1689,11 @@ def supervised_training_advanced(client_name: str):
         use_optimal_selection = request_data.get('use_optimal_selection', None)  # Auto-rileva se None
         analyze_all_or_new_only = request_data.get('analyze_all_or_new_only', 'ask_user')  # 'all', 'new_only', 'ask_user'
         
+        # 🐛 DEBUG CRITICO: Verifica che il mapping frontend funzioni
+        print(f"🐛 [DEBUG MAPPING] Raw request_data: {request_data}")
+        print(f"🐛 [DEBUG MAPPING] min_confidence estratto: {min_confidence} (dovrebbe essere 0.95 se impostato dall'utente)")
+        print(f"🐛 [DEBUG MAPPING] disagreement_threshold estratto: {disagreement_threshold}")
+        
         print(f"📋 Parametri: batch_size={batch_size}, min_confidence={min_confidence}")
         print(f"📋 disagreement_threshold={disagreement_threshold}, force_review={force_review}")
         print(f"📋 max_review_cases={max_review_cases}, use_optimal_selection={use_optimal_selection}")
@@ -1895,50 +1900,47 @@ def api_get_review_cases(tenant_id: str):
         limit = int(request.args.get('limit', 100))
         label_filter = request.args.get('label', None)
         
-        # 🆕 NUOVI PARAMETRI per Review Queue a 3 livelli
-        show_representatives = request.args.get('show_representatives', 'false').lower() == 'true'
-        # 🔧 FIX: Uso include_* per coerenza con frontend
-        show_propagated = request.args.get('include_propagated', 'false').lower() == 'true'
-        show_outliers = request.args.get('include_outliers', 'false').lower() == 'true'
-        show_representatives_new = request.args.get('include_representatives', 'true').lower() == 'true'
+        # 🔧 FIX FILTRI REVIEW QUEUE: Logica corretta senza fallback buggati
+        # Prendi direttamente i valori passati dal frontend, con default appropriati
+        show_representatives = request.args.get('include_representatives', 'true').lower() == 'true'
+        show_propagated = request.args.get('include_propagated', 'true').lower() == 'true'  # Default true perché i propagati sono rari
+        show_outliers = request.args.get('include_outliers', 'true').lower() == 'true'
         
-        # 🔧 FIX LOGICA REVIEW QUEUE: Nuova logica - di base vedi tutto "da rivedere"
-        # Se nessun parametro è specificato esplicitamente, mostra tutto per retrocompatibilità
-        has_explicit_filters = (
-            'show_representatives' in request.args or 
-            'include_propagated' in request.args or 
-            'include_outliers' in request.args or
-            'include_representatives' in request.args
-        )
+        print(f"� [DEBUG] Parametri filtri ricevuti:")
+        print(f"   - include_representatives: {request.args.get('include_representatives', 'N/A')} → {show_representatives}")
+        print(f"   - include_propagated: {request.args.get('include_propagated', 'N/A')} → {show_propagated}")
+        print(f"   - include_outliers: {request.args.get('include_outliers', 'N/A')} → {show_outliers}")
         
-        if not has_explicit_filters:
-            # Comportamento default: mostra tutto quello che richiede review umana
-            show_representatives = show_propagated = show_outliers = show_representatives_new = True
-        else:
-            # Usa il nuovo parametro se specificato, altrimenti fallback al vecchio
-            show_representatives = show_representatives_new or show_representatives
+        # 🔧 FIX LOGICA: Se tutti i filtri sono False, restituisci array vuoto invece di chiamare MongoDB
+        if not show_representatives and not show_propagated and not show_outliers:
+            print(f"🚫 [DEBUG FILTRI] TUTTI I FILTRI DISATTIVATI - Restituisco array vuoto senza chiamare MongoDB")
+            return jsonify({
+                'success': True,
+                'cases': [],
+                'total': 0,
+                'tenant_id': tenant_id,
+                'tenant_name': tenant.tenant_name,
+                'tenant_slug': tenant.tenant_slug,
+                'debug_message': 'Tutti i filtri disattivati - nessun caso mostrato'
+            }), 200
         
         # Ottieni reader MongoDB tenant-aware - AGGIORNATO (usa tenant_slug)
         print(f"🔍 [DEBUG] Ottieni mongo reader per tenant: {tenant.tenant_slug}")
         mongo_reader = classification_service.get_mongo_reader(tenant.tenant_slug)
         
-        # 🆕 RECUPERA SESSIONI CON FILTRI REVIEW QUEUE
-        if show_representatives or show_propagated or show_outliers:
-            # Usa metodo specializzato per Review Queue (usa tenant_slug)
-            sessions = mongo_reader.get_review_queue_sessions(
-                tenant.tenant_slug, 
-                limit=limit,
-                label_filter=label_filter,
-                show_representatives=show_representatives,
-                show_propagated=show_propagated,
-                show_outliers=show_outliers
-            )
-        else:
-            # Comportamento legacy: recupera tutte le sessioni
-            if label_filter and label_filter != "Tutte le etichette":
-                sessions = mongo_reader.get_sessions_by_label(label_filter, limit)
-            else:
-                sessions = mongo_reader.get_all_sessions(limit)
+        # 🔧 FIX CRITICO: USA SEMPRE get_review_queue_sessions per applicare filtri
+        # Non usare più il fallback a get_all_sessions() che bypassa i filtri
+        sessions = mongo_reader.get_review_queue_sessions(
+            tenant.tenant_slug, 
+            limit=limit,
+            label_filter=label_filter,
+            show_representatives=show_representatives,
+            show_propagated=show_propagated,
+            show_outliers=show_outliers
+        )
+        
+        print(f"🔍 [DEBUG] Filtri applicati: representatives={show_representatives}, propagated={show_propagated}, outliers={show_outliers}")
+        print(f"🔍 [DEBUG] Sessioni trovate: {len(sessions)}")
         
         # Trasforma i dati MongoDB in formato ReviewCase per compatibilità frontend
         formatted_cases = []

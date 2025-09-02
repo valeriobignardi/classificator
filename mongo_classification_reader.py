@@ -1560,37 +1560,43 @@ class MongoClassificationReader:
             or_conditions = []
             
             # 1. RAPPRESENTANTI: classification_type = "RAPPRESENTANTE" 
-            # 🔧 FIX OPZIONE 1: review_status è già filtrato nella base_query
             if show_representatives:
                 or_conditions.append({
                     "classification_type": "RAPPRESENTANTE"
                 })
             
             # 2. PROPAGATE: classification_type = "PROPAGATO"
-            # 🔧 FIX OPZIONE 1: review_status è già filtrato nella base_query
             if show_propagated:
                 or_conditions.append({
                     "classification_type": "PROPAGATO"
                 })
             
             # 3. OUTLIERS: classification_type = "OUTLIER"
-            # 🔧 FIX OPZIONE 1: review_status è già filtrato nella base_query
             if show_outliers:
                 or_conditions.append({
                     "classification_type": "OUTLIER"
                 })
             
-            # Query base per tenant
-            # CON OGGETTO TENANT: Usa sempre collection tenant-specifica
-            # 🔧 FIX OPZIONE 1: Filtra SEMPRE solo casi che necessitano review umana
+            # Query base per tenant con review_status filtering
             base_query = {
                 "review_status": "pending"  # Solo casi realmente da rivedere
             }
             
-            # Se abbiamo filtri di classificazione, li combiniamo con AND
+            # 🔧 FIX CRITICO: Se nessun filtro è attivo, restituisci 0 risultati invece di tutti
             if or_conditions:
-                # Aggiungi i filtri di classificazione in AND con review_status
+                # Aggiungi i filtri di classificazione con OR
                 base_query["$or"] = or_conditions
+            else:
+                # NESSUN FILTRO ATTIVO: Restituisci 0 risultati con query impossibile
+                # Invece di restituire tutto, rendi la query impossibile da soddisfare
+                base_query["$and"] = [
+                    {"classification_type": "IMPOSSIBILE_FILTER_1"},
+                    {"classification_type": "IMPOSSIBILE_FILTER_2"}  # Condizione impossibile
+                ]
+                print(f"🚫 [DEBUG] TUTTI I FILTRI DISATTIVATI - Query impossibile applicata")
+            
+            print(f"🔍 [DEBUG] MongoDB Query: {base_query}")
+            print(f"🔍 [DEBUG] Filtri attivi: representatives={show_representatives}, propagated={show_propagated}, outliers={show_outliers}")
             
             # Aggiungi filtro etichetta se specificato
             if label_filter and label_filter != "Tutte le etichette":

@@ -5972,7 +5972,24 @@ def update_clustering_parameters(tenant_id):
         # Validazione parametri
         new_params = data['parameters']
         
-        # Validazione range valori
+        # 🔧 FIX: Normalizza formato parametri per gestire sia frontend React che API diretta
+        # Frontend React invia: {"param": {"value": X, "default": Y, "description": "..."}}
+        # API diretta invia: {"param": X}
+        normalized_params = {}
+        for param_name, param_data in new_params.items():
+            if isinstance(param_data, dict) and 'value' in param_data:
+                # Formato React: estrai il valore dall'oggetto
+                param_value = param_data['value']
+                normalized_params[param_name] = param_value
+                print(f"🔧 [FIX] Parametro {param_name}: formato React -> valore {param_value}")
+            else:
+                # Formato semplice: usa il valore direttamente  
+                normalized_params[param_name] = param_data
+                print(f"✅ [FIX] Parametro {param_name}: formato semplice -> valore {param_data}")
+        
+        print(f"🎯 [FIX] Parametri normalizzati: {len(normalized_params)} parametri processati")
+        
+        # Validazione range valori (usa parametri normalizzati)
         validations = {
             'min_cluster_size': (2, 50),
             'min_samples': (1, 20),
@@ -5982,7 +5999,7 @@ def update_clustering_parameters(tenant_id):
             # 🆕 VALIDAZIONI NUOVI PARAMETRI
             'cluster_selection_method': ['eom', 'leaf'],
             'alpha': (0.1, 2.0),
-            'max_cluster_size': (0, 1000),
+            'max_cluster_size': (0, 1000),  # 🔧 NOTA: 0 = nessun limite, None sarà convertito in 0
             'allow_single_cluster': [True, False],
             'only_user': [True, False],  # 🆕 Validazione per only_user
             
@@ -5992,12 +6009,25 @@ def update_clustering_parameters(tenant_id):
             'umap_min_dist': (0.0, 1.0),
             'umap_metric': ['cosine', 'euclidean', 'manhattan', 'chebyshev', 'minkowski'],
             'umap_n_components': (2, 100),
-            'umap_random_state': (0, 999999)
+            'umap_random_state': (0, 999999),
+            
+            # 🎯 VALIDAZIONI PARAMETRI REVIEW QUEUE
+            'outlier_confidence_threshold': (0.1, 1.0),
+            'propagated_confidence_threshold': (0.1, 1.0),
+            'representative_confidence_threshold': (0.1, 1.0),
+            'minimum_consensus_threshold': (1, 5),
+            'enable_smart_review': [True, False],
+            'max_pending_per_batch': (10, 1000)
         }
         
-        for param_name, param_value in new_params.items():
+        for param_name, param_value in normalized_params.items():
             if param_name in validations:
                 validation = validations[param_name]
+                
+                # 🔧 FIX: Gestisci None per max_cluster_size prima della validazione
+                if param_name == 'max_cluster_size' and param_value is None:
+                    param_value = 0  # None -> 0 per la validazione
+                    normalized_params[param_name] = 0  # Aggiorna anche il valore normalizzato
                 
                 if isinstance(validation, tuple):  # Range numerico
                     min_val, max_val = validation
@@ -6019,12 +6049,12 @@ def update_clustering_parameters(tenant_id):
         
         tenant_config_file = os.path.join(tenant_config_dir, f'{tenant_id}_clustering.yaml')
         
-        # Prepara configurazione
+        # Prepara configurazione (usa parametri normalizzati)
         tenant_clustering_config = {
             'tenant_id': tenant_id,
             'last_updated': datetime.now().isoformat(),
             'updated_by': 'web_interface',
-            'clustering_parameters': new_params,
+            'clustering_parameters': normalized_params,  # ✅ USA parametri normalizzati
             'previous_config_backup': {}
         }
         
@@ -6037,21 +6067,159 @@ def update_clustering_parameters(tenant_id):
             except:
                 pass
         
-        # Salva nuova configurazione
-        with open(tenant_config_file, 'w', encoding='utf-8') as f:
-            yaml.dump(tenant_clustering_config, f, default_flow_style=False, allow_unicode=True)
+        # 🎯 SALVATAGGIO PRIMARIO: DATABASE MySQL (nuovo sistema unificato)
+        mysql_success = False
+        try:
+            import mysql.connector
+            from mysql.connector import Error
+            
+            # Carica configurazione database
+            config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+            with open(config_path, 'r', encoding='utf-8') as file:
+                config = yaml.safe_load(file)
+            
+            db_config = config.get('tag_database', {})
+            
+            if db_config:
+                # Connessione MySQL
+                connection = mysql.connector.connect(
+                    host=db_config['host'],
+                    port=db_config['port'],
+                    user=db_config['user'],
+                    password=db_config['password'],
+                    database=db_config['database'],
+                    autocommit=True
+                )
+                
+                cursor = connection.cursor()
+                
+                # Prepara valori per INSERT/UPDATE con tutti i parametri unificati
+                current_time = datetime.now()
+                
+                # Estrai parametri con valori di default per campi mancanti
+                # 🔧 FIX: Gestisci correttamente max_cluster_size None/null -> 0 (nessun limite)
+                max_cluster_size = normalized_params.get('max_cluster_size', 0)
+                if max_cluster_size is None:
+                    max_cluster_size = 0  # None/null significa "nessun limite" -> 0
+                
+                insert_values = (
+                    tenant_id,
+                    'web_interface',
+                    current_time,
+                    normalized_params.get('enable_smart_review', True),
+                    normalized_params.get('max_pending_per_batch', 150),
+                    normalized_params.get('minimum_consensus_threshold', 2),
+                    normalized_params.get('outlier_confidence_threshold', 0.6),
+                    normalized_params.get('propagated_confidence_threshold', 0.75),
+                    normalized_params.get('representative_confidence_threshold', 0.85),
+                    current_time,
+                    # HDBSCAN parameters
+                    normalized_params.get('min_cluster_size', 5),
+                    normalized_params.get('min_samples', 3),
+                    normalized_params.get('cluster_selection_epsilon', 0.12),
+                    normalized_params.get('metric', 'euclidean'),
+                    normalized_params.get('cluster_selection_method', 'leaf'),
+                    normalized_params.get('alpha', 0.8),
+                    max_cluster_size,  # 🔧 Usa la variabile gestita: None -> 0, mantieni 0 come 0
+                    normalized_params.get('allow_single_cluster', False),
+                    normalized_params.get('only_user', True),
+                    # UMAP parameters
+                    normalized_params.get('use_umap', False),
+                    normalized_params.get('umap_n_neighbors', 10),
+                    normalized_params.get('umap_min_dist', 0.05),
+                    normalized_params.get('umap_metric', 'euclidean'),
+                    normalized_params.get('umap_n_components', 3),
+                    normalized_params.get('umap_random_state', 42)
+                )
+                
+                # INSERT con ON DUPLICATE KEY UPDATE per gestire aggiornamenti
+                insert_query = """
+                INSERT INTO soglie (
+                    tenant_id, config_source, last_updated,
+                    enable_smart_review, max_pending_per_batch, minimum_consensus_threshold,
+                    outlier_confidence_threshold, propagated_confidence_threshold, representative_confidence_threshold,
+                    created_at,
+                    min_cluster_size, min_samples, cluster_selection_epsilon, metric, cluster_selection_method,
+                    alpha, max_cluster_size, allow_single_cluster, only_user,
+                    use_umap, umap_n_neighbors, umap_min_dist, umap_metric, umap_n_components, umap_random_state
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    config_source = VALUES(config_source),
+                    last_updated = VALUES(last_updated),
+                    enable_smart_review = VALUES(enable_smart_review),
+                    max_pending_per_batch = VALUES(max_pending_per_batch),
+                    minimum_consensus_threshold = VALUES(minimum_consensus_threshold),
+                    outlier_confidence_threshold = VALUES(outlier_confidence_threshold),
+                    propagated_confidence_threshold = VALUES(propagated_confidence_threshold),
+                    representative_confidence_threshold = VALUES(representative_confidence_threshold),
+                    min_cluster_size = VALUES(min_cluster_size),
+                    min_samples = VALUES(min_samples),
+                    cluster_selection_epsilon = VALUES(cluster_selection_epsilon),
+                    metric = VALUES(metric),
+                    cluster_selection_method = VALUES(cluster_selection_method),
+                    alpha = VALUES(alpha),
+                    max_cluster_size = VALUES(max_cluster_size),
+                    allow_single_cluster = VALUES(allow_single_cluster),
+                    only_user = VALUES(only_user),
+                    use_umap = VALUES(use_umap),
+                    umap_n_neighbors = VALUES(umap_n_neighbors),
+                    umap_min_dist = VALUES(umap_min_dist),
+                    umap_metric = VALUES(umap_metric),
+                    umap_n_components = VALUES(umap_n_components),
+                    umap_random_state = VALUES(umap_random_state)
+                """
+                
+                cursor.execute(insert_query, insert_values)
+                
+                print(f"✅ [MYSQL] Parametri salvati nel database per tenant {tenant_id}")
+                print(f"   📊 Parametri salvati: {len(normalized_params)}")
+                
+                cursor.close()
+                connection.close()
+                mysql_success = True
+                
+        except Exception as mysql_error:
+            print(f"❌ [MYSQL] Errore salvataggio database: {mysql_error}")
+            print(f"🔍 [DEBUG] Parametri che hanno causato l'errore:")
+            for param_name, param_value in normalized_params.items():
+                print(f"   {param_name}: {param_value} (type: {type(param_value)})")
+            mysql_success = False
+        
+        # 📁 SALVATAGGIO FALLBACK: File YAML (per compatibilità)
+        yaml_success = False  
+        try:
+            with open(tenant_config_file, 'w', encoding='utf-8') as f:
+                yaml.dump(tenant_clustering_config, f, default_flow_style=False, allow_unicode=True)
+            yaml_success = True
+            print(f"✅ [YAML] Backup parametri salvato in file: {tenant_config_file}")
+        except Exception as yaml_error:
+            print(f"❌ [YAML] Errore salvataggio file: {yaml_error}")
+            yaml_success = False
         
         # Log dell'aggiornamento
         print(f"📊 Parametri clustering aggiornati per tenant {tenant_id}:")
-        for param_name, param_value in new_params.items():
+        for param_name, param_value in normalized_params.items():  # ✅ USA parametri normalizzati
             print(f"   {param_name}: {param_value}")
         
+        # Determina messaggio di risposta
+        if mysql_success:
+            storage_message = "Parametri salvati nel database MySQL"
+            storage_status = "mysql_primary"
+        elif yaml_success:
+            storage_message = "Parametri salvati in file YAML (fallback)"
+            storage_status = "yaml_fallback"
+        else:
+            storage_message = "Errore salvataggio parametri"
+            storage_status = "error"
+        
         response = {
-            'success': True,
-            'message': 'Parametri clustering aggiornati con successo',
+            'success': mysql_success or yaml_success,
+            'message': f'Parametri clustering aggiornati: {storage_message}',
             'tenant_id': tenant_id,
-            'updated_parameters': new_params,
-            'config_file': tenant_config_file,
+            'updated_parameters': normalized_params,  # ✅ USA parametri normalizzati
+            'storage_status': storage_status,
+            'mysql_success': mysql_success,
+            'yaml_fallback': yaml_success,
             'timestamp': datetime.now().isoformat()
         }
         

@@ -59,7 +59,8 @@ interface ReviewStatsProps {
 }
 
 const ReviewStats: React.FC<ReviewStatsProps> = ({ tenant, refreshTrigger }) => {
-  const [selectedTenant, setSelectedTenant] = useState<string>(tenant?.tenant_id || '');
+  // FIX: Usa tenant_slug invece di tenant_name per la selezione (slug è minuscolo e corrisponde alle opzioni)
+  const [selectedTenant, setSelectedTenant] = useState<string>(tenant?.tenant_slug || '');
   const [availableTenants, setAvailableTenants] = useState<any[]>([]); // Cambiato da string[] a any[]
   const [labelStats, setLabelStats] = useState<LabelStat[]>([]);
   const [generalStats, setGeneralStats] = useState<GeneralStats | null>(null);
@@ -72,13 +73,14 @@ const ReviewStats: React.FC<ReviewStatsProps> = ({ tenant, refreshTrigger }) => 
       const response = await apiService.getAvailableTenants();
       console.log('🔍 [DEBUG] Tenants ricevuti:', response.tenants);
       
-      // L'API restituisce oggetti con struttura {name, slug, id}
+      // FIX: L'API restituisce array di oggetti, non stringhe
+      // Estrai il tenant_slug (o tenant_name.toLowerCase()) da ogni oggetto
       const tenantList = response.tenants.map((t: any) => {
         if (typeof t === 'string') {
           return t;
         } else if (t && typeof t === 'object') {
-          // Usa slug preferenzialmente, poi name, poi id
-          return t.slug || t.name || t.id || String(t);
+          // Preferisci tenant_slug, poi tenant_name in minuscolo, poi name
+          return t.tenant_slug || t.slug || (t.tenant_name && t.tenant_name.toLowerCase()) || (t.name && t.name.toLowerCase()) || String(t);
         }
         return String(t);
       });
@@ -86,8 +88,13 @@ const ReviewStats: React.FC<ReviewStatsProps> = ({ tenant, refreshTrigger }) => 
       console.log('🔍 [DEBUG] Tenant list processata:', tenantList);
       setAvailableTenants(tenantList);
       
+      // Validazione: se selectedTenant non è nelle opzioni disponibili, resettalo
+      if (selectedTenant && !tenantList.includes(selectedTenant)) {
+        console.log('🔍 [DEBUG] selectedTenant non valido, resetting:', selectedTenant);
+        setSelectedTenant(tenantList.length > 0 ? tenantList[0] : '');
+      }
       // Se non c'è tenant selezionato, usa il primo disponibile
-      if (!selectedTenant && tenantList.length > 0) {
+      else if (!selectedTenant && tenantList.length > 0) {
         setSelectedTenant(tenantList[0]);
       }
     } catch (err) {
@@ -104,7 +111,16 @@ const ReviewStats: React.FC<ReviewStatsProps> = ({ tenant, refreshTrigger }) => 
     setError(null);
 
     try {
-      const response = await apiService.getLabelStatistics(selectedTenant);
+      // FIX: Usa sempre il tenant_id (UUID) per le chiamate API
+      // selectedTenant contiene ora il tenant_slug, ma l'API si aspetta il tenant_id
+      let tenantIdToUse = selectedTenant;
+      
+      // Se abbiamo il tenant principale passato come prop e il suo slug corrisponde
+      if (tenant && tenant.tenant_slug === selectedTenant) {
+        tenantIdToUse = tenant.tenant_id;  // Usa l'UUID per l'API
+      }
+      
+      const response = await apiService.getLabelStatistics(tenantIdToUse);
       setLabelStats(response.labels || []);
       setGeneralStats(response.general_stats || null);
     } catch (err) {
@@ -113,7 +129,14 @@ const ReviewStats: React.FC<ReviewStatsProps> = ({ tenant, refreshTrigger }) => 
     } finally {
       setLoading(false);
     }
-  }, [selectedTenant]);
+  }, [selectedTenant, tenant]);
+
+  // FIX: Aggiorna selectedTenant quando cambia il prop tenant (usa tenant_slug)  
+  useEffect(() => {
+    if (tenant?.tenant_slug) {
+      setSelectedTenant(tenant.tenant_slug);
+    }
+  }, [tenant?.tenant_slug]);
 
   useEffect(() => {
     loadAvailableTenants();
@@ -198,7 +221,7 @@ const ReviewStats: React.FC<ReviewStatsProps> = ({ tenant, refreshTrigger }) => 
           <FormControl fullWidth>
             <InputLabel>Seleziona Tenant</InputLabel>
             <Select
-              value={selectedTenant}
+              value={selectedTenant && availableTenants.length > 0 ? selectedTenant : ''}
               onChange={(e) => setSelectedTenant(e.target.value)}
               disabled={loading}
             >

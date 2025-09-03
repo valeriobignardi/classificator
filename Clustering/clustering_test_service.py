@@ -653,7 +653,10 @@ class ClusteringTestService:
                     umap_min_dist=clustering_config.get('umap_min_dist', 0.1),
                     umap_metric=clustering_config.get('umap_metric', 'cosine'),
                     umap_n_components=clustering_config.get('umap_n_components', 50),
-                    umap_random_state=clustering_config.get('umap_random_state', 42)
+                    umap_random_state=clustering_config.get('umap_random_state', 42),
+                    
+                    # 🔧 FIX: Passa oggetto tenant al clusterer
+                    tenant=tenant
                 )
                 
                 cluster_labels = clusterer.fit_predict(embeddings)

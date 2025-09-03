@@ -16,6 +16,7 @@ from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 import os
 import sys
+import numpy as np  # 🆕 Per supporto embedding
 
 # Import della classe Tenant
 sys.path.append(os.path.join(os.path.dirname(__file__), 'Utils'))
@@ -1249,7 +1250,9 @@ class MongoClassificationReader:
                                    final_decision: dict = None, conversation_text: str = None,
                                    needs_review: bool = False, review_reason: str = None,
                                    classified_by: str = None, notes: str = None,
-                                   cluster_metadata: dict = None) -> bool:
+                                   cluster_metadata: dict = None,
+                                   embedding: Union[np.ndarray, List[float]] = None,
+                                   embedding_model: str = None) -> bool:
         """
         Scopo: Salva il risultato completo di una classificazione in MongoDB
         
@@ -1265,11 +1268,13 @@ class MongoClassificationReader:
             - classified_by: Chi/cosa ha fatto la classificazione (es: 'human_supervisor', 'ensemble_classifier')
             - notes: Note aggiuntive separate dalla motivazione
             - cluster_metadata: Metadati del clustering (cluster_id, is_representative, propagated_from, etc.)
+            - embedding: Array numpy o lista dei valori embedding del testo (🆕)
+            - embedding_model: Nome del modello utilizzato per generare l'embedding (🆕)
             
         Output:
             - True se salvato con successo
             
-        Ultimo aggiornamento: 2025-08-23
+        Ultimo aggiornamento: 2025-09-02 - Aggiunto supporto embedding
         """
         # � DEBUG CLASSIFIED_BY: Traccia TUTTI i parametri ricevuti dalla funzione
         print(f"🚨 [MONGO-DEBUG] save_classification_result chiamata per session {session_id}:")
@@ -1350,6 +1355,26 @@ class MongoClassificationReader:
             # Aggiunge testo conversazione se fornito
             if conversation_text:
                 doc["testo_completo"] = conversation_text
+            
+            # 🆕 AGGIUNGE EMBEDDING E MODELLO SE FORNITI
+            if embedding is not None:
+                # Converte embedding in lista se è numpy array
+                if isinstance(embedding, np.ndarray):
+                    doc["embedding"] = embedding.tolist()
+                else:
+                    doc["embedding"] = list(embedding)
+                    
+                print(f"💾 [EMBEDDING] Salvato embedding per session {session_id}: {len(doc['embedding'])} dimensioni")
+            
+            # Aggiunge modello embedding se fornito
+            if embedding_model:
+                doc["embedding_model"] = embedding_model
+                print(f"🏷️ [EMBEDDING] Modello: {embedding_model}")
+            else:
+                # Se non specificato ma c'è embedding, usa default
+                if embedding is not None:
+                    doc["embedding_model"] = "unknown"
+                    print(f"⚠️ [EMBEDDING] Modello non specificato, usato 'unknown'")
             
             # Aggiunge risultati ML se forniti
             if ml_result:

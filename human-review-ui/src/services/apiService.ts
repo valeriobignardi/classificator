@@ -1199,6 +1199,77 @@ class ApiService {
       };
     }
   }
+
+  /**
+   * Carica le soglie Review Queue per un tenant
+   * 
+   * Args:
+   *   tenantId: ID del tenant
+   *   
+   * Returns:
+   *   Promise con dati soglie o errore
+   *   
+   * Data ultima modifica: 2025-09-03
+   */
+  async getReviewQueueThresholds(tenantId: string): Promise<{
+    success: boolean;
+    thresholds: Record<string, any>;
+    tenant_id: string;
+    config_source: 'default' | 'custom';
+    last_updated: string;
+  }> {
+    return this.handleRequest(
+      axios.get(`${API_BASE_URL}/review-queue/${tenantId}/thresholds`)
+    );
+  }
+
+  /**
+   * Aggiorna le soglie Review Queue per un tenant
+   * 
+   * Args:
+   *   tenantId: ID del tenant
+   *   thresholds: Record con le nuove soglie
+   *   
+   * Returns:
+   *   Promise con risultato aggiornamento
+   *   
+   * Data ultima modifica: 2025-09-03
+   */
+  async updateReviewQueueThresholds(tenantId: string, thresholds: Record<string, any>): Promise<{
+    success: boolean;
+    message: string;
+    tenant_id: string;
+    updated_thresholds: Record<string, any>;
+    timestamp: string;
+  }> {
+    return this.handleRequest(
+      axios.post(`${API_BASE_URL}/review-queue/${tenantId}/thresholds`, {
+        thresholds
+      })
+    );
+  }
+
+  /**
+   * Reset delle soglie Review Queue ai valori default
+   * 
+   * Args:
+   *   tenantId: ID del tenant
+   *   
+   * Returns:
+   *   Promise con risultato reset
+   *   
+   * Data ultima modifica: 2025-09-03
+   */
+  async resetReviewQueueThresholds(tenantId: string): Promise<{
+    success: boolean;
+    message: string;
+    tenant_id: string;
+    timestamp: string;
+  }> {
+    return this.handleRequest(
+      axios.post(`${API_BASE_URL}/review-queue/${tenantId}/thresholds/reset`, {})
+    );
+  }
 }
 
 export const apiService = new ApiService();

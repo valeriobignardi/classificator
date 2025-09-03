@@ -267,20 +267,27 @@ class EndToEndPipeline:
         if max_cluster_raw is None:
             print(f"🔧 [FIX] max_cluster_size: None -> 0 (protezione anti-errore HDBSCAN)")
         
-        # 🆕 PARAMETRI UMAP da tenant config
-        umap_params = self.config_helper.get_umap_parameters(self.tenant_id)
+        # � PARAMETRI UNIFICATI da MySQL - tutti i parametri in una sola chiamata
+        print(f"📊 [PIPELINE] Caricamento parametri unificati per tenant: {self.tenant_id}")
+        from Utils.tenant_config_helper import get_all_clustering_parameters_for_tenant
+        unified_params = get_all_clustering_parameters_for_tenant(self.tenant_id)
+        
+        # 🔍 Debug parametri caricati
+        print(f"   ✅ Parametri HDBSCAN: {len([k for k in unified_params.keys() if not k.startswith('umap_') and not k.endswith('_threshold') and k not in ['enable_smart_review', 'max_pending_per_batch', 'minimum_consensus_threshold']])}")
+        print(f"   ✅ Parametri UMAP: {len([k for k in unified_params.keys() if k.startswith('umap_') or k == 'use_umap'])}")
+        print(f"   ✅ Parametri Review Queue: {len([k for k in unified_params.keys() if k.endswith('_threshold') or k in ['enable_smart_review', 'max_pending_per_batch', 'minimum_consensus_threshold']])}")
         
         # 🎯 COSTRUZIONE DIZIONARI PARAMETRI PER BERTOPIC
-        # Creo dizionari con TUTTI i parametri per garantire piena consistenza
+        # Uso i parametri dal database MySQL unificato - override dei parametri da config.yaml
         bertopic_hdbscan_params = {
-            'min_cluster_size': cluster_min_size,
-            'min_samples': cluster_min_samples,
-            'alpha': cluster_alpha,
-            'cluster_selection_method': cluster_selection_method,
-            'cluster_selection_epsilon': cluster_selection_epsilon,
-            'metric': cluster_metric,
-            'allow_single_cluster': cluster_allow_single,
-            'max_cluster_size': cluster_max_size,
+            'min_cluster_size': unified_params.get('min_cluster_size', cluster_min_size),
+            'min_samples': unified_params.get('min_samples', cluster_min_samples),
+            'alpha': unified_params.get('alpha', cluster_alpha),
+            'cluster_selection_method': unified_params.get('cluster_selection_method', cluster_selection_method),
+            'cluster_selection_epsilon': unified_params.get('cluster_selection_epsilon', cluster_selection_epsilon),
+            'metric': unified_params.get('metric', cluster_metric),
+            'allow_single_cluster': unified_params.get('allow_single_cluster', cluster_allow_single),
+            'max_cluster_size': unified_params.get('max_cluster_size', cluster_max_size),
             # Parametri specifici per BERTopic
             'prediction_data': True,  # Necessario per BERTopic
             'match_reference_implementation': True  # Compatibilità
@@ -288,14 +295,17 @@ class EndToEndPipeline:
         
         # Parametri UMAP per BERTopic (solo se UMAP è abilitato)
         bertopic_umap_params = None
-        if umap_params['use_umap']:
+        if unified_params.get('use_umap', False):
             bertopic_umap_params = {
-                'n_neighbors': umap_params['n_neighbors'],
-                'min_dist': umap_params['min_dist'],
-                'n_components': umap_params['n_components'],
-                'metric': umap_params['metric'],  # ✅ CORRETTO: usa metrica dal database
-                'random_state': umap_params['random_state']  # ✅ CORRETTO: usa random_state dal database
+                'n_neighbors': unified_params.get('n_neighbors', 10),
+                'min_dist': unified_params.get('min_dist', 0.05),
+                'n_components': unified_params.get('n_components', 3),
+                'metric': unified_params.get('umap_metric', 'euclidean'),  # ✅ CORRETTO: usa metrica UMAP dal database
+                'random_state': unified_params.get('random_state', 42)  # ✅ CORRETTO: usa random_state dal database
             }
+            print(f"🗂️  [UMAP] Parametri caricati dal database MySQL: {bertopic_umap_params}")
+        else:
+            print(f"🗂️  [UMAP] Disabilitato per tenant {self.tenant_id}")
         
         print(f"🔧 [FIX DEBUG] Parametri tenant passati a HDBSCANClusterer:")
         print(f"   min_cluster_size: {cluster_min_size}")
@@ -306,11 +316,11 @@ class EndToEndPipeline:
         print(f"   metric: {cluster_metric}")
         print(f"   allow_single_cluster: {cluster_allow_single}")
         print(f"   max_cluster_size: {cluster_max_size}")
-        print(f"   🗂️  use_umap: {umap_params['use_umap']}")
-        if umap_params['use_umap']:
-            print(f"   🗂️  umap_n_neighbors: {umap_params['n_neighbors']}")
-            print(f"   🗂️  umap_min_dist: {umap_params['min_dist']}")
-            print(f"   🗂️  umap_n_components: {umap_params['n_components']}")
+        print(f"   🗂️  use_umap: {unified_params.get('use_umap', False)}")
+        if unified_params.get('use_umap', False):
+            print(f"   🗂️  umap_n_neighbors: {unified_params.get('n_neighbors', 10)}")
+            print(f"   🗂️  umap_min_dist: {unified_params.get('min_dist', 0.05)}")
+            print(f"   🗂️  umap_n_components: {unified_params.get('n_components', 3)}")
         
         print(f"🎯 [BERTOPIC] Parametri consistenti configurati:")
         print(f"   📊 HDBSCAN: {len(bertopic_hdbscan_params)} parametri")
@@ -323,24 +333,27 @@ class EndToEndPipeline:
         # Per poterli usare nella creazione del BERTopicFeatureProvider
         self.bertopic_hdbscan_params = bertopic_hdbscan_params
         self.bertopic_umap_params = bertopic_umap_params
+        # 🎯 MEMORIZZA PARAMETRI UNIFICATI per uso globale nella pipeline
+        self.unified_params = unified_params
         
         self.clusterer = HDBSCANClusterer(
-            min_cluster_size=cluster_min_size,
-            min_samples=cluster_min_samples,
-            alpha=cluster_alpha,
-            cluster_selection_method=cluster_selection_method,
-            cluster_selection_epsilon=cluster_selection_epsilon,
-            metric=cluster_metric,
-            allow_single_cluster=cluster_allow_single,
-            max_cluster_size=cluster_max_size,
-            # 🆕 PARAMETRI UMAP
-            use_umap=umap_params['use_umap'],
-            umap_n_neighbors=umap_params['n_neighbors'],
-            umap_min_dist=umap_params['min_dist'],
-            umap_metric=umap_params['metric'],
-            umap_n_components=umap_params['n_components'],
-            umap_random_state=umap_params['random_state'],
-            config_path=config_path
+            min_cluster_size=unified_params.get('min_cluster_size', cluster_min_size),
+            min_samples=unified_params.get('min_samples', cluster_min_samples),
+            alpha=unified_params.get('alpha', cluster_alpha),
+            cluster_selection_method=unified_params.get('cluster_selection_method', cluster_selection_method),
+            cluster_selection_epsilon=unified_params.get('cluster_selection_epsilon', cluster_selection_epsilon),
+            metric=unified_params.get('metric', cluster_metric),
+            allow_single_cluster=unified_params.get('allow_single_cluster', cluster_allow_single),
+            max_cluster_size=unified_params.get('max_cluster_size', cluster_max_size),
+            # 🆕 PARAMETRI UMAP dal database MySQL unificato
+            use_umap=unified_params.get('use_umap', False),
+            umap_n_neighbors=unified_params.get('n_neighbors', 10),
+            umap_min_dist=unified_params.get('min_dist', 0.05),
+            umap_metric=unified_params.get('umap_metric', 'euclidean'),
+            umap_n_components=unified_params.get('n_components', 3),
+            umap_random_state=unified_params.get('random_state', 42),
+            config_path=config_path,
+            tenant=self.tenant  # 🔧 PASSA OGGETTO TENANT AL CLUSTERER
         )
         # Non serve più classifier separato - tutto nell'ensemble
         # self.classifier = rimosso, ora tutto in ensemble_classifier
@@ -585,6 +598,47 @@ class EndToEndPipeline:
                 
         return self.embedder
     
+    def _get_embedder_name(self):
+        """
+        Ottiene il nome del modello di embedding attuale per il salvataggio in MongoDB.
+        Include informazioni sulla riduzione dimensionale UMAP se applicata.
+        
+        Returns:
+            str: Nome del modello/embedder utilizzato con info UMAP
+        """
+        if self.embedder is None:
+            return "unknown_embedder"
+        
+        # Determina il nome basato sul tipo di embedder
+        embedder_type = type(self.embedder).__name__
+        
+        base_name = ""
+        if hasattr(self.embedder, 'model_name'):
+            # Per modelli con attributo model_name (es. OpenAI, BGE-M3)
+            base_name = f"{embedder_type}_{self.embedder.model_name}"
+        elif hasattr(self.embedder, 'model_path'):
+            # Per modelli con attributo model_path (es. LaBSE)
+            model_path = str(self.embedder.model_path)
+            if '/' in model_path:
+                model_name = model_path.split('/')[-1]
+            else:
+                model_name = model_path
+            base_name = f"{embedder_type}_{model_name}"
+        else:
+            # Fallback: solo il tipo
+            base_name = embedder_type
+        
+        # 🆕 Aggiungi informazioni UMAP se disponibili
+        if hasattr(self.clusterer, 'umap_info') and self.clusterer.umap_info.get('applied'):
+            umap_params = self.clusterer.umap_info.get('parameters', {})
+            n_components = umap_params.get('n_components', 'unknown')
+            base_name += f"_UMAP{n_components}D"
+            print(f"📏 [DEBUG EMBED] Embedding con UMAP: {base_name}")
+        else:
+            print(f"📏 [DEBUG EMBED] Embedding senza UMAP: {base_name}")
+        
+        return base_name
+
     def _analyze_and_show_problematic_conversations(self, sessioni: Dict[str, Dict], 
                                                    testi: List[str], 
                                                    session_ids: List[str], 
@@ -2406,14 +2460,59 @@ class EndToEndPipeline:
                         else:
                             disagreement_score = abs(ml_conf - llm_conf)
                 
-                # 🆕 CLASSIFICAZIONE POST-TRAINING: MAI human review
-                # Tutte le classificazioni sono auto-approvate in questa fase
+                # 🆕 VALUTAZIONE INTELLIGENTE PER REVIEW QUEUE
+                # Determina se serve review in base al tipo e confidenza
                 needs_review = False
                 review_reason = "auto_classified_post_training"
                 
-                # Debug: mostra solo disaccordi significativi per statistica
-                if has_disagreement and disagreement_score > 0.3:
-                    if i < 10:  # Debug prime 10
+                # 🎯 USA SOGLIE UNIFICATI GIÀ CARICATI dal database MySQL
+                # Non serve ricaricare - usiamo unified_params già disponibile
+                outlier_threshold = self.unified_params.get('outlier_confidence_threshold', 0.7)
+                propagated_threshold = self.unified_params.get('propagated_confidence_threshold', 0.8)  
+                representative_threshold = self.unified_params.get('representative_confidence_threshold', 0.9)
+                enable_smart_review = self.unified_params.get('enable_smart_review', True)
+                
+                print(f"   🎯 [REVIEW-THRESHOLDS UNIFIED] Outlier: {outlier_threshold}, Propagated: {propagated_threshold}, Representative: {representative_threshold}")
+                
+                # 🎯 FIX: OUTLIERS con bassa confidenza vanno in review
+                if prediction and 'OUTLIER' in prediction.get('method', ''):
+                    if enable_smart_review and confidence < outlier_threshold:
+                        needs_review = True
+                        review_reason = f"outlier_low_confidence_{confidence:.3f}_threshold_{outlier_threshold}"
+                        print(f"   🎯 OUTLIER {session_id}: confidenza {confidence:.3f} < {outlier_threshold} → PENDING REVIEW")
+                    else:
+                        review_reason = f"outlier_high_confidence_{confidence:.3f}_threshold_{outlier_threshold}"
+                        print(f"   ✅ OUTLIER {session_id}: confidenza {confidence:.3f} ≥ {outlier_threshold} → AUTO_CLASSIFIED")
+                
+                # 🎯 FIX: RAPPRESENTANTI con bassa confidenza vanno in review
+                elif prediction and 'REPRESENTATIVE' in prediction.get('method', ''):
+                    if enable_smart_review and confidence < representative_threshold:
+                        needs_review = True
+                        review_reason = f"representative_low_confidence_{confidence:.3f}_threshold_{representative_threshold}"
+                        print(f"   🎯 RAPPRESENTANTE {session_id}: confidenza {confidence:.3f} < {representative_threshold} → PENDING REVIEW")
+                    else:
+                        review_reason = f"representative_high_confidence_{confidence:.3f}_threshold_{representative_threshold}"
+                
+                # 🎯 FIX: PROPAGATED con disaccordo o bassa confidenza vanno in review
+                elif prediction and 'PROPAGATED' in prediction.get('method', ''):
+                    disagreement_threshold = 0.4  # Soglia disaccordo hardcoded per ora
+                    
+                    if enable_smart_review and has_disagreement and disagreement_score > disagreement_threshold:
+                        needs_review = True
+                        review_reason = f"propagated_disagreement_{disagreement_score:.3f}_threshold_{disagreement_threshold}"
+                        print(f"   🎯 PROPAGATED {session_id}: disaccordo {disagreement_score:.3f} > {disagreement_threshold} → PENDING REVIEW")
+                    elif enable_smart_review and confidence < propagated_threshold:
+                        needs_review = True
+                        review_reason = f"propagated_low_confidence_{confidence:.3f}_threshold_{propagated_threshold}"
+                        print(f"   🎯 PROPAGATED {session_id}: confidenza {confidence:.3f} < {propagated_threshold} → PENDING REVIEW")
+                    else:
+                        review_reason = f"propagated_high_confidence_{confidence:.3f}_threshold_{propagated_threshold}"
+                
+                # Debug: mostra solo casi che vanno in review
+                if needs_review:
+                    print(f"   👤 REVIEW QUEUE: {session_id} - {review_reason}")
+                elif has_disagreement and disagreement_score > 0.3:
+                    if i < 5:  # Debug prime 5
                         print(f"   📊 Sessione {i+1}: Disaccordo {disagreement_score:.2f} ma auto-approvata")
                 
                 # Ottieni dati sessione
@@ -2483,6 +2582,24 @@ class EndToEndPipeline:
                 if cluster_metadata:
                     print(f"   📋 cluster_metadata keys: {list(cluster_metadata.keys())}")
                 
+                # 🆕 ESTRAI EMBEDDING PER QUESTA SESSIONE (Question 4 implementation)
+                session_embedding = None
+                embedding_model = None
+                try:
+                    if hasattr(self, '_last_embeddings') and self._last_embeddings is not None:
+                        # Trova l'indice della sessione corrente nella lista session_ids
+                        session_index = session_ids.index(session_id)
+                        if session_index < len(self._last_embeddings):
+                            session_embedding = self._last_embeddings[session_index]
+                            embedding_model = self._get_embedder_name()
+                            print(f"   🧠 Embedding estratto per {session_id}: shape {session_embedding.shape}")
+                        else:
+                            print(f"   ⚠️ Indice embedding non trovato per {session_id}")
+                    else:
+                        print(f"   ⚠️ Nessun embedding salvato dalla classificazione per {session_id}")
+                except Exception as embed_err:
+                    print(f"   ❌ Errore estrazione embedding per {session_id}: {embed_err}")
+                
                 success = mongo_reader.save_classification_result(
                     session_id=session_id,
                     client_name=self.tenant_slug,
@@ -2499,7 +2616,9 @@ class EndToEndPipeline:
                     review_reason=review_reason,  # "auto_classified_post_training"
                     classified_by='post_training_pipeline',  # Specifica fase
                     notes=f"Classificazione post-training automatica (confidenza {confidence:.3f})",
-                    cluster_metadata=cluster_metadata  # Metadata cluster per filtri UI
+                    cluster_metadata=cluster_metadata,  # Metadata cluster per filtri UI
+                    embedding=session_embedding,  # 🆕 Question 4: Salva embedding della sessione
+                    embedding_model=embedding_model  # 🆕 Question 4: Salva nome del modello
                 )
                 
                 if success:
@@ -3786,7 +3905,8 @@ class EndToEndPipeline:
         outlier_clusterer = HDBSCANClusterer(
             min_cluster_size=2,  # Molto più basso
             min_samples=1,       # Molto più basso
-            cluster_selection_epsilon=0.1  # Più permissivo
+            cluster_selection_epsilon=0.1,  # Più permissivo
+            tenant=self.tenant  # 🔧 PASSA OGGETTO TENANT
         )
         
         outlier_cluster_labels = outlier_clusterer.fit_predict(outlier_embeddings)
@@ -3901,8 +4021,18 @@ class EndToEndPipeline:
                 
                 cluster_info = self._generate_cluster_info_from_labels(cluster_labels, session_texts)
                 
+                # 🆕 SALVA EMBEDDING PROCESSATI (post-UMAP se applicato) per salvataggio MongoDB
+                # Ora otteniamo gli embedding finali dal clusterer invece degli originali
+                final_embeddings = getattr(self.clusterer, 'final_embeddings', embeddings)
+                if hasattr(self.clusterer, 'final_embeddings') and self.clusterer.final_embeddings is not None:
+                    print(f"✅ [DEBUG EMBED] Usando embedding processati dal clusterer: {final_embeddings.shape}")
+                    if hasattr(self.clusterer, 'umap_info') and self.clusterer.umap_info.get('applied'):
+                        print(f"   📏 UMAP applicato: {self.clusterer.umap_info['input_shape']} → {self.clusterer.umap_info['output_shape']}")
+                else:
+                    print(f"⚠️ [DEBUG EMBED] Fallback a embedding originali: {final_embeddings.shape}")
+                
                 # Salva dati per visualizzazione statistiche finali
-                self._last_embeddings = embeddings
+                self._last_embeddings = final_embeddings  # 🆕 Usa embedding processati
                 self._last_cluster_labels = cluster_labels
                 self._last_cluster_info = cluster_info
                 
@@ -3911,8 +4041,18 @@ class EndToEndPipeline:
                 embeddings, cluster_labels, representatives, suggested_labels = self.esegui_clustering(sessioni)
                 cluster_info = self._generate_cluster_info_from_labels(cluster_labels, session_texts)
                 
+                # 🆕 SALVA EMBEDDING PROCESSATI anche per il clustering completo
+                # In esegui_clustering(), gli embeddings sono già processati dal clusterer
+                final_embeddings = getattr(self.clusterer, 'final_embeddings', embeddings)
+                if hasattr(self.clusterer, 'final_embeddings') and self.clusterer.final_embeddings is not None:
+                    print(f"✅ [DEBUG EMBED] Clustering completo - usando embedding processati: {final_embeddings.shape}")
+                    if hasattr(self.clusterer, 'umap_info') and self.clusterer.umap_info.get('applied'):
+                        print(f"   📏 UMAP applicato: {self.clusterer.umap_info['input_shape']} → {self.clusterer.umap_info['output_shape']}")
+                else:
+                    print(f"⚠️ [DEBUG EMBED] Clustering completo - fallback a embedding originali: {final_embeddings.shape}")
+                
                 # Salva dati per visualizzazione statistiche finali
-                self._last_embeddings = embeddings
+                self._last_embeddings = final_embeddings  # 🆕 Usa embedding processati
                 self._last_cluster_labels = cluster_labels
                 self._last_cluster_info = cluster_info
                 
@@ -4149,29 +4289,57 @@ class EndToEndPipeline:
                         }
                 
                 else:
-                    # Outlier: classificazione diretta con ensemble
-                    print(f"   🎯 Outlier {session_id}: classificazione diretta...")
-                    try:
-                        prediction = self.ensemble_classifier.predict_with_ensemble(
-                            session_texts[i],
-                            return_details=True,
-                            embedder=self.embedder
-                        )
-                        prediction['method'] = 'OUTLIER'
-                        prediction['cluster_id'] = -1
-                        
-                    except Exception as e:
-                        # Se la classificazione fallisce, è un errore grave che va gestito upstream
-                        print(f"❌ ERRORE CRITICO: Classificazione outlier fallita per {session_id}: {e}")
-                        raise Exception(f"Classificazione outlier fallita: {e}")
+                    # 🎯 OUTLIER: Trattato come rappresentante di se stesso
+                    # Gli outlier sono già stati processati come rappresentanti durante il training
+                    # e hanno già un'etichetta assegnata tramite reviewed_labels[-1]
+                    print(f"   🎯 Outlier {session_id}: usando etichetta da rappresentante...")
                     
-                    # ✅ CORREZIONE BUG: Aggiungi cluster_metadata per OUTLIER
+                    # Verifica se esiste etichetta outlier da training
+                    outlier_label = cluster_final_labels.get(-1)
+                    if outlier_label:
+                        # Usa l'etichetta definita per gli outlier durante il training
+                        prediction = {
+                            'predicted_label': outlier_label['label'],
+                            'confidence': outlier_label['confidence'],
+                            'ensemble_confidence': outlier_label['confidence'],
+                            'method': 'OUTLIER_AS_REPRESENTATIVE',
+                            'cluster_id': -1,
+                            'llm_prediction': None,
+                            'ml_prediction': {
+                                'predicted_label': outlier_label['label'],
+                                'confidence': outlier_label['confidence']
+                            }
+                        }
+                    else:
+                        # Fallback: se non c'è etichetta outlier, significa che non è stato fatto training
+                        # In questo caso classifichiamo direttamente (scenario senza training)
+                        print(f"   ⚠️ Nessuna etichetta outlier da training, classificazione diretta...")
+                        try:
+                            prediction = self.ensemble_classifier.predict_with_ensemble(
+                                session_texts[i],
+                                return_details=True,
+                                embedder=self.embedder
+                            )
+                            prediction['method'] = 'OUTLIER_NO_TRAINING'
+                            prediction['cluster_id'] = -1
+                        except Exception as e:
+                            print(f"❌ ERRORE: Classificazione outlier fallita per {session_id}: {e}")
+                            # Fallback con etichetta di default
+                            prediction = {
+                                'predicted_label': 'altro',
+                                'confidence': 0.3,
+                                'ensemble_confidence': 0.3,
+                                'method': 'OUTLIER_FALLBACK',
+                                'cluster_id': -1
+                            }
+                    
+                    # ✅ Aggiungi cluster_metadata per OUTLIER
                     prediction['cluster_metadata'] = {
                         'cluster_id': -1,
-                        'selection_reason': 'outlier',
+                        'selection_reason': 'outlier_as_representative',
                         'is_outlier': True,
-                        'is_representative': False,
-                        'classified_individually': True
+                        'is_representative': True,  # 🎯 CORREZIONE: outlier = rappresentante
+                        'classified_as_representative': True
                     }
                 
                 all_predictions.append(prediction)
@@ -4309,12 +4477,18 @@ class EndToEndPipeline:
                                     reviewed_labels: Dict[int, str]) -> Dict[str, Any]:
         """
         Propaga le etichette dai rappresentanti di cluster a tutte le sessioni del cluster
-        e salva le classificazioni nel database MongoDB.
+        e applica etichette dai training agli outlier (che sono rappresentanti di se stessi).
+        Salva tutte le classificazioni nel database MongoDB.
+        
+        LOGICA CORRETTA:
+        - Sessioni in cluster: propagazione da rappresentanti
+        - Outlier: utilizzano etichette già assegnate durante training (non riclassificati)
         
         Args:
             sessioni: Dizionario delle sessioni {session_id: session_data}
             cluster_labels: Array delle etichette cluster per ogni sessione
             reviewed_labels: Dizionario {cluster_id: final_label} dalle review umane
+                           (deve includere -1 per outlier se ci sono stati)
             
         Returns:
             Statistiche della propagazione
@@ -4365,74 +4539,49 @@ class EndToEndPipeline:
                     stats['propagated_by_cluster'][cluster_id]['count'] += 1
                     
                 else:
-                    # 🔧 CORREZIONE: Outlier deve essere classificato come rappresentante di se stesso
-                    # Gli outlier ricevono classificazione completa ML+LLM invece di hardcode 'altro'
-                    session_text = session_data.get('testo_completo', '')
-                    outlier_classification_details = None  # Per salvare dettagli classificazione
+                    # � PROBLEMA RISOLTO: Outlier NON dovrebbero mai entrare in propagazione!
+                    # Gli outlier sono rappresentanti di se stessi e dovrebbero essere già stati processati
+                    print(f"❌ ERRORE ARCHITETTURALE: Outlier {session_id} (cluster {cluster_id}) in propagazione!")
+                    print(f"   🔧 Gli outlier dovrebbero essere già stati processati come rappresentanti")
                     
-                    if session_text and hasattr(self, 'ensemble_classifier') and self.ensemble_classifier:
-                        try:
-                            # Classifica l'outlier con la stessa logica dei rappresentanti
-                            outlier_prediction = self.ensemble_classifier.predict_with_ensemble(
-                                session_text,
-                                return_details=True,
-                                embedder=self.embedder
-                            )
-                            
-                            # Salva dettagli per uso successivo nel salvataggio
-                            outlier_classification_details = outlier_prediction
-                            
-                            # Usa risultato dell'ensemble
-                            final_label = outlier_prediction.get('predicted_label', 'altro')
-                            confidence = outlier_prediction.get('ensemble_confidence', outlier_prediction.get('confidence', 0.5))
-                            method = 'OUTLIER_ENSEMBLE_CLASSIFICATION'
-                            notes = f"Outlier classificato individualmente (cluster {cluster_id})" if cluster_id != -1 else "Outlier classificato individualmente"
-                            
-                            print(f"🎯 OUTLIER CLASSIFICATO: {session_id} -> {final_label} (conf: {confidence:.3f})")
-                            
-                        except Exception as e:
-                            # Fallback in caso di errore
-                            print(f"⚠️ Errore classificazione outlier {session_id}: {e}")
-                            final_label = 'altro'
-                            confidence = 0.3
-                            method = 'OUTLIER_FALLBACK'
-                            notes = f"Outlier - fallback dopo errore classificazione (cluster {cluster_id})" if cluster_id != -1 else "Outlier - fallback dopo errore"
-                            outlier_classification_details = None
+                    # 🎯 CORREZIONE TEMPORANEA: Usa etichetta outlier da reviewed_labels se disponibile
+                    if -1 in reviewed_labels:
+                        # Usa l'etichetta assegnata agli outlier durante il training
+                        final_label = reviewed_labels[-1]
+                        confidence = 0.7  # Confidenza media per outlier da training
+                        method = 'OUTLIER_FROM_TRAINING'
+                        notes = f"Outlier - etichetta da training rappresentanti (cluster {cluster_id})"
+                        print(f"✅ OUTLIER RECUPERATO DA TRAINING: {session_id} -> {final_label}")
+                        stats['labeled_sessions'] += 1
                     else:
-                        # Fallback se ensemble non disponibile
+                        # Fallback: outlier senza training (caso critico)
                         final_label = 'altro'
                         confidence = 0.3
-                        method = 'OUTLIER_NO_ENSEMBLE'
-                        notes = f"Outlier - ensemble non disponibile (cluster {cluster_id})" if cluster_id != -1 else "Outlier - ensemble non disponibile"
-                        outlier_classification_details = None
+                        method = 'OUTLIER_NO_TRAINING_FALLBACK'
+                        notes = f"Outlier - fallback senza training (cluster {cluster_id})"
+                        print(f"⚠️ OUTLIER SENZA TRAINING: {session_id} -> fallback 'altro'")
+                        stats['unlabeled_sessions'] += 1
                     
-                    # 🆕 VALIDAZIONE "ALTRO" PER OUTLIER - STESSA LOGICA DEI RAPPRESENTANTI
+                    # 🆕 VALIDAZIONE "ALTRO" solo se necessario
                     if final_label == 'altro' and hasattr(self, 'interactive_trainer') and self.interactive_trainer.altro_validator:
                         try:
                             conversation_text = session_data.get('testo_completo', '')
                             if conversation_text:
                                 print(f"🔍 VALIDAZIONE ALTRO per outlier {session_id}")
-                                # Esegui validazione del tag "altro" per l'outlier
                                 validated_label, validated_confidence, validation_info = self.interactive_trainer.handle_altro_classification(
                                     conversation_text=conversation_text,
-                                    force_human_decision=False  # Automatico durante propagazione
+                                    force_human_decision=False
                                 )
                                 
-                                # Usa il risultato della validazione se diverso da "altro"
                                 if validated_label != 'altro':
                                     final_label = validated_label
                                     confidence = validated_confidence
-                                    method = f"{method}_ALTRO_VAL"  # Marca che è stato validato
+                                    method = f"{method}_ALTRO_VAL"
                                     notes = f"{notes} - Validato da 'altro' a '{validated_label}'"
-                                    print(f"✅ OUTLIER RICLASSIFICATO: {session_id} 'altro' -> '{validated_label}' (conf: {confidence:.3f})")
-                                else:
-                                    print(f"🔄 OUTLIER CONFERMATO ALTRO: {session_id} rimane 'altro'")
+                                    print(f"✅ OUTLIER RICLASSIFICATO: {session_id} 'altro' -> '{validated_label}'")
                                     
                         except Exception as e:
                             print(f"⚠️ Errore validazione altro per outlier {session_id}: {e}")
-                            # Il final_label rimane quello precedente in caso di errore
-                    
-                    stats['unlabeled_sessions'] += 1
                 
                 # Aggiorna distribuzione confidenze
                 conf_range = f"{int(confidence*10)*10}%-{int(confidence*10)*10+10}%"
@@ -4450,35 +4599,12 @@ class EndToEndPipeline:
                     # Distingue tra outlier già classificati e altri casi
                     conversation_text = session_data.get('testo_completo', '')
                     
-                    # Inizializza ml_result e llm_result
+                    # Inizializza ml_result e llm_result per salvataggio MongoDB
                     ml_result = None
                     llm_result = None
                     
-                    # 🎯 PRIORITÀ: Se è un outlier già classificato, usa quei risultati
-                    if 'outlier_classification_details' in locals() and outlier_classification_details:
-                        # Outlier già classificato - estrai ml_result e llm_result dai dettagli
-                        if outlier_classification_details.get('ml_prediction'):
-                            ml_pred = outlier_classification_details['ml_prediction']
-                            ml_result = {
-                                'predicted_label': ml_pred.get('predicted_label', 'unknown'),
-                                'confidence': ml_pred.get('confidence', 0.0),
-                                'method': 'ml_ensemble_outlier',
-                                'probabilities': ml_pred.get('probabilities', {})
-                            }
-                        
-                        if outlier_classification_details.get('llm_prediction'):
-                            llm_pred = outlier_classification_details['llm_prediction']
-                            llm_result = {
-                                'predicted_label': llm_pred.get('predicted_label', 'unknown'),
-                                'confidence': llm_pred.get('confidence', 0.0),
-                                'method': 'llm_ensemble_outlier',
-                                'reasoning': llm_pred.get('reasoning', '')
-                            }
-                        
-                        print(f"🎯 OUTLIER SALVATO: {session_id} ML={ml_result['predicted_label'] if ml_result else 'N/A'}, LLM={llm_result['predicted_label'] if llm_result else 'N/A'}")
-                    
-                    # 🔄 ALTRIMENTI: Usa logica generale per propagati e rappresentanti
-                    elif hasattr(self, 'ensemble') and self.ensemble and conversation_text:
+                    # 🔄 Usa logica generale per sessioni (sia cluster che outlier)
+                    if hasattr(self, 'ensemble') and self.ensemble and conversation_text:
                         try:
                             # Esegui classificazione con ensemble
                             ensemble_result = self.ensemble.classify_text(conversation_text)

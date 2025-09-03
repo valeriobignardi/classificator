@@ -48,6 +48,205 @@ from esempi_api_server import esempi_bp
 sys.path.append(os.path.join(os.path.dirname(__file__), 'AIConfiguration'))
 from AIConfiguration.ai_configuration_service import AIConfigurationService
 
+def init_soglie_table():
+    """
+    Inizializza la tabella soglie nel database MySQL locale se non esiste
+    
+    Tabella: soglie
+    Scopo: Memorizzare le soglie Review Queue + parametri HDBSCAN/UMAP per ogni tenant
+    Tracciabilità: ID progressivo per storico modifiche
+    
+    Ultima modifica: 03/09/2025 - Valerio Bignardi
+    """
+    try:
+        import mysql.connector
+        from mysql.connector import Error
+        import yaml
+        
+        # Carica configurazione database
+        config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        
+        db_config = config['tag_database']
+        
+        # Connessione al database
+        connection = mysql.connector.connect(
+            host=db_config['host'],
+            port=db_config['port'],
+            user=db_config['user'],
+            password=db_config['password'],
+            database=db_config['database'],
+            autocommit=True
+        )
+        
+        cursor = connection.cursor()
+        
+        # Verifica se la tabella esiste
+        cursor.execute("""
+        SELECT COUNT(*) 
+        FROM information_schema.tables 
+        WHERE table_schema = %s 
+        AND table_name = 'soglie'
+        """, (db_config['database'],))
+        
+        table_exists = cursor.fetchone()[0] > 0
+        
+        if table_exists:
+            print("🔄 [SOGLIE DB] Tabella 'soglie' esistente - Verifico schema per unificazione parametri...")
+            
+            # Verifica se contiene già i campi clustering
+            cursor.execute("""
+            SELECT COUNT(*) 
+            FROM information_schema.columns 
+            WHERE table_schema = %s 
+            AND table_name = 'soglie' 
+            AND column_name = 'min_cluster_size'
+            """, (db_config['database'],))
+            
+            has_clustering_fields = cursor.fetchone()[0] > 0
+            
+            if not has_clustering_fields:
+                print("📊 [SOGLIE DB] Schema vecchio rilevato - Backup dati e aggiornamento tabella...")
+                
+                # Backup dati esistenti
+                cursor.execute("SELECT * FROM soglie")
+                existing_data = cursor.fetchall()
+                
+                # Drop tabella vecchia
+                cursor.execute("DROP TABLE soglie")
+                print("🗑️ [SOGLIE DB] Tabella vecchia eliminata")
+                
+                # Ricreo con schema completo
+                create_table_sql = """
+                CREATE TABLE soglie (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    tenant_id VARCHAR(255) NOT NULL,
+                    config_source VARCHAR(50) NOT NULL DEFAULT 'custom',
+                    last_updated DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    
+                    -- SOGLIE REVIEW QUEUE
+                    enable_smart_review BOOLEAN NOT NULL DEFAULT TRUE,
+                    max_pending_per_batch INT NOT NULL DEFAULT 150,
+                    minimum_consensus_threshold INT NOT NULL DEFAULT 2,
+                    outlier_confidence_threshold DECIMAL(3,2) NOT NULL DEFAULT 0.60,
+                    propagated_confidence_threshold DECIMAL(3,2) NOT NULL DEFAULT 0.75,
+                    representative_confidence_threshold DECIMAL(3,2) NOT NULL DEFAULT 0.85,
+                    
+                    -- PARAMETRI HDBSCAN BASE
+                    min_cluster_size INT NOT NULL DEFAULT 5,
+                    min_samples INT NOT NULL DEFAULT 3,
+                    cluster_selection_epsilon DECIMAL(4,3) NOT NULL DEFAULT 0.120,
+                    metric VARCHAR(50) NOT NULL DEFAULT 'cosine',
+                    
+                    -- PARAMETRI HDBSCAN AVANZATI
+                    cluster_selection_method VARCHAR(50) NOT NULL DEFAULT 'leaf',
+                    alpha DECIMAL(3,2) NOT NULL DEFAULT 0.8,
+                    max_cluster_size INT NOT NULL DEFAULT 0,
+                    allow_single_cluster BOOLEAN NOT NULL DEFAULT FALSE,
+                    only_user BOOLEAN NOT NULL DEFAULT TRUE,
+                    
+                    -- PARAMETRI UMAP
+                    use_umap BOOLEAN NOT NULL DEFAULT FALSE,
+                    umap_n_neighbors INT NOT NULL DEFAULT 15,
+                    umap_min_dist DECIMAL(3,2) NOT NULL DEFAULT 0.10,
+                    umap_metric VARCHAR(50) NOT NULL DEFAULT 'cosine',
+                    umap_n_components INT NOT NULL DEFAULT 50,
+                    umap_random_state INT NOT NULL DEFAULT 42,
+                    
+                    INDEX idx_tenant_id (tenant_id),
+                    INDEX idx_last_updated (last_updated),
+                    INDEX idx_tenant_config (tenant_id, last_updated DESC)
+                ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+                """
+                
+                cursor.execute(create_table_sql)
+                print("✅ [SOGLIE DB] Tabella 'soglie' ricreata con schema unificato (Review Queue + Clustering)")
+                
+                # Restore dati esistenti con valori default per campi clustering
+                if existing_data:
+                    print(f"🔄 [SOGLIE DB] Ripristino {len(existing_data)} record esistenti...")
+                    
+                    for record in existing_data:
+                        # record = (id, tenant_id, config_source, last_updated, enable_smart_review, 
+                        #          max_pending_per_batch, minimum_consensus_threshold, outlier_confidence_threshold,
+                        #          propagated_confidence_threshold, representative_confidence_threshold, created_at)
+                        
+                        restore_sql = """
+                        INSERT INTO soglie (
+                            tenant_id, config_source, last_updated, created_at,
+                            enable_smart_review, max_pending_per_batch, minimum_consensus_threshold,
+                            outlier_confidence_threshold, propagated_confidence_threshold, representative_confidence_threshold
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """
+                        
+                        cursor.execute(restore_sql, (
+                            record[1], record[2], record[3], record[10] if len(record) > 10 else record[3],
+                            record[4], record[5], record[6], record[7], record[8], record[9]
+                        ))
+                    
+                    print(f"✅ [SOGLIE DB] {len(existing_data)} record ripristinati con successo")
+                    
+            else:
+                print("✅ [SOGLIE DB] Schema già aggiornato, skip modifica")
+                
+        else:
+            # Crea tabella completa da zero
+            create_table_sql = """
+            CREATE TABLE soglie (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                tenant_id VARCHAR(255) NOT NULL,
+                config_source VARCHAR(50) NOT NULL DEFAULT 'custom',
+                last_updated DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                
+                -- SOGLIE REVIEW QUEUE
+                enable_smart_review BOOLEAN NOT NULL DEFAULT TRUE,
+                max_pending_per_batch INT NOT NULL DEFAULT 150,
+                minimum_consensus_threshold INT NOT NULL DEFAULT 2,
+                outlier_confidence_threshold DECIMAL(3,2) NOT NULL DEFAULT 0.60,
+                propagated_confidence_threshold DECIMAL(3,2) NOT NULL DEFAULT 0.75,
+                representative_confidence_threshold DECIMAL(3,2) NOT NULL DEFAULT 0.85,
+                
+                -- PARAMETRI HDBSCAN BASE
+                min_cluster_size INT NOT NULL DEFAULT 5,
+                min_samples INT NOT NULL DEFAULT 3,
+                cluster_selection_epsilon DECIMAL(4,3) NOT NULL DEFAULT 0.120,
+                metric VARCHAR(50) NOT NULL DEFAULT 'cosine',
+                
+                -- PARAMETRI HDBSCAN AVANZATI
+                cluster_selection_method VARCHAR(50) NOT NULL DEFAULT 'leaf',
+                alpha DECIMAL(3,2) NOT NULL DEFAULT 0.8,
+                max_cluster_size INT NOT NULL DEFAULT 0,
+                allow_single_cluster BOOLEAN NOT NULL DEFAULT FALSE,
+                only_user BOOLEAN NOT NULL DEFAULT TRUE,
+                
+                -- PARAMETRI UMAP
+                use_umap BOOLEAN NOT NULL DEFAULT FALSE,
+                umap_n_neighbors INT NOT NULL DEFAULT 15,
+                umap_min_dist DECIMAL(3,2) NOT NULL DEFAULT 0.10,
+                umap_metric VARCHAR(50) NOT NULL DEFAULT 'cosine',
+                umap_n_components INT NOT NULL DEFAULT 50,
+                umap_random_state INT NOT NULL DEFAULT 42,
+                
+                INDEX idx_tenant_id (tenant_id),
+                INDEX idx_last_updated (last_updated),
+                INDEX idx_tenant_config (tenant_id, last_updated DESC)
+            ) ENGINE=InnoDB CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+            """
+            
+            cursor.execute(create_table_sql)
+            print("✅ [SOGLIE DB] Tabella 'soglie' creata con schema completo (Review Queue + Clustering)")
+            
+        cursor.close()
+        connection.close()
+        
+    except Error as e:
+        print(f"❌ [SOGLIE DB] Errore inizializzazione tabella soglie: {e}")
+    except Exception as e:
+        print(f"❌ [SOGLIE DB] Errore generico inizializzazione tabella: {e}")
+
 app = Flask(__name__)
 # Configurazione CORS generica per sviluppo
 CORS(app, 
@@ -2749,9 +2948,10 @@ def get_available_tenants():
 @app.route('/api/stats/labels/<tenant_name>', methods=['GET'])
 def get_label_statistics(tenant_name: str):
     """
-    Ottieni statistiche delle etichette per un tenant specifico
+    Ottieni statistiche delle etichette per un tenant specifico da MongoDB
     
-    PRINCIPIO UNIVERSALE: Usa tenant_identifier (UUID) e risolve internamente
+    NUOVA LOGICA: Legge direttamente da MongoDB nella collezione specifica del tenant
+    Pattern collezione: {tenant_slug}_{tenant_id}
     
     Args:
         tenant_identifier: UUID del tenant
@@ -2760,45 +2960,109 @@ def get_label_statistics(tenant_name: str):
         # Risolve tenant_name in oggetto Tenant
         tenant = resolve_tenant_from_identifier(tenant_name)
         
-        from TagDatabase.tag_database_connector import TagDatabaseConnector
-        tag_db = TagDatabaseConnector(tenant=tenant)
-        tag_db.connetti()
+        # 🔄 NUOVA LOGICA: Connessione diretta a MongoDB
+        from pymongo import MongoClient
+        import yaml
         
-        # Query per ottenere le statistiche delle etichette
-        query = """
-        SELECT 
-            tag_name,
-            COUNT(*) as count,
-            AVG(confidence_score) as avg_confidence,
-            classification_method,
-            COUNT(DISTINCT session_id) as unique_sessions
-        FROM session_classifications 
-        WHERE tenant_name = %s
-        GROUP BY tag_name, classification_method
-        ORDER BY count DESC
-        """
+        # Carica configurazione MongoDB
+        with open('config.yaml', 'r') as f:
+            config = yaml.safe_load(f)
         
-        results = tag_db.esegui_query(query, (tenant.tenant_name,))
+        mongo_url = config.get('mongodb', {}).get('url', 'mongodb://localhost:27017')
+        mongo_db_name = config.get('mongodb', {}).get('database', 'classificazioni')
         
-        # Query per statistiche generali
-        general_query = """
-        SELECT 
-            COUNT(*) as total_classifications,
-            COUNT(DISTINCT session_id) as total_sessions,
-            COUNT(DISTINCT tag_name) as total_labels,
-            AVG(confidence_score) as avg_confidence_overall
-        FROM session_classifications 
-        WHERE tenant_name = %s
-        """
+        # Connessione MongoDB
+        client = MongoClient(mongo_url, serverSelectionTimeoutMS=5000)
+        db = client[mongo_db_name]
         
-        general_results = tag_db.esegui_query(general_query, (tenant.tenant_name,))
-        tag_db.disconnetti()
+        # 📝 Pattern collezione: {tenant_slug}_{tenant_id}
+        collection_name = f"{tenant.tenant_slug}_{tenant.tenant_id}"
         
-        # Organizza i dati per etichetta
+        if collection_name not in db.list_collection_names():
+            # Se la collezione non esiste, restituisci dati vuoti
+            return jsonify({
+                'success': True,
+                'tenant': tenant.tenant_name,
+                'labels': [],
+                'general_stats': {
+                    'total_classifications': 0,
+                    'total_sessions': 0,
+                    'total_labels': 0,
+                    'avg_confidence_overall': 0
+                },
+                'message': f'Collezione {collection_name} non trovata in MongoDB'
+            }), 200
+        
+        collection = db[collection_name]
+        
+        # 📊 Aggregazione per statistiche etichette
+        pipeline_labels = [
+            {
+                '$match': {
+                    'classification': {'$exists': True, '$ne': None}
+                }
+            },
+            {
+                '$group': {
+                    '_id': {
+                        'tag_name': '$classification',
+                        'method': '$classification_method'
+                    },
+                    'count': {'$sum': 1},
+                    'avg_confidence': {'$avg': '$confidence'},
+                    'unique_sessions': {'$addToSet': '$session_id'}
+                }
+            },
+            {
+                '$addFields': {
+                    'unique_sessions_count': {'$size': '$unique_sessions'}
+                }
+            },
+            {
+                '$sort': {'count': -1}
+            }
+        ]
+        
+        label_results = list(collection.aggregate(pipeline_labels))
+        
+        # 📊 Aggregazione per statistiche generali
+        pipeline_general = [
+            {
+                '$match': {
+                    'classification': {'$exists': True, '$ne': None}
+                }
+            },
+            {
+                '$group': {
+                    '_id': None,
+                    'total_classifications': {'$sum': 1},
+                    'total_sessions': {'$addToSet': '$session_id'},
+                    'total_labels': {'$addToSet': '$classification'},
+                    'avg_confidence_overall': {'$avg': '$confidence'}
+                }
+            },
+            {
+                '$addFields': {
+                    'total_sessions_count': {'$size': '$total_sessions'},
+                    'total_labels_count': {'$size': '$total_labels'}
+                }
+            }
+        ]
+        
+        general_results = list(collection.aggregate(pipeline_general))
+        
+        client.close()
+        
+        # 🔄 Organizza i dati per etichetta da risultati MongoDB
         label_stats = {}
-        if results:
-            for row in results:
-                tag_name, count, avg_confidence, method, unique_sessions = row
+        if label_results:
+            for result in label_results:
+                tag_name = result['_id']['tag_name']
+                method = result['_id'].get('method', 'unknown')
+                count = result['count']
+                avg_confidence = result.get('avg_confidence', 0)
+                unique_sessions = result.get('unique_sessions_count', 0)
+                
                 if tag_name not in label_stats:
                     label_stats[tag_name] = {
                         'tag_name': tag_name,
@@ -2813,14 +3077,22 @@ def get_label_statistics(tenant_name: str):
                 label_stats[tag_name]['unique_sessions'] = max(label_stats[tag_name]['unique_sessions'], unique_sessions)
                 label_stats[tag_name]['methods'][method] = count
         
-        # Statistiche generali
+        # 🔄 Statistiche generali da risultati MongoDB
         general_stats = {}
-        if general_results and general_results[0]:
+        if general_results and len(general_results) > 0:
+            general_result = general_results[0]
             general_stats = {
-                'total_classifications': general_results[0][0] or 0,
-                'total_sessions': general_results[0][1] or 0,
-                'total_labels': general_results[0][2] or 0,
-                'avg_confidence_overall': round(general_results[0][3] or 0, 3)
+                'total_classifications': general_result.get('total_classifications', 0),
+                'total_sessions': general_result.get('total_sessions_count', 0),
+                'total_labels': general_result.get('total_labels_count', 0),
+                'avg_confidence_overall': round(general_result.get('avg_confidence_overall', 0) or 0, 3)
+            }
+        else:
+            general_stats = {
+                'total_classifications': 0,
+                'total_sessions': 0,
+                'total_labels': 0,
+                'avg_confidence_overall': 0
             }
         
         return jsonify({
@@ -6711,6 +6983,741 @@ def get_clustering_metrics_trend(tenant_id):
 
 
 # ============================================================
+# SEZIONE API: Gestione Soglie Review Queue per Tenant
+# ============================================================
+
+@app.route('/api/review-queue/<tenant_id>/thresholds', methods=['GET'])
+def get_review_queue_thresholds(tenant_id):
+    """
+    Recupera le soglie Review Queue + parametri clustering per un tenant dal database MySQL
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        JSON con soglie review queue + parametri HDBSCAN/UMAP (ultimo record per tenant)
+        
+    Data ultima modifica: 2025-09-03 - Valerio Bignardi
+    """
+    try:
+        import mysql.connector
+        from mysql.connector import Error
+        import yaml
+        
+        # Carica configurazione database
+        config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        
+        db_config = config['tag_database']
+        
+        # Connessione al database
+        connection = mysql.connector.connect(
+            host=db_config['host'],
+            port=db_config['port'],
+            user=db_config['user'],
+            password=db_config['password'],
+            database=db_config['database'],
+            autocommit=True
+        )
+        
+        cursor = connection.cursor(dictionary=True)
+        
+        # Query per recuperare l'ultimo record completo per il tenant
+        query = """
+        SELECT *
+        FROM soglie 
+        WHERE tenant_id = %s 
+        ORDER BY id DESC 
+        LIMIT 1
+        """
+        
+        cursor.execute(query, (tenant_id,))
+        db_result = cursor.fetchone()
+        
+        if db_result:
+            # Parametri dal database
+            thresholds = {
+                # SOGLIE REVIEW QUEUE
+                'outlier_confidence_threshold': float(db_result['outlier_confidence_threshold']),
+                'propagated_confidence_threshold': float(db_result['propagated_confidence_threshold']),
+                'representative_confidence_threshold': float(db_result['representative_confidence_threshold']),
+                'minimum_consensus_threshold': db_result['minimum_consensus_threshold'],
+                'enable_smart_review': bool(db_result['enable_smart_review']),
+                'max_pending_per_batch': db_result['max_pending_per_batch'],
+            }
+            
+            # PARAMETRI CLUSTERING
+            clustering_parameters = {
+                # HDBSCAN BASE
+                'min_cluster_size': db_result['min_cluster_size'],
+                'min_samples': db_result['min_samples'], 
+                'cluster_selection_epsilon': float(db_result['cluster_selection_epsilon']),
+                'metric': db_result['metric'],
+                
+                # HDBSCAN AVANZATI
+                'cluster_selection_method': db_result['cluster_selection_method'],
+                'alpha': float(db_result['alpha']),
+                'max_cluster_size': db_result['max_cluster_size'],
+                'allow_single_cluster': bool(db_result['allow_single_cluster']),
+                'only_user': bool(db_result['only_user']),
+                
+                # UMAP
+                'use_umap': bool(db_result['use_umap']),
+                'umap_n_neighbors': db_result['umap_n_neighbors'],
+                'umap_min_dist': float(db_result['umap_min_dist']),
+                'umap_metric': db_result['umap_metric'],
+                'umap_n_components': db_result['umap_n_components'],
+                'umap_random_state': db_result['umap_random_state']
+            }
+            
+            config_source = db_result['config_source']
+            last_updated = db_result['last_updated'].isoformat() if db_result['last_updated'] else datetime.now().isoformat()
+            
+            print(f"📊 [CONFIG GET] Tenant {tenant_id}: CUSTOM parametri caricati dal DB (record ID {db_result['id']})")
+            
+        else:
+            # Fallback a parametri default da config.yaml
+            thresholds = {
+                'outlier_confidence_threshold': 0.6,
+                'propagated_confidence_threshold': 0.75, 
+                'representative_confidence_threshold': 0.85,
+                'minimum_consensus_threshold': 2,
+                'enable_smart_review': True,
+                'max_pending_per_batch': 150
+            }
+            
+            # Parametri clustering default da config.yaml
+            clustering_base_config = config.get('clustering', {})
+            bertopic_config = config.get('bertopic', {})
+            
+            clustering_parameters = {
+                # HDBSCAN BASE
+                'min_cluster_size': clustering_base_config.get('min_cluster_size', 5),
+                'min_samples': clustering_base_config.get('min_samples', 3),
+                'cluster_selection_epsilon': 0.12,
+                'metric': 'cosine',
+                
+                # HDBSCAN AVANZATI  
+                'cluster_selection_method': 'leaf',
+                'alpha': 0.8,
+                'max_cluster_size': 0,
+                'allow_single_cluster': False,
+                'only_user': True,
+                
+                # UMAP
+                'use_umap': False,
+                'umap_n_neighbors': bertopic_config.get('umap_params', {}).get('n_neighbors', 15),
+                'umap_min_dist': bertopic_config.get('umap_params', {}).get('min_dist', 0.1),
+                'umap_metric': bertopic_config.get('umap_params', {}).get('metric', 'cosine'),
+                'umap_n_components': bertopic_config.get('umap_params', {}).get('n_components', 50),
+                'umap_random_state': 42
+            }
+            
+            config_source = 'default'
+            last_updated = datetime.now().isoformat()
+            
+            print(f"📊 [CONFIG GET] Tenant {tenant_id}: DEFAULT parametri caricati da config.yaml")
+        
+        cursor.close()
+        connection.close()
+        
+        response = {
+            'success': True,
+            'tenant_id': tenant_id,
+            'thresholds': thresholds,
+            'clustering_parameters': clustering_parameters,
+            'config_source': config_source,
+            'last_updated': last_updated
+        }
+        
+        print(f"🔍 [DEBUG CONFIG] Tenant {tenant_id} - Parametri caricati:")
+        print(f"   🎯 Review Queue: outlier={thresholds['outlier_confidence_threshold']}, propagated={thresholds['propagated_confidence_threshold']}")
+        print(f"   🎯 HDBSCAN: min_cluster_size={clustering_parameters['min_cluster_size']}, epsilon={clustering_parameters['cluster_selection_epsilon']}")
+        print(f"   🎯 UMAP: enabled={clustering_parameters['use_umap']}, n_neighbors={clustering_parameters['umap_n_neighbors']}")
+        print(f"   🎯 Fonte: {config_source}")
+        
+        return jsonify(response)
+        
+    except Error as db_error:
+        error_msg = f'Errore database: {str(db_error)}'
+        print(f"❌ [CONFIG GET] {error_msg}")
+        
+        # Fallback completo a config.yaml in caso di errore database
+        try:
+            config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+            
+            clustering_base_config = config.get('clustering', {})
+            bertopic_config = config.get('bertopic', {})
+            
+            return jsonify({
+                'success': True,
+                'tenant_id': tenant_id,
+                'thresholds': {
+                    'outlier_confidence_threshold': 0.6,
+                    'propagated_confidence_threshold': 0.75,
+                    'representative_confidence_threshold': 0.85,
+                    'minimum_consensus_threshold': 2,
+                    'enable_smart_review': True,
+                    'max_pending_per_batch': 150
+                },
+                'clustering_parameters': {
+                    'min_cluster_size': clustering_base_config.get('min_cluster_size', 5),
+                    'min_samples': clustering_base_config.get('min_samples', 3),
+                    'cluster_selection_epsilon': 0.12,
+                    'metric': 'cosine',
+                    'cluster_selection_method': 'leaf',
+                    'alpha': 0.8,
+                    'max_cluster_size': 0,
+                    'allow_single_cluster': False,
+                    'only_user': True,
+                    'use_umap': False,
+                    'umap_n_neighbors': bertopic_config.get('umap_params', {}).get('n_neighbors', 15),
+                    'umap_min_dist': bertopic_config.get('umap_params', {}).get('min_dist', 0.1),
+                    'umap_metric': bertopic_config.get('umap_params', {}).get('metric', 'cosine'),
+                    'umap_n_components': bertopic_config.get('umap_params', {}).get('n_components', 50),
+                    'umap_random_state': 42
+                },
+                'config_source': 'fallback',
+                'last_updated': datetime.now().isoformat(),
+                'database_error': error_msg
+            })
+            
+        except Exception as fallback_error:
+            print(f"❌ [CONFIG GET] Errore anche nel fallback: {fallback_error}")
+            return jsonify({
+                'success': False,
+                'error': f'Errore database + fallback: {error_msg} / {fallback_error}',
+                'tenant_id': tenant_id
+            }), 500
+        
+    except Exception as e:
+        error_msg = f'Errore generico: {str(e)}'
+        print(f"❌ [CONFIG GET] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': tenant_id
+        }), 500
+    """
+    Recupera le soglie per la review queue di un tenant dal database MySQL
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        JSON con soglie review queue (ultimo record per tenant)
+        
+    Data ultima modifica: 2025-09-03 - Valerio Bignardi
+    """
+    try:
+        import mysql.connector
+        from mysql.connector import Error
+        import yaml
+        
+        # Carica configurazione database
+        config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        
+        db_config = config['tag_database']
+        
+        # Connessione al database
+        connection = mysql.connector.connect(
+            host=db_config['host'],
+            port=db_config['port'],
+            user=db_config['user'],
+            password=db_config['password'],
+            database=db_config['database'],
+            autocommit=True
+        )
+        
+        cursor = connection.cursor(dictionary=True)
+        
+        # Query per recuperare l'ultimo record per il tenant
+        query = """
+        SELECT 
+            config_source,
+            last_updated,
+            enable_smart_review,
+            max_pending_per_batch,
+            minimum_consensus_threshold,
+            outlier_confidence_threshold,
+            propagated_confidence_threshold,
+            representative_confidence_threshold
+        FROM soglie 
+        WHERE tenant_id = %s 
+        ORDER BY id DESC 
+        LIMIT 1
+        """
+        
+        cursor.execute(query, (tenant_id,))
+        db_result = cursor.fetchone()
+        
+        if db_result:
+            # Soglie dal database
+            thresholds = {
+                'outlier_confidence_threshold': float(db_result['outlier_confidence_threshold']),
+                'propagated_confidence_threshold': float(db_result['propagated_confidence_threshold']),
+                'representative_confidence_threshold': float(db_result['representative_confidence_threshold']),
+                'minimum_consensus_threshold': db_result['minimum_consensus_threshold'],
+                'enable_smart_review': bool(db_result['enable_smart_review']),
+                'max_pending_per_batch': db_result['max_pending_per_batch']
+            }
+            
+            config_source = db_result['config_source']
+            last_updated = db_result['last_updated'].isoformat() if db_result['last_updated'] else datetime.now().isoformat()
+        else:
+            # Soglie default da config.yaml (fallback)
+            thresholds = {
+                'outlier_confidence_threshold': 0.6,
+                'propagated_confidence_threshold': 0.75, 
+                'representative_confidence_threshold': 0.85,
+                'minimum_consensus_threshold': 2,
+                'enable_smart_review': True,
+                'max_pending_per_batch': 150
+            }
+            
+            config_source = 'default'
+            last_updated = datetime.now().isoformat()
+        
+        cursor.close()
+        connection.close()
+        
+        response = {
+            'success': True,
+            'tenant_id': tenant_id,
+            'thresholds': thresholds,
+            'config_source': config_source,
+            'last_updated': last_updated
+        }
+        
+        print(f"📊 [SOGLIE GET] Tenant {tenant_id}: {config_source} soglie caricate")
+        return jsonify(response)
+        
+    except Error as db_error:
+        error_msg = f'Errore database: {str(db_error)}'
+        print(f"❌ [SOGLIE GET] {error_msg}")
+        
+        # Fallback a soglie default in caso di errore database
+        return jsonify({
+            'success': True,
+            'tenant_id': tenant_id,
+            'thresholds': {
+                'outlier_confidence_threshold': 0.6,
+                'propagated_confidence_threshold': 0.75,
+                'representative_confidence_threshold': 0.85,
+                'minimum_consensus_threshold': 2,
+                'enable_smart_review': True,
+                'max_pending_per_batch': 150
+            },
+            'config_source': 'fallback',
+            'last_updated': datetime.now().isoformat(),
+            'database_error': error_msg
+        })
+        
+    except Exception as e:
+        error_msg = f'Errore generico: {str(e)}'
+        print(f"❌ [SOGLIE GET] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': tenant_id
+        }), 500
+    """
+    Recupera le soglie per la review queue di un tenant
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        JSON con soglie review queue
+        
+    Data ultima modifica: 2025-09-03
+    """
+    try:
+        # Percorso file configurazione soglie per il tenant
+        tenant_config_dir = os.path.join(os.path.dirname(__file__), 'tenant_configs')
+        tenant_thresholds_file = os.path.join(tenant_config_dir, f'{tenant_id}_review_thresholds.yaml')
+        
+        # Soglie default
+        default_thresholds = {
+            'outlier_confidence_threshold': 0.7,  # Sotto 0.7 → pending
+            'propagated_confidence_threshold': 0.8,  # Sotto 0.8 → pending
+            'representative_confidence_threshold': 0.9,  # Sotto 0.9 → pending
+            'minimum_consensus_threshold': 3,  # Minimo consenso per auto_classified
+            'enable_smart_review': True,  # Abilita review intelligente
+            'max_pending_per_batch': 100  # Max casi pending per batch
+        }
+        
+        # Carica soglie personalizzate se esistono
+        if os.path.exists(tenant_thresholds_file):
+            try:
+                with open(tenant_thresholds_file, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                    custom_thresholds = config.get('review_thresholds', {})
+                    
+                    # Merge con default (custom override default)
+                    thresholds = {**default_thresholds, **custom_thresholds}
+                    config_source = 'custom'
+                    last_updated = config.get('last_updated', 'unknown')
+                    
+                    print(f"📊 [REVIEW-QUEUE] Caricamento soglie personalizzate per tenant {tenant_id}")
+                    
+            except Exception as e:
+                print(f"⚠️ [REVIEW-QUEUE] Errore caricamento soglie personalizzate: {e}")
+                thresholds = default_thresholds
+                config_source = 'default_fallback'
+                last_updated = 'error'
+        else:
+            thresholds = default_thresholds
+            config_source = 'default'
+            last_updated = 'never'
+        
+        return jsonify({
+            'success': True,
+            'tenant_id': tenant_id,
+            'thresholds': thresholds,
+            'config_source': config_source,
+            'last_updated': last_updated,
+            'config_file': tenant_thresholds_file if config_source == 'custom' else None
+        }), 200
+        
+    except Exception as e:
+        error_msg = f'Errore caricamento soglie review queue: {str(e)}'
+        print(f"❌ [REVIEW-QUEUE] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': tenant_id
+        }), 500
+
+
+@app.route('/api/review-queue/<tenant_id>/thresholds', methods=['POST'])
+def update_review_queue_thresholds(tenant_id):
+    """
+    Aggiorna le soglie Review Queue + parametri clustering per un tenant nel database MySQL
+    Crea sempre un nuovo record per mantenere la tracciabilità storica
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        JSON con risultato aggiornamento
+        
+    Data ultima modifica: 2025-09-03 - Valerio Bignardi
+    """
+    try:
+        import mysql.connector
+        from mysql.connector import Error
+        import yaml
+        
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Dati mancanti'
+            }), 400
+        
+        # Estrae soglie e parametri clustering
+        new_thresholds = data.get('thresholds', {})
+        new_clustering = data.get('clustering_parameters', {})
+        
+        if not new_thresholds and not new_clustering:
+            return jsonify({
+                'success': False,
+                'error': 'Almeno soglie o parametri clustering devono essere forniti'
+            }), 400
+        
+        # Validazione soglie Review Queue
+        threshold_validations = {
+            'outlier_confidence_threshold': (0.0, 1.0),
+            'propagated_confidence_threshold': (0.0, 1.0),
+            'representative_confidence_threshold': (0.0, 1.0),
+            'minimum_consensus_threshold': (1, 10),
+            'enable_smart_review': [True, False],
+            'max_pending_per_batch': (10, 1000)
+        }
+        
+        # Validazione parametri clustering
+        clustering_validations = {
+            'min_cluster_size': (2, 50),
+            'min_samples': (1, 20),
+            'cluster_selection_epsilon': (0.01, 0.5),
+            'metric': ['cosine', 'euclidean', 'manhattan'],
+            'cluster_selection_method': ['eom', 'leaf'],
+            'alpha': (0.1, 2.0),
+            'max_cluster_size': (0, 1000),
+            'allow_single_cluster': [True, False],
+            'only_user': [True, False],
+            'use_umap': [True, False],
+            'umap_n_neighbors': (5, 100),
+            'umap_min_dist': (0.0, 1.0),
+            'umap_metric': ['cosine', 'euclidean', 'manhattan', 'correlation'],
+            'umap_n_components': (2, 100),
+            'umap_random_state': (0, 999999)
+        }
+        
+        # Validazione soglie
+        for param_name, param_value in new_thresholds.items():
+            if param_name in threshold_validations:
+                validation = threshold_validations[param_name]
+                
+                if isinstance(validation, tuple):
+                    min_val, max_val = validation
+                    if not (min_val <= param_value <= max_val):
+                        return jsonify({
+                            'success': False,
+                            'error': f'Soglia {param_name}: valore {param_value} fuori range [{min_val}, {max_val}]'
+                        }), 400
+                elif isinstance(validation, list):
+                    if param_value not in validation:
+                        return jsonify({
+                            'success': False,
+                            'error': f'Soglia {param_name}: valore {param_value} non valido. Opzioni: {validation}'
+                        }), 400
+        
+        # Validazione parametri clustering
+        for param_name, param_value in new_clustering.items():
+            if param_name in clustering_validations:
+                validation = clustering_validations[param_name]
+                
+                if isinstance(validation, tuple):
+                    min_val, max_val = validation
+                    if not (min_val <= param_value <= max_val):
+                        return jsonify({
+                            'success': False,
+                            'error': f'Parametro clustering {param_name}: valore {param_value} fuori range [{min_val}, {max_val}]'
+                        }), 400
+                elif isinstance(validation, list):
+                    if param_value not in validation:
+                        return jsonify({
+                            'success': False,
+                            'error': f'Parametro clustering {param_name}: valore {param_value} non valido. Opzioni: {validation}'
+                        }), 400
+        
+        # Carica configurazione database
+        config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        
+        db_config = config['tag_database']
+        
+        # Connessione al database
+        connection = mysql.connector.connect(
+            host=db_config['host'],
+            port=db_config['port'],
+            user=db_config['user'],
+            password=db_config['password'],
+            database=db_config['database'],
+            autocommit=True
+        )
+        
+        cursor = connection.cursor()
+        
+        # Recupera ultimo record per preservare valori non modificati
+        cursor.execute("""
+        SELECT * FROM soglie 
+        WHERE tenant_id = %s 
+        ORDER BY id DESC 
+        LIMIT 1
+        """, (tenant_id,))
+        
+        last_record = cursor.fetchone()
+        
+        # Prepara valori con merge di default, ultimo record e nuovi valori
+        if last_record:
+            # Usa ultimo record come base
+            base_values = {
+                # SOGLIE REVIEW QUEUE
+                'enable_smart_review': last_record[4],
+                'max_pending_per_batch': last_record[5],
+                'minimum_consensus_threshold': last_record[6],
+                'outlier_confidence_threshold': last_record[7],
+                'propagated_confidence_threshold': last_record[8],
+                'representative_confidence_threshold': last_record[9],
+                
+                # PARAMETRI HDBSCAN BASE
+                'min_cluster_size': last_record[10],
+                'min_samples': last_record[11],
+                'cluster_selection_epsilon': last_record[12],
+                'metric': last_record[13],
+                
+                # PARAMETRI HDBSCAN AVANZATI
+                'cluster_selection_method': last_record[14],
+                'alpha': last_record[15],
+                'max_cluster_size': last_record[16],
+                'allow_single_cluster': last_record[17],
+                'only_user': last_record[18],
+                
+                # PARAMETRI UMAP
+                'use_umap': last_record[19],
+                'umap_n_neighbors': last_record[20],
+                'umap_min_dist': last_record[21],
+                'umap_metric': last_record[22],
+                'umap_n_components': last_record[23],
+                'umap_random_state': last_record[24]
+            }
+        else:
+            # Usa valori di default
+            clustering_base = config.get('clustering', {})
+            bertopic_config = config.get('bertopic', {})
+            
+            base_values = {
+                # SOGLIE REVIEW QUEUE DEFAULT
+                'enable_smart_review': True,
+                'max_pending_per_batch': 150,
+                'minimum_consensus_threshold': 2,
+                'outlier_confidence_threshold': 0.6,
+                'propagated_confidence_threshold': 0.75,
+                'representative_confidence_threshold': 0.85,
+                
+                # PARAMETRI HDBSCAN DEFAULT
+                'min_cluster_size': clustering_base.get('min_cluster_size', 5),
+                'min_samples': clustering_base.get('min_samples', 3),
+                'cluster_selection_epsilon': 0.12,
+                'metric': 'cosine',
+                'cluster_selection_method': 'leaf',
+                'alpha': 0.8,
+                'max_cluster_size': 0,
+                'allow_single_cluster': False,
+                'only_user': True,
+                
+                # PARAMETRI UMAP DEFAULT
+                'use_umap': False,
+                'umap_n_neighbors': bertopic_config.get('umap_params', {}).get('n_neighbors', 15),
+                'umap_min_dist': bertopic_config.get('umap_params', {}).get('min_dist', 0.1),
+                'umap_metric': bertopic_config.get('umap_params', {}).get('metric', 'cosine'),
+                'umap_n_components': bertopic_config.get('umap_params', {}).get('n_components', 50),
+                'umap_random_state': 42
+            }
+        
+        # Override con nuovi valori
+        base_values.update(new_thresholds)
+        base_values.update(new_clustering)
+        
+        # Inserisce nuovo record con tutti i valori
+        insert_sql = """
+        INSERT INTO soglie (
+            tenant_id, config_source, last_updated,
+            enable_smart_review, max_pending_per_batch, minimum_consensus_threshold,
+            outlier_confidence_threshold, propagated_confidence_threshold, representative_confidence_threshold,
+            min_cluster_size, min_samples, cluster_selection_epsilon, metric,
+            cluster_selection_method, alpha, max_cluster_size, allow_single_cluster, only_user,
+            use_umap, umap_n_neighbors, umap_min_dist, umap_metric, umap_n_components, umap_random_state
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        )
+        """
+        
+        values = (
+            tenant_id, 'custom', datetime.now(),
+            base_values['enable_smart_review'], base_values['max_pending_per_batch'], base_values['minimum_consensus_threshold'],
+            base_values['outlier_confidence_threshold'], base_values['propagated_confidence_threshold'], base_values['representative_confidence_threshold'],
+            base_values['min_cluster_size'], base_values['min_samples'], base_values['cluster_selection_epsilon'], base_values['metric'],
+            base_values['cluster_selection_method'], base_values['alpha'], base_values['max_cluster_size'], base_values['allow_single_cluster'], base_values['only_user'],
+            base_values['use_umap'], base_values['umap_n_neighbors'], base_values['umap_min_dist'], base_values['umap_metric'], base_values['umap_n_components'], base_values['umap_random_state']
+        )
+        
+        cursor.execute(insert_sql, values)
+        new_record_id = cursor.lastrowid
+        
+        cursor.close()
+        connection.close()
+        
+        # Log con debug completo
+        print(f"📊 [CONFIG UPDATE] Nuovo record ID {new_record_id} per tenant {tenant_id}:")
+        print(f"🔍 [DEBUG] Soglie Review Queue aggiornate:")
+        for name, value in new_thresholds.items():
+            print(f"   🎯 {name}: {value}")
+        print(f"🔍 [DEBUG] Parametri Clustering aggiornati:")
+        for name, value in new_clustering.items():
+            print(f"   ⚙️ {name}: {value}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Configurazione completa salvata con successo',
+            'tenant_id': tenant_id,
+            'updated_thresholds': new_thresholds,
+            'updated_clustering': new_clustering,
+            'record_id': new_record_id,
+            'config_source': 'custom',
+            'last_updated': datetime.now().isoformat()
+        }), 200
+        
+    except Error as db_error:
+        error_msg = f'Errore database: {str(db_error)}'
+        print(f"❌ [CONFIG UPDATE] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': tenant_id
+        }), 500
+        
+    except Exception as e:
+        error_msg = f'Errore generico: {str(e)}'
+        print(f"❌ [CONFIG UPDATE] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': tenant_id
+        }), 500
+
+
+@app.route('/api/review-queue/<tenant_id>/thresholds/reset', methods=['POST'])
+def reset_review_queue_thresholds(tenant_id):
+    """
+    Reset delle soglie review queue ai valori default
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        JSON con risultato reset
+        
+    Data ultima modifica: 2025-09-03
+    """
+    try:
+        # Percorso file configurazione
+        tenant_config_dir = os.path.join(os.path.dirname(__file__), 'tenant_configs')
+        tenant_thresholds_file = os.path.join(tenant_config_dir, f'{tenant_id}_review_thresholds.yaml')
+        
+        # Rimuovi file personalizzato se esiste
+        if os.path.exists(tenant_thresholds_file):
+            # Backup prima di eliminare
+            backup_file = tenant_thresholds_file.replace('.yaml', f'_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.yaml')
+            os.rename(tenant_thresholds_file, backup_file)
+            print(f"📊 [REVIEW-QUEUE] File soglie personalizzate spostato in backup: {backup_file}")
+        
+        print(f"📊 [REVIEW-QUEUE] Reset soglie ai valori default per tenant {tenant_id}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Soglie reset ai valori default',
+            'tenant_id': tenant_id,
+            'timestamp': datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        error_msg = f'Errore reset soglie: {str(e)}'
+        print(f"❌ [REVIEW-QUEUE] {error_msg}")
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'tenant_id': tenant_id
+        }), 500
+
+
+# ============================================================
 # SEZIONE API: Gestione Configurazione LLM per Tenant
 # ============================================================
 
@@ -7076,6 +8083,10 @@ def api_get_tenants_with_llm_config():
 
 
 if __name__ == "__main__":
+    # Inizializza tabella soglie all'avvio
+    print("🔧 [STARTUP] Inizializzazione tabella soglie...")
+    init_soglie_table()
+    
     # Configurazione per evitare loop di ricaricamento con il virtual environment
     import os
     

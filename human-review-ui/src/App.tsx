@@ -24,6 +24,7 @@ import ExampleManager from './components/ExampleManager';
 import ToolManager from './components/ToolManager';
 import ClusteringParametersManager from './components/ClusteringParametersManager';
 import ClusteringStatisticsManager from './components/ClusteringStatisticsManager';
+import ReviewQueueThresholdManager from './components/ReviewQueueThresholdManager';
 import AIConfigurationManager from './components/AIConfigurationManager';
 import TenantSelector from './components/TenantSelector';
 import { TenantProvider, useTenant } from './contexts/TenantContext';
@@ -218,6 +219,7 @@ function AppContent() {
               <Tab label="Configurazione" />
               <Tab label="Parametri Clustering" />
               <Tab label="📊 Statistiche Clustering" />
+              <Tab label="⚙️ Soglie Review Queue" />
               {selectedCase && (
                 <Tab label={`Caso: ${selectedCase.session_id.substring(0, 8)}...`} />
               )}
@@ -294,8 +296,12 @@ function AppContent() {
             <ClusteringStatisticsManager />
           </TabPanel>
 
+          <TabPanel value={currentTab} index={5}>
+            <ReviewQueueThresholdManager />
+          </TabPanel>
+
           {selectedCase && (
-            <TabPanel value={currentTab} index={5}>
+            <TabPanel value={currentTab} index={6}>
               <CaseDetail
                 case={selectedCase}
                 tenant={tenant}

@@ -189,49 +189,120 @@ class TenantConfigHelper:
     
     def get_umap_parameters(self, tenant_id: str) -> Dict[str, Any]:
         """
-        Recupera tutti i parametri UMAP per un tenant.
+        Recupera tutti i parametri UMAP per un tenant dal database MySQL.
         
+        Args:
+            tenant_id: ID del tenant
+            
         Returns:
             Dict con i parametri UMAP: use_umap, n_neighbors, min_dist, etc.
             
-        Data creazione: 27 Agosto 2025
+        Data ultima modifica: 03/09/2025 - Valerio Bignardi
         """
         try:
-            # Carica config personalizzata tenant
-            tenant_config = self._load_tenant_config(tenant_id)
+            import mysql.connector
+            from mysql.connector import Error
             
-            # Parametri UMAP con defaults ottimizzati per clustering
-            umap_params = {
-                'use_umap': tenant_config.get('use_umap', False),
-                'n_neighbors': tenant_config.get('umap_n_neighbors', 30),
-                'min_dist': tenant_config.get('umap_min_dist', 0.1),
-                'metric': tenant_config.get('umap_metric', 'cosine'),
-                'n_components': tenant_config.get('umap_n_components', 50),
-                'random_state': tenant_config.get('umap_random_state', 42)
-            }
+            db_config = self.base_config.get('tag_database', {})
             
-            if umap_params['use_umap']:
-                print(f"🗂️  [UMAP] Parametri per tenant {tenant_id}:")
-                print(f"   use_umap: {umap_params['use_umap']}")
-                print(f"   n_neighbors: {umap_params['n_neighbors']}")
-                print(f"   min_dist: {umap_params['min_dist']}")
-                print(f"   n_components: {umap_params['n_components']}")
-                print(f"   metric: {umap_params['metric']}")
+            if not db_config:
+                print(f"⚠️ [UMAP] Configurazione tag_database mancante, uso parametri default per {tenant_id}")
+                return self._get_default_umap_parameters()
+            
+            # Connessione al database
+            connection = mysql.connector.connect(
+                host=db_config['host'],
+                port=db_config['port'],
+                user=db_config['user'],
+                password=db_config['password'],
+                database=db_config['database'],
+                autocommit=True
+            )
+            
+            cursor = connection.cursor(dictionary=True)
+            
+            # Query per recuperare parametri UMAP dall'ultimo record
+            query = """
+            SELECT 
+                use_umap,
+                umap_n_neighbors,
+                umap_min_dist,
+                umap_metric,
+                umap_n_components,
+                umap_random_state
+            FROM soglie 
+            WHERE tenant_id = %s 
+            ORDER BY id DESC 
+            LIMIT 1
+            """
+            
+            cursor.execute(query, (tenant_id,))
+            db_result = cursor.fetchone()
+            
+            if db_result:
+                # Parametri UMAP dal database
+                umap_params = {
+                    'use_umap': bool(db_result['use_umap']),
+                    'n_neighbors': db_result['umap_n_neighbors'],
+                    'min_dist': float(db_result['umap_min_dist']),
+                    'metric': db_result['umap_metric'],
+                    'n_components': db_result['umap_n_components'],
+                    'random_state': db_result['umap_random_state']
+                }
+                
+                print(f"🗂️  [UMAP DB] Parametri personalizzati per tenant {tenant_id}:")
+                print(f"   🔍 [DEBUG] Fonte: DATABASE MySQL")
+                
             else:
-                print(f"🗂️  [UMAP] Disabilitato per tenant {tenant_id}")
+                # Fallback a parametri default
+                umap_params = self._get_default_umap_parameters()
+                print(f"🗂️  [UMAP DB] Parametri default per tenant {tenant_id} (nessun record DB)")
+                print(f"   🔍 [DEBUG] Fonte: CONFIG.YAML fallback")
+            
+            cursor.close()
+            connection.close()
+            
+            # Debug logging completo
+            if umap_params['use_umap']:
+                print(f"   ✅ UMAP ABILITATO:")
+                print(f"      n_neighbors: {umap_params['n_neighbors']}")
+                print(f"      min_dist: {umap_params['min_dist']}")
+                print(f"      n_components: {umap_params['n_components']}")
+                print(f"      metric: {umap_params['metric']}")
+                print(f"      random_state: {umap_params['random_state']}")
+            else:
+                print(f"   ❌ UMAP DISABILITATO per tenant {tenant_id}")
                 
             return umap_params
             
+        except Error as db_error:
+            print(f"❌ [UMAP DB] Errore database per tenant {tenant_id}: {db_error}")
+            print(f"   🔍 [DEBUG] Fallback a config.yaml")
+            return self._get_default_umap_parameters()
+            
         except Exception as e:
-            print(f"⚠️ [UMAP] Errore parametri per tenant {tenant_id}: {e}")
-            return {
-                'use_umap': False,
-                'n_neighbors': 30,
-                'min_dist': 0.1,
-                'metric': 'cosine',
-                'n_components': 50,
-                'random_state': 42
-            }
+            print(f"❌ [UMAP DB] Errore generico per tenant {tenant_id}: {e}")
+            print(f"   🔍 [DEBUG] Fallback a config.yaml")
+            return self._get_default_umap_parameters()
+            
+    def _get_default_umap_parameters(self) -> Dict[str, Any]:
+        """
+        Restituisce parametri UMAP di default da config.yaml
+        
+        Returns:
+            Dict con parametri UMAP default
+        """
+        bertopic_config = self.base_config.get('bertopic', {})
+        umap_config = bertopic_config.get('umap_params', {})
+        
+        return {
+            'use_umap': False,
+            'n_neighbors': umap_config.get('n_neighbors', 15),
+            'min_dist': umap_config.get('min_dist', 0.1),
+            'metric': umap_config.get('metric', 'cosine'),
+            'n_components': umap_config.get('n_components', 50),
+            'random_state': 42
+        }
     
     def invalidate_cache(self, tenant_id: str = None):
         """
@@ -249,6 +320,131 @@ class TenantConfigHelper:
         else:
             self.tenant_configs_cache.clear()
             print(f"🔄 [CACHE] Cache completamente invalidata")
+
+    def get_hdbscan_parameters(self, tenant_id: str) -> Dict[str, Any]:
+        """
+        Recupera tutti i parametri HDBSCAN per un tenant dal database MySQL.
+        
+        Args:
+            tenant_id: ID del tenant
+            
+        Returns:
+            Dict con i parametri HDBSCAN completi
+            
+        Data ultima modifica: 03/09/2025 - Valerio Bignardi
+        """
+        try:
+            import mysql.connector
+            from mysql.connector import Error
+            
+            db_config = self.base_config.get('tag_database', {})
+            
+            if not db_config:
+                print(f"⚠️ [HDBSCAN] Configurazione tag_database mancante, uso parametri default per {tenant_id}")
+                return self._get_default_hdbscan_parameters()
+            
+            # Connessione al database
+            connection = mysql.connector.connect(
+                host=db_config['host'],
+                port=db_config['port'],
+                user=db_config['user'],
+                password=db_config['password'],
+                database=db_config['database'],
+                autocommit=True
+            )
+            
+            cursor = connection.cursor(dictionary=True)
+            
+            # Query per recuperare parametri HDBSCAN dall'ultimo record
+            query = """
+            SELECT 
+                min_cluster_size,
+                min_samples,
+                cluster_selection_epsilon,
+                metric,
+                cluster_selection_method,
+                alpha,
+                max_cluster_size,
+                allow_single_cluster,
+                only_user
+            FROM soglie 
+            WHERE tenant_id = %s 
+            ORDER BY id DESC 
+            LIMIT 1
+            """
+            
+            cursor.execute(query, (tenant_id,))
+            db_result = cursor.fetchone()
+            
+            if db_result:
+                # Parametri HDBSCAN dal database
+                hdbscan_params = {
+                    'min_cluster_size': db_result['min_cluster_size'],
+                    'min_samples': db_result['min_samples'],
+                    'cluster_selection_epsilon': float(db_result['cluster_selection_epsilon']),
+                    'metric': db_result['metric'],
+                    'cluster_selection_method': db_result['cluster_selection_method'],
+                    'alpha': float(db_result['alpha']),
+                    'max_cluster_size': db_result['max_cluster_size'],
+                    'allow_single_cluster': bool(db_result['allow_single_cluster']),
+                    'only_user': bool(db_result['only_user'])
+                }
+                
+                print(f"⚙️ [HDBSCAN DB] Parametri personalizzati per tenant {tenant_id}:")
+                print(f"   🔍 [DEBUG] Fonte: DATABASE MySQL")
+                
+            else:
+                # Fallback a parametri default
+                hdbscan_params = self._get_default_hdbscan_parameters()
+                print(f"⚙️ [HDBSCAN DB] Parametri default per tenant {tenant_id} (nessun record DB)")
+                print(f"   🔍 [DEBUG] Fonte: CONFIG.YAML fallback")
+            
+            cursor.close()
+            connection.close()
+            
+            # Debug logging completo
+            print(f"   📊 PARAMETRI HDBSCAN:")
+            print(f"      min_cluster_size: {hdbscan_params['min_cluster_size']}")
+            print(f"      min_samples: {hdbscan_params['min_samples']}")
+            print(f"      cluster_selection_epsilon: {hdbscan_params['cluster_selection_epsilon']}")
+            print(f"      metric: {hdbscan_params['metric']}")
+            print(f"      cluster_selection_method: {hdbscan_params['cluster_selection_method']}")
+            print(f"      alpha: {hdbscan_params['alpha']}")
+            print(f"      only_user: {hdbscan_params['only_user']}")
+                
+            return hdbscan_params
+            
+        except Error as db_error:
+            print(f"❌ [HDBSCAN DB] Errore database per tenant {tenant_id}: {db_error}")
+            print(f"   🔍 [DEBUG] Fallback a config.yaml")
+            return self._get_default_hdbscan_parameters()
+            
+        except Exception as e:
+            print(f"❌ [HDBSCAN DB] Errore generico per tenant {tenant_id}: {e}")
+            print(f"   🔍 [DEBUG] Fallback a config.yaml")
+            return self._get_default_hdbscan_parameters()
+            
+    def _get_default_hdbscan_parameters(self) -> Dict[str, Any]:
+        """
+        Restituisce parametri HDBSCAN di default da config.yaml
+        
+        Returns:
+            Dict con parametri HDBSCAN default
+        """
+        clustering_config = self.base_config.get('clustering', {})
+        bertopic_hdbscan = self.base_config.get('bertopic', {}).get('hdbscan_params', {})
+        
+        return {
+            'min_cluster_size': clustering_config.get('min_cluster_size', 5),
+            'min_samples': clustering_config.get('min_samples', 3),
+            'cluster_selection_epsilon': 0.12,
+            'metric': bertopic_hdbscan.get('metric', 'cosine'),
+            'cluster_selection_method': 'leaf',
+            'alpha': 0.8,
+            'max_cluster_size': 0,
+            'allow_single_cluster': False,
+            'only_user': True
+        }
 
 
 # Istanza globale singleton per evitare reload ripetuti
@@ -300,3 +496,282 @@ def get_clustering_param_for_tenant(
     """
     helper = get_tenant_config_helper()
     return helper.get_clustering_parameter(tenant_id, parameter_name, default_value)
+
+
+def get_review_queue_thresholds_for_tenant(tenant_id: str) -> Dict[str, Any]:
+    """
+    Funzione di convenienza per ottenere le soglie Review Queue per un tenant dal database MySQL
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        Dict: Soglie review queue dal database o default da config.yaml come fallback
+        
+    Data ultima modifica: 2025-09-03 - Valerio Bignardi
+    """
+    try:
+        import mysql.connector
+        from mysql.connector import Error
+        
+        # Carica configurazione database
+        helper = get_tenant_config_helper()
+        config = helper.base_config  # Usa la configurazione già caricata
+        db_config = config.get('tag_database', {})
+        
+        if not db_config:
+            print(f"⚠️ [TENANT-CONFIG] Configurazione tag_database mancante, uso soglie default per {tenant_id}")
+            return _get_default_review_thresholds()
+        
+        # Connessione al database
+        connection = mysql.connector.connect(
+            host=db_config['host'],
+            port=db_config['port'],
+            user=db_config['user'],
+            password=db_config['password'],
+            database=db_config['database'],
+            autocommit=True
+        )
+        
+        cursor = connection.cursor(dictionary=True)
+        
+        # Query per recuperare l'ultimo record per il tenant
+        query = """
+        SELECT 
+            enable_smart_review,
+            max_pending_per_batch,
+            minimum_consensus_threshold,
+            outlier_confidence_threshold,
+            propagated_confidence_threshold,
+            representative_confidence_threshold
+        FROM soglie 
+        WHERE tenant_id = %s 
+        ORDER BY id DESC 
+        LIMIT 1
+        """
+        
+        cursor.execute(query, (tenant_id,))
+        db_result = cursor.fetchone()
+        
+        if db_result:
+            # Soglie dal database
+            thresholds = {
+                'outlier_confidence_threshold': float(db_result['outlier_confidence_threshold']),
+                'propagated_confidence_threshold': float(db_result['propagated_confidence_threshold']),
+                'representative_confidence_threshold': float(db_result['representative_confidence_threshold']),
+                'minimum_consensus_threshold': db_result['minimum_consensus_threshold'],
+                'enable_smart_review': bool(db_result['enable_smart_review']),
+                'max_pending_per_batch': db_result['max_pending_per_batch']
+            }
+            
+            print(f"📊 [TENANT-CONFIG] Soglie Review Queue personalizzate dal DB per tenant {tenant_id}")
+            
+            cursor.close()
+            connection.close()
+            return thresholds
+        else:
+            # Nessun record personalizzato trovato
+            print(f"📊 [TENANT-CONFIG] Nessuna soglia personalizzata trovata per {tenant_id}, uso default")
+            
+            cursor.close()
+            connection.close()
+            return _get_default_review_thresholds()
+            
+    except Error as db_error:
+        print(f"❌ [TENANT-CONFIG] Errore database per soglie tenant {tenant_id}: {db_error}")
+        return _get_default_review_thresholds()
+    except Exception as e:
+        print(f"❌ [TENANT-CONFIG] Errore generico soglie tenant {tenant_id}: {e}")
+        return _get_default_review_thresholds()
+
+
+def _get_default_review_thresholds() -> Dict[str, Any]:
+    """
+    Restituisce le soglie Review Queue di default
+    
+    Returns:
+        Dict: Soglie default
+    """
+    return {
+        'outlier_confidence_threshold': 0.6,
+        'propagated_confidence_threshold': 0.75,
+        'representative_confidence_threshold': 0.85,
+        'minimum_consensus_threshold': 2,
+        'enable_smart_review': True,
+        'max_pending_per_batch': 150
+    }
+
+
+# ============================================================
+# NUOVE FUNZIONI DI CONVENIENZA PER PARAMETRI UNIFICATI
+# ============================================================
+
+def get_hdbscan_parameters_for_tenant(tenant_id: str) -> Dict[str, Any]:
+    """
+    Funzione di convenienza per ottenere parametri HDBSCAN per un tenant
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        Dict: Parametri HDBSCAN dal database o default da config.yaml
+        
+    Data ultima modifica: 2025-09-03 - Valerio Bignardi
+    """
+    helper = get_tenant_config_helper()
+    return helper.get_hdbscan_parameters(tenant_id)
+
+
+def get_umap_parameters_for_tenant(tenant_id: str) -> Dict[str, Any]:
+    """
+    Funzione di convenienza per ottenere parametri UMAP per un tenant
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        Dict: Parametri UMAP dal database o default da config.yaml
+        
+    Data ultima modifica: 2025-09-03 - Valerio Bignardi
+    """
+    helper = get_tenant_config_helper()
+    return helper.get_umap_parameters(tenant_id)
+
+
+def get_all_clustering_parameters_for_tenant(tenant_id: str) -> Dict[str, Any]:
+    """
+    Funzione di convenienza per ottenere TUTTI i parametri clustering per un tenant
+    Include parametri HDBSCAN + UMAP + soglie Review Queue
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        Dict: Parametri completi dal database o default da config.yaml
+        
+    Data ultima modifica: 2025-09-03 - Valerio Bignardi
+    """
+    try:
+        import mysql.connector
+        from mysql.connector import Error
+        
+        helper = get_tenant_config_helper()
+        db_config = helper.base_config.get('tag_database', {})
+        
+        if not db_config:
+            print(f"⚠️ [CLUSTERING-ALL] Configurazione tag_database mancante per {tenant_id}")
+            # Fallback separato
+            hdbscan_params = helper.get_hdbscan_parameters(tenant_id)
+            umap_params = helper.get_umap_parameters(tenant_id)
+            review_thresholds = get_review_queue_thresholds_for_tenant(tenant_id)
+            
+            return {
+                **hdbscan_params,
+                **umap_params,
+                **review_thresholds
+            }
+        
+        # Query unificata per tutti i parametri
+        connection = mysql.connector.connect(
+            host=db_config['host'],
+            port=db_config['port'],
+            user=db_config['user'],
+            password=db_config['password'],
+            database=db_config['database'],
+            autocommit=True
+        )
+        
+        cursor = connection.cursor(dictionary=True)
+        
+        query = """
+        SELECT *
+        FROM soglie 
+        WHERE tenant_id = %s 
+        ORDER BY id DESC 
+        LIMIT 1
+        """
+        
+        cursor.execute(query, (tenant_id,))
+        db_result = cursor.fetchone()
+        
+        if db_result:
+            # Tutti i parametri dal database
+            all_params = {
+                # HDBSCAN
+                'min_cluster_size': db_result['min_cluster_size'],
+                'min_samples': db_result['min_samples'],
+                'cluster_selection_epsilon': float(db_result['cluster_selection_epsilon']),
+                'metric': db_result['metric'],
+                'cluster_selection_method': db_result['cluster_selection_method'],
+                'alpha': float(db_result['alpha']),
+                'max_cluster_size': db_result['max_cluster_size'],
+                'allow_single_cluster': bool(db_result['allow_single_cluster']),
+                'only_user': bool(db_result['only_user']),
+                
+                # UMAP
+                'use_umap': bool(db_result['use_umap']),
+                'n_neighbors': db_result['umap_n_neighbors'],
+                'min_dist': float(db_result['umap_min_dist']),
+                'umap_metric': db_result['umap_metric'],
+                'n_components': db_result['umap_n_components'],
+                'random_state': db_result['umap_random_state'],
+                
+                # REVIEW QUEUE
+                'outlier_confidence_threshold': float(db_result['outlier_confidence_threshold']),
+                'propagated_confidence_threshold': float(db_result['propagated_confidence_threshold']),
+                'representative_confidence_threshold': float(db_result['representative_confidence_threshold']),
+                'minimum_consensus_threshold': db_result['minimum_consensus_threshold'],
+                'enable_smart_review': bool(db_result['enable_smart_review']),
+                'max_pending_per_batch': db_result['max_pending_per_batch']
+            }
+            
+            print(f"🎯 [CLUSTERING-ALL DB] Parametri COMPLETI per tenant {tenant_id} dal database (record ID {db_result['id']})")
+            print(f"   🔍 [DEBUG] Fonte: DATABASE MySQL")
+            
+        else:
+            # Fallback completo a config.yaml
+            hdbscan_params = helper.get_hdbscan_parameters(tenant_id)
+            umap_params = helper.get_umap_parameters(tenant_id)
+            review_thresholds = get_review_queue_thresholds_for_tenant(tenant_id)
+            
+            all_params = {
+                **hdbscan_params,
+                **umap_params,
+                **review_thresholds
+            }
+            
+            print(f"🎯 [CLUSTERING-ALL] Parametri COMPLETI per tenant {tenant_id} da config.yaml (fallback)")
+            print(f"   🔍 [DEBUG] Fonte: CONFIG.YAML fallback")
+        
+        cursor.close()
+        connection.close()
+        
+        return all_params
+        
+    except Error as db_error:
+        print(f"❌ [CLUSTERING-ALL] Errore database per tenant {tenant_id}: {db_error}")
+        # Fallback separato
+        helper = get_tenant_config_helper()
+        hdbscan_params = helper.get_hdbscan_parameters(tenant_id)
+        umap_params = helper.get_umap_parameters(tenant_id)
+        review_thresholds = get_review_queue_thresholds_for_tenant(tenant_id)
+        
+        return {
+            **hdbscan_params,
+            **umap_params,
+            **review_thresholds
+        }
+        
+    except Exception as e:
+        print(f"❌ [CLUSTERING-ALL] Errore generico per tenant {tenant_id}: {e}")
+        # Fallback separato
+        helper = get_tenant_config_helper()
+        hdbscan_params = helper.get_hdbscan_parameters(tenant_id)
+        umap_params = helper.get_umap_parameters(tenant_id)
+        review_thresholds = get_review_queue_thresholds_for_tenant(tenant_id)
+        
+        return {
+            **hdbscan_params,
+            **umap_params,
+            **review_thresholds
+        }

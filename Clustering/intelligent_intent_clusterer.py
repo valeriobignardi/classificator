@@ -387,7 +387,9 @@ class IntelligentIntentClusterer:
             umap_n_neighbors=getattr(self, 'umap_n_neighbors', 30),
             umap_n_components=getattr(self, 'umap_n_components', 52),
             umap_min_dist=getattr(self, 'umap_min_dist', 0.2),
-            umap_metric=getattr(self, 'umap_metric', 'cosine')
+            umap_metric=getattr(self, 'umap_metric', 'cosine'),
+            # 🔧 FIX: Passa oggetto tenant al clusterer
+            tenant=self.tenant
         )
         
         # Controllo: HDBSCAN richiede almeno 2 campioni

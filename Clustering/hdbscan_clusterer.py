@@ -11,7 +11,7 @@ Aggiornamenti:
 
 import sys
 import os
-from typing import Dict, List, Tuple, Optional, Union
+from typing import Dict, List, Tuple, Optional, Union, Any
 import numpy as np
 import time
 import yaml
@@ -86,19 +86,41 @@ class HDBSCANClusterer:
                  umap_metric: Optional[str] = None,
                  umap_n_components: Optional[int] = None,
                  umap_random_state: Optional[int] = None,
-                 config_path: Optional[str] = None):
+                 config_path: Optional[str] = None,
+                 tenant: Optional[object] = None):  # 🆕 PARAMETRO TENANT per config React
         """
-        Inizializza il clusterer HDBSCAN con parametri da configurazione
+        Inizializza il clusterer HDBSCAN con parametri da configurazione tenant React
         
         Args:
             min_cluster_size: Dimensione minima dei cluster (sovrascrive config)
             min_samples: Numero minimo di campioni (sovrascrive config)
             cluster_selection_epsilon: Distanza massima per cluster (sovrascrive config)
             metric: Metrica di distanza (sovrascrive config)
-            config_path: Percorso del file di configurazione
+            tenant: Oggetto Tenant per caricamento configurazione React
+            config_path: Percorso del file di configurazione (fallback)
             
-        Ultima modifica: 26 Agosto 2025
+        Ultima modifica: 02 Settembre 2025 - Supporto parametri React
         """
+        # Salva riferimento tenant per caricamento config React
+        self.tenant = tenant
+        
+        # 🔧 ESTRAI tenant_id dall'oggetto Tenant
+        print(f"🔍 [DEBUG TENANT] Tipo oggetto tenant: {type(tenant)}")
+        if tenant:
+            print(f"🔍 [DEBUG TENANT] Attributi tenant: {dir(tenant)}")
+            if hasattr(tenant, 'tenant_id'):
+                self.tenant_id = tenant.tenant_id
+                print(f"✅ [TENANT] tenant_id estratto: {self.tenant_id}")
+            elif hasattr(tenant, 'id'):
+                self.tenant_id = tenant.id  # Fallback se attributo diverso
+                print(f"✅ [TENANT] tenant_id estratto da .id: {self.tenant_id}")
+            else:
+                self.tenant_id = None
+                print(f"❌ [TENANT] Nessun tenant_id trovato negli attributi: {[attr for attr in dir(tenant) if not attr.startswith('_')]}")
+        else:
+            self.tenant_id = None
+            print("⚠️ [TENANT] Oggetto tenant è None")
+        
         # Carica configurazione
         if config_path is None:
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
@@ -106,8 +128,8 @@ class HDBSCANClusterer:
         self.config_path = config_path
         self.config = self._load_config(config_path)
         
-        # Parametri clustering da config o input
-        clustering_config = self.config.get('clustering', {})
+        # 🆕 PRIORITÀ CONFIGURAZIONE: tenant_configs > config.yaml > defaults
+        clustering_config = self._load_tenant_clustering_config()
         
         self.min_cluster_size = min_cluster_size or clustering_config.get('min_cluster_size', 5)
         self.min_samples = min_samples or clustering_config.get('min_samples', 3)
@@ -205,6 +227,65 @@ class HDBSCANClusterer:
             print(f"⚠️ Errore nel caricamento config da {config_path}: {e}")
             print("📝 Uso parametri predefiniti")
             return {}
+    
+    def _load_tenant_clustering_config(self) -> Dict[str, Any]:
+        """
+        Carica i parametri di clustering personalizzati per il tenant dall'interfaccia React
+        
+        Scopo:
+        - Legge i parametri HDBSCAN e UMAP salvati dall'interfaccia React
+        - Supporta override completo dei parametri di default
+        - Gestisce fallback sicuro alla configurazione default da config.yaml
+        
+        Autore: Valerio Bignardi
+        Data ultima modifica: 2025-09-02
+        
+        Returns:
+            Dict con i parametri personalizzati merged con quelli di default
+        """
+        # Carica configurazione base da config.yaml
+        base_clustering_config = self.config.get('clustering', {})
+        
+        # Se non c'è tenant_id, usa solo configurazione base
+        if not self.tenant_id:
+            print(f"📋 [TENANT CONFIG] Nessun tenant_id fornito, uso config.yaml")
+            return base_clustering_config
+            
+        try:
+            # Costruisci path al file di configurazione tenant
+            tenant_config_dir = os.path.join(os.path.dirname(__file__), '..', 'tenant_configs')
+            tenant_config_file = os.path.join(tenant_config_dir, f'{self.tenant_id}_clustering.yaml')
+            
+            if os.path.exists(tenant_config_file):
+                with open(tenant_config_file, 'r', encoding='utf-8') as f:
+                    tenant_config = yaml.safe_load(f)
+                    tenant_clustering_params = tenant_config.get('clustering_parameters', {})
+                    
+                    if tenant_clustering_params:
+                        print(f"🎯 [TENANT CONFIG] Parametri personalizzati trovati per tenant {self.tenant_id}")
+                        print(f"   📊 Parametri personalizzati: {list(tenant_clustering_params.keys())}")
+                        
+                        # Merge: tenant_params sovrascrivono base_params
+                        merged_config = base_clustering_config.copy()
+                        merged_config.update(tenant_clustering_params)
+                        
+                        # Log delle sovrascritture
+                        for param, value in tenant_clustering_params.items():
+                            base_value = base_clustering_config.get(param, 'non_definito')
+                            print(f"   🔄 {param}: {base_value} → {value}")
+                        
+                        return merged_config
+                    else:
+                        print(f"📋 [TENANT CONFIG] File config tenant {self.tenant_id} vuoto, uso config.yaml")
+                        return base_clustering_config
+            else:
+                print(f"📋 [TENANT CONFIG] Nessun file config per tenant {self.tenant_id}, uso config.yaml")
+                return base_clustering_config
+                
+        except Exception as e:
+            print(f"⚠️ [TENANT CONFIG] Errore caricamento config tenant {self.tenant_id}: {e}")
+            print("🔄 [TENANT CONFIG] Fallback a config.yaml")
+            return base_clustering_config
     
     def _apply_umap_reduction(self, embeddings: np.ndarray, fit_new: bool = True) -> Tuple[np.ndarray, Dict]:
         """
@@ -487,6 +568,13 @@ class HDBSCANClusterer:
             print(f"   🗂️  Dopo UMAP: {embeddings_for_clustering.shape}")
         print(f"   🔧 Dopo normalizzazione: {embeddings_norm.shape}")
         print(f"   🎯 Utilizzato per clustering: {embeddings_norm.shape} con metrica {metric_for_clustering}")
+        
+        # 🆕 SALVA EMBEDDING FINALI per accesso dalla pipeline (Question 4)
+        self.final_embeddings = embeddings_for_clustering  # Salva embeddings dopo UMAP (se applicato)
+        self.final_embeddings_normalized = embeddings_norm  # Salva embeddings dopo normalizzazione
+        print(f"💾 [DEBUG FIT_PREDICT] Embedding finali salvati per accesso pipeline:")
+        print(f"   📦 final_embeddings (post-UMAP): {self.final_embeddings.shape}")
+        print(f"   📦 final_embeddings_normalized: {self.final_embeddings_normalized.shape}")
         
         return cluster_labels
     

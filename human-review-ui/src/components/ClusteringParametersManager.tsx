@@ -74,12 +74,13 @@ interface ClusteringParameter {
 }
 
 interface ClusteringParameters {
+  // 📊 PARAMETRI HDBSCAN BASE
   min_cluster_size: ClusteringParameter;
   min_samples: ClusteringParameter;
   cluster_selection_epsilon: ClusteringParameter;
   metric: ClusteringParameter;
   
-  // 🆕 NUOVI PARAMETRI AVANZATI HDBSCAN
+  // 🆕 PARAMETRI AVANZATI HDBSCAN
   cluster_selection_method: ClusteringParameter;
   alpha: ClusteringParameter;
   max_cluster_size: ClusteringParameter;
@@ -88,13 +89,23 @@ interface ClusteringParameters {
   // 🆕 PARAMETRO PREPROCESSING
   only_user: ClusteringParameter;  // 🎯 Filtra solo messaggi utente
   
-  // 🆕 PARAMETRI UMAP
+  // 🗂️ PARAMETRI UMAP
   use_umap: ClusteringParameter;           // Abilita/disabilita UMAP
   umap_n_neighbors: ClusteringParameter;   // Numero di vicini UMAP
   umap_min_dist: ClusteringParameter;      // Distanza minima UMAP
   umap_metric: ClusteringParameter;        // Metrica distanza UMAP
   umap_n_components: ClusteringParameter;  // Dimensioni output UMAP
   umap_random_state: ClusteringParameter;  // Seed random UMAP
+  
+  // 🎯 PARAMETRI REVIEW QUEUE - SOGLIE CONFIDENZA
+  outlier_confidence_threshold: ClusteringParameter;           // Soglia confidenza OUTLIER
+  propagated_confidence_threshold: ClusteringParameter;        // Soglia confidenza PROPAGATO
+  representative_confidence_threshold: ClusteringParameter;    // Soglia confidenza RAPPRESENTATIVO
+  
+  // 🎯 PARAMETRI REVIEW QUEUE - CONFIGURAZIONE
+  minimum_consensus_threshold: ClusteringParameter;            // Soglia consenso minimo
+  enable_smart_review: ClusteringParameter;                    // Abilita review intelligente
+  max_pending_per_batch: ClusteringParameter;                 // Massimo casi pending per batch
 }
 
 interface ParametersResponse {
@@ -1102,6 +1113,243 @@ const ClusteringParametersManager: React.FC = () => {
                     </Alert>
                   </Collapse>
                 )}
+              </Paper>
+
+              {/* 🎯 SEZIONE REVIEW QUEUE - SOGLIE CONFIDENZA */}
+              <Paper sx={{ p: 3, mt: 3, bgcolor: 'background.default' }}>
+                <Box display="flex" alignItems="center" mb={2}>
+                  <Typography variant="h5" component="h2" sx={{ flexGrow: 1 }}>
+                    Review Queue - Soglie Confidenza
+                  </Typography>
+                  <Chip 
+                    label="Post-processing" 
+                    size="small" 
+                    color="secondary" 
+                    variant="outlined"
+                    sx={{ ml: 1 }}
+                  />
+                </Box>
+                
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                  Configura le soglie di confidenza per determinare quali casi richiedono revisione umana.
+                  I casi sotto le soglie definite vengono inseriti nella Review Queue per validazione manuale.
+                </Typography>
+
+                <Box display="flex" flexWrap="wrap" gap={2}>
+                  
+                  {/* Soglia Outlier */}
+                  {parameters?.outlier_confidence_threshold && (
+                    <Box flex="1 1 300px" minWidth="250px">
+                      <Paper sx={{ p: 2, height: '100%', bgcolor: 'background.paper' }}>
+                        <Box display="flex" alignItems="center" mb={1}>
+                          <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
+                            Soglia Outlier
+                          </Typography>
+                          <Tooltip title="Soglia di confidenza per casi OUTLIER">
+                            <IconButton size="small">
+                              <InfoIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
+                          Casi OUTLIER con confidenza sotto questa soglia vanno in review
+                        </Typography>
+                        <Slider
+                          value={parameters.outlier_confidence_threshold.value as number}
+                          onChange={(_, newValue) => updateParameter('outlier_confidence_threshold', newValue)}
+                          min={parameters.outlier_confidence_threshold.min || 0.1}
+                          max={parameters.outlier_confidence_threshold.max || 1.0}
+                          step={parameters.outlier_confidence_threshold.step || 0.01}
+                          marks={[
+                            { value: 0.1, label: '0.1' },
+                            { value: 0.5, label: '0.5' },
+                            { value: 1.0, label: '1.0' }
+                          ]}
+                          valueLabelDisplay="on"
+                          sx={{ mt: 1 }}
+                        />
+                      </Paper>
+                    </Box>
+                  )}
+
+                  {/* Soglia Propagato */}
+                  {parameters?.propagated_confidence_threshold && (
+                    <Box flex="1 1 300px" minWidth="250px">
+                      <Paper sx={{ p: 2, height: '100%', bgcolor: 'background.paper' }}>
+                        <Box display="flex" alignItems="center" mb={1}>
+                          <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
+                            Soglia Propagato
+                          </Typography>
+                          <Tooltip title="Soglia di confidenza per casi PROPAGATO">
+                            <IconButton size="small">
+                              <InfoIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
+                          Casi PROPAGATO con confidenza sotto questa soglia vanno in review
+                        </Typography>
+                        <Slider
+                          value={parameters.propagated_confidence_threshold.value as number}
+                          onChange={(_, newValue) => updateParameter('propagated_confidence_threshold', newValue)}
+                          min={parameters.propagated_confidence_threshold.min || 0.1}
+                          max={parameters.propagated_confidence_threshold.max || 1.0}
+                          step={parameters.propagated_confidence_threshold.step || 0.01}
+                          marks={[
+                            { value: 0.1, label: '0.1' },
+                            { value: 0.5, label: '0.5' },
+                            { value: 1.0, label: '1.0' }
+                          ]}
+                          valueLabelDisplay="on"
+                          sx={{ mt: 1 }}
+                        />
+                      </Paper>
+                    </Box>
+                  )}
+
+                  {/* Soglia Rappresentativo */}
+                  {parameters?.representative_confidence_threshold && (
+                    <Box flex="1 1 300px" minWidth="250px">
+                      <Paper sx={{ p: 2, height: '100%', bgcolor: 'background.paper' }}>
+                        <Box display="flex" alignItems="center" mb={1}>
+                          <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
+                            Soglia Rappresentativo
+                          </Typography>
+                          <Tooltip title="Soglia di confidenza per casi RAPPRESENTATIVO">
+                            <IconButton size="small">
+                              <InfoIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
+                          Casi RAPPRESENTATIVO con confidenza sotto questa soglia vanno in review
+                        </Typography>
+                        <Slider
+                          value={parameters.representative_confidence_threshold.value as number}
+                          onChange={(_, newValue) => updateParameter('representative_confidence_threshold', newValue)}
+                          min={parameters.representative_confidence_threshold.min || 0.1}
+                          max={parameters.representative_confidence_threshold.max || 1.0}
+                          step={parameters.representative_confidence_threshold.step || 0.01}
+                          marks={[
+                            { value: 0.1, label: '0.1' },
+                            { value: 0.5, label: '0.5' },
+                            { value: 1.0, label: '1.0' }
+                          ]}
+                          valueLabelDisplay="on"
+                          sx={{ mt: 1 }}
+                        />
+                      </Paper>
+                    </Box>
+                  )}
+
+                  {/* Soglia Consenso Minimo */}
+                  {parameters?.minimum_consensus_threshold && (
+                    <Box flex="1 1 300px" minWidth="250px">
+                      <Paper sx={{ p: 2, height: '100%', bgcolor: 'background.paper' }}>
+                        <Box display="flex" alignItems="center" mb={1}>
+                          <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
+                            Consenso Minimo
+                          </Typography>
+                          <Tooltip title="Numero minimo di algoritmi che devono concordare">
+                            <IconButton size="small">
+                              <InfoIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
+                          Numero minimo di algoritmi concordi per auto-classificazione
+                        </Typography>
+                        <Slider
+                          value={parameters.minimum_consensus_threshold.value as number}
+                          onChange={(_, newValue) => updateParameter('minimum_consensus_threshold', newValue)}
+                          min={parameters.minimum_consensus_threshold.min || 1}
+                          max={parameters.minimum_consensus_threshold.max || 5}
+                          step={parameters.minimum_consensus_threshold.step || 1}
+                          marks={[
+                            { value: 1, label: '1' },
+                            { value: 2, label: '2' },
+                            { value: 3, label: '3' },
+                            { value: 4, label: '4' },
+                            { value: 5, label: '5' }
+                          ]}
+                          valueLabelDisplay="on"
+                          sx={{ mt: 1 }}
+                        />
+                      </Paper>
+                    </Box>
+                  )}
+
+                  {/* Max Pending per Batch */}
+                  {parameters?.max_pending_per_batch && (
+                    <Box flex="1 1 300px" minWidth="250px">
+                      <Paper sx={{ p: 2, height: '100%', bgcolor: 'background.paper' }}>
+                        <Box display="flex" alignItems="center" mb={1}>
+                          <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
+                            Max Pending/Batch
+                          </Typography>
+                          <Tooltip title="Massimo numero di casi pending per ogni batch">
+                            <IconButton size="small">
+                              <InfoIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
+                          Limite massimo casi da inviare in review per batch
+                        </Typography>
+                        <Slider
+                          value={parameters.max_pending_per_batch.value as number}
+                          onChange={(_, newValue) => updateParameter('max_pending_per_batch', newValue)}
+                          min={parameters.max_pending_per_batch.min || 10}
+                          max={parameters.max_pending_per_batch.max || 500}
+                          step={parameters.max_pending_per_batch.step || 10}
+                          marks={[
+                            { value: 50, label: '50' },
+                            { value: 150, label: '150' },
+                            { value: 300, label: '300' },
+                            { value: 500, label: '500' }
+                          ]}
+                          valueLabelDisplay="on"
+                          sx={{ mt: 1 }}
+                        />
+                      </Paper>
+                    </Box>
+                  )}
+
+                </Box>
+
+                {/* Toggle Smart Review */}
+                {parameters?.enable_smart_review && (
+                  <Box sx={{ mt: 3 }}>
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={parameters.enable_smart_review.value as boolean || false}
+                          onChange={(e) => updateParameter('enable_smart_review', e.target.checked)}
+                          color="primary"
+                        />
+                      }
+                      label={
+                        <Box>
+                          <Typography variant="subtitle1" component="span">
+                            Abilita Review Intelligente
+                          </Typography>
+                          <Typography variant="caption" display="block" color="text.secondary">
+                            Utilizza logiche avanzate per prioritizzare i casi da rivedere
+                          </Typography>
+                        </Box>
+                      }
+                    />
+                  </Box>
+                )}
+
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  <Typography variant="body2">
+                    <strong>Come funziona:</strong> I casi con confidenza sotto le soglie definite 
+                    vengono automaticamente inseriti nella Review Queue per validazione umana. 
+                    Soglie più basse = più casi in review (maggior precisione), 
+                    soglie più alte = meno casi in review (maggior automazione).
+                  </Typography>
+                </Alert>
               </Paper>
 
               {/* Azioni */}

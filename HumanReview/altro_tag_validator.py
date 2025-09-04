@@ -282,6 +282,60 @@ class AltroTagValidator:
             self.logger.error(f"❌ Errore calcolo similarità: {e}")
             return 0.0
 
+    def _clean_tag_text(self, raw_tag: str) -> str:
+        """
+        Pulisce il testo del tag da caratteri problematici
+        
+        Scopo della funzione: Normalizzazione robusta dei tag estratti dal LLM
+        Parametri di input: raw_tag (tag grezzo dall'LLM)
+        Parametri di output: Tag pulito e normalizzato
+        Valori di ritorno: Stringa tag pulita
+        Tracciamento aggiornamenti: 2025-09-04 - Creata per fix caratteri strani
+        
+        Args:
+            raw_tag: Tag grezzo da pulire
+            
+        Returns:
+            Tag pulito e normalizzato
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-04
+        """
+        if not raw_tag or not raw_tag.strip():
+            return ""
+            
+        clean_tag = raw_tag.strip()
+        
+        # STEP 1: Rimuovi backslash problematici convertendoli in spazi per preservare separazione
+        # es. INFO\GENERALI -> INFO GENERALI (poi diventerà INFO_GENERALI)
+        clean_tag = clean_tag.replace('\\', ' ')
+        
+        # STEP 2: Rimuovi virgolette doppie e singole
+        clean_tag = clean_tag.replace('"', '').replace("'", '')
+        
+        # STEP 3: Converti separatori in spazi (per poi trasformarli in underscore)
+        # Sostituisci caratteri di separazione con spazi PRIMA di rimuovere punteggiatura
+        separators = ['-', '.', '/', '@', '#', '$', '%', '^', '&', '*', '+', '=', '|', '\\', ':', ';', '<', '>', '?', '!']
+        for sep in separators:
+            clean_tag = clean_tag.replace(sep, ' ')
+        
+        # STEP 4: Rimuovi altri caratteri speciali (ma non spazi e underscore)
+        clean_tag = re.sub(r'[^\w\s_]', '', clean_tag)
+        
+        # STEP 5: Converti a maiuscolo e normalizza spazi
+        clean_tag = clean_tag.upper().strip()
+        
+        # STEP 6: Sostituisci spazi multipli e singoli con underscore
+        clean_tag = re.sub(r'\s+', '_', clean_tag)
+        
+        # STEP 7: Rimuovi underscore multipli consecutivi
+        clean_tag = re.sub(r'_{2,}', '_', clean_tag)
+        
+        # STEP 8: Rimuovi underscore all'inizio e alla fine
+        clean_tag = clean_tag.strip('_')
+        
+        return clean_tag
+
     def _get_existing_tags(self) -> List[str]:
         """
         Ottiene lista tag esistenti con caching
@@ -376,22 +430,27 @@ class AltroTagValidator:
                         len(candidate_tag) < 100 and 
                         candidate_tag.upper() != "ALTRO"):
                         
-                        # Pulisci e formatta tag
-                        clean_tag = candidate_tag.upper().strip()
-                        clean_tag = re.sub(r'\s+', '_', clean_tag)  # Spazi -> underscore
-                        clean_tag = re.sub(r'[^\w\s]', '', clean_tag)  # Rimuovi punteggiatura
+                        # 🧹 USA METODO CENTRALIZZATO DI PULIZIA
+                        clean_tag = self._clean_tag_text(candidate_tag)
                         
-                        self.logger.info(f"📝 Tag estratto da LLM: '{clean_tag}'")
-                        return clean_tag
+                        # Verifica finale che il tag pulito sia valido
+                        if len(clean_tag) > 2 and clean_tag != "ALTRO":
+                            self.logger.info(f"📝 Tag estratto e pulito: '{candidate_tag}' → '{clean_tag}'")
+                            return clean_tag
+                        else:
+                            self.logger.warning(f"⚠️ Tag scartato dopo pulizia: '{candidate_tag}' → '{clean_tag}'")
+                            continue
             
             # Fallback: cerca ultime parole in maiuscolo
             words = response_clean.split()
             for word in reversed(words[-5:]):  # Ultimi 5 parole
-                clean_word = re.sub(r'[^\w]', '', word).upper()
+                
+                # 🧹 USA METODO CENTRALIZZATO DI PULIZIA
+                clean_word = self._clean_tag_text(word)
+                
                 if (len(clean_word) > 2 and 
-                    clean_word.isupper() and 
                     clean_word != "ALTRO"):
-                    self.logger.info(f"📝 Tag fallback da LLM: '{clean_word}'")
+                    self.logger.info(f"📝 Tag fallback estratto e pulito: '{word}' → '{clean_word}'")
                     return clean_word
             
             self.logger.warning(f"⚠️ Nessun tag estratto da: '{response_clean[:100]}...'")

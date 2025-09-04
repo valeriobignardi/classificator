@@ -117,10 +117,10 @@ const ReviewQueueThresholdManager: React.FC = () => {
         min: 0.0,
         max: 1.0,
         step: 0.05,
-        description: "Soglia Confidenza Propagated",
-        explanation: "Casi propagati con confidenza sotto questa soglia richiedono revisione umana",
-        impact: "Valori più alti = più casi propagati in review, maggiore precisione",
-        recommendation: "0.8 è bilanciato tra automazione e accuratezza"
+        description: "Soglia Qualità Propagazione",
+        explanation: "Soglia minima di confidenza per validare propagazioni durante training supervisionato. I propagati NON vanno MAI automaticamente in review.",
+        impact: "Valori più alti = propagazioni più rigorose durante il training, maggiore qualità",
+        recommendation: "0.7-0.8 è ottimale per garantire buona qualità delle propagazioni"
       },
       representative_confidence_threshold: {
         value: currentValues.representative_confidence_threshold ?? 0.9,

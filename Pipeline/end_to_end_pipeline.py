@@ -73,6 +73,100 @@ except Exception as _e:
     _BERTopic_AVAILABLE = False
     print(f"⚠️ BERTopic non disponibile: {_e}")
 
+
+def get_supervised_training_params_from_db(tenant_id: str) -> Dict[str, Any]:
+    """
+    Recupera i parametri di training supervisionato dalla tabella MySQL 'soglie'
+    
+    Scopo: Leggere configurazione training supervisionato dal database invece che da config.yaml
+    
+    Parametri:
+        tenant_id (str): ID del tenant
+        
+    Returns:
+        dict: Parametri di training supervisionato o valori default
+        
+    Tracciamento aggiornamenti:
+        - 28/01/2025: Creazione funzione per leggere parametri training supervisionato
+    """
+    import mysql.connector
+    from mysql.connector import Error
+    
+    # Valori default
+    default_params = {
+        'confidence_threshold_priority': 0.7,
+        'max_representatives_per_cluster': 5,
+        'max_total_sessions': 500,
+        'min_representatives_per_cluster': 1,
+        'overflow_handling': 'proportional',
+        'representatives_per_cluster': 3,
+        'selection_strategy': 'prioritize_by_size'
+    }
+    
+    try:
+        # Leggi configurazione database da config.yaml
+        config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
+        with open(config_path, 'r', encoding='utf-8') as file:
+            config = yaml.safe_load(file)
+        
+        db_config = config['tag_database']
+        
+        # Connessione al database
+        print(f"🔌 [TRAINING DB] Connessione al database MySQL per tenant {tenant_id}")
+        connection = mysql.connector.connect(
+            host=db_config['host'],
+            database=db_config['database'],
+            user=db_config['user'],
+            password=db_config['password'],
+            port=db_config.get('port', 3306)
+        )
+        
+        if connection.is_connected():
+            cursor = connection.cursor(dictionary=True)
+            
+            # Query per recuperare parametri training supervisionato
+            query = """
+            SELECT confidence_threshold_priority, max_representatives_per_cluster, 
+                   max_total_sessions, min_representatives_per_cluster,
+                   overflow_handling, representatives_per_cluster, selection_strategy
+            FROM soglie 
+            WHERE tenant_id = %s 
+            ORDER BY last_updated DESC 
+            LIMIT 1
+            """
+            
+            cursor.execute(query, (tenant_id,))
+            result = cursor.fetchone()
+            
+            if result:
+                print(f"✅ [TRAINING DB] Parametri trovati per tenant {tenant_id}")
+                return {
+                    'confidence_threshold_priority': float(result['confidence_threshold_priority']),
+                    'max_representatives_per_cluster': result['max_representatives_per_cluster'],
+                    'max_total_sessions': result['max_total_sessions'],
+                    'min_representatives_per_cluster': result['min_representatives_per_cluster'],
+                    'overflow_handling': result['overflow_handling'],
+                    'representatives_per_cluster': result['representatives_per_cluster'],
+                    'selection_strategy': result['selection_strategy']
+                }
+            else:
+                print(f"⚠️ [TRAINING DB] Nessun record trovato per tenant {tenant_id}, uso valori default")
+                return default_params
+                
+    except Error as e:
+        print(f"❌ [TRAINING DB] Errore MySQL per tenant {tenant_id}: {e}")
+        print(f"📋 [TRAINING DB] Uso valori default")
+        return default_params
+    except Exception as e:
+        print(f"❌ [TRAINING DB] Errore generico: {e}")
+        print(f"📋 [TRAINING DB] Uso valori default")
+        return default_params
+    finally:
+        if 'connection' in locals() and connection.is_connected():
+            cursor.close()
+            connection.close()
+
+
 class EndToEndPipeline:
     """
     Pipeline completa per l'estrazione, clustering, classificazione e salvataggio
@@ -3234,22 +3328,41 @@ class EndToEndPipeline:
         self.confidence_threshold = confidence_threshold
         print(f"🎯 Confidence threshold aggiornato a: {self.confidence_threshold}")
         
-        # Determina limite review umana dalla configurazione
+        # Determina limite review umana dalla configurazione DATABASE
         try:
-            with open(self.config_path, 'r', encoding='utf-8') as file:
-                config = yaml.safe_load(file)
+            # NUOVO: Leggi parametri dal database MySQL
+            if hasattr(self, 'tenant') and self.tenant:
+                training_params = get_supervised_training_params_from_db(self.tenant.tenant_id)
+                print(f"✅ Parametri training da database MySQL")
+            else:
+                print(f"⚠️ Tenant non disponibile, leggo da config.yaml")
+                training_params = None
             
-            supervised_config = config.get('supervised_training', {})
-            human_review_config = supervised_config.get('human_review', {})
+            if training_params:
+                # Usa parametri dal database
+                human_limit = training_params.get('max_total_sessions', 500)
+                confidence_threshold_priority = training_params.get('confidence_threshold_priority', 0.7)
+                print(f"📊 [DB MYSQL] max_total_sessions: {human_limit}")
+                print(f"📊 [DB MYSQL] confidence_threshold_priority: {confidence_threshold_priority}")
+            else:
+                # Fallback a config.yaml
+                with open(self.config_path, 'r', encoding='utf-8') as file:
+                    config = yaml.safe_load(file)
+                
+                supervised_config = config.get('supervised_training', {})
+                human_review_config = supervised_config.get('human_review', {})
+                
+                human_limit = human_review_config.get('max_total_sessions', 500)
+                confidence_threshold_priority = human_review_config.get('confidence_threshold_priority', 0.7)
+                print(f"📊 [CONFIG YAML] max_total_sessions: {human_limit}")
+                print(f"📊 [CONFIG YAML] confidence_threshold_priority: {confidence_threshold_priority}")
             
-            # Limite sessioni per review umana (non per estrazione!)
+            # Gestione parametri legacy
             if max_human_review_sessions is not None:
                 human_limit = max_human_review_sessions
             elif limit is not None:
                 human_limit = limit  # Retrocompatibilità
                 print(f"⚠️ ATTENZIONE: Parametro 'limit' è deprecato. Ora indica max sessioni per review umana.")
-            else:
-                human_limit = human_review_config.get('max_total_sessions', 500)
                 
         except Exception as e:
             print(f"⚠️ Errore lettura config: {e}")
@@ -3401,20 +3514,44 @@ class EndToEndPipeline:
         """
         print(f"🔍 Selezione intelligente rappresentanti per review umana...")
         
-        # Carica configurazione
+        # Carica configurazione DAL DATABASE
         try:
-            with open(self.config_path, 'r', encoding='utf-8') as file:
-                config = yaml.safe_load(file)
+            # NUOVO: Leggi parametri dal database MySQL
+            if hasattr(self, 'tenant') and self.tenant:
+                training_params = get_supervised_training_params_from_db(self.tenant.tenant_id)
+                print(f"✅ Parametri selezione rappresentanti da database MySQL")
+            else:
+                print(f"⚠️ Tenant non disponibile, leggo da config.yaml")
+                training_params = None
             
-            supervised_config = config.get('supervised_training', {})
-            human_review_config = supervised_config.get('human_review', {})
-            
-            # Parametri di selezione
-            min_reps_per_cluster = human_review_config.get('min_representatives_per_cluster', 1)
-            max_reps_per_cluster = human_review_config.get('max_representatives_per_cluster', 5)
-            default_reps_per_cluster = human_review_config.get('representatives_per_cluster', 3)
-            selection_strategy = human_review_config.get('selection_strategy', 'prioritize_by_size')
-            min_cluster_size = human_review_config.get('min_cluster_size_for_review', 2)
+            if training_params:
+                # Usa parametri dal database
+                min_reps_per_cluster = training_params.get('min_representatives_per_cluster', 1)
+                max_reps_per_cluster = training_params.get('max_representatives_per_cluster', 5)
+                default_reps_per_cluster = training_params.get('representatives_per_cluster', 3)
+                selection_strategy = training_params.get('selection_strategy', 'prioritize_by_size')
+                confidence_threshold_priority = training_params.get('confidence_threshold_priority', 0.7)
+                print(f"📊 [DB MYSQL] min_representatives_per_cluster: {min_reps_per_cluster}")
+                print(f"📊 [DB MYSQL] max_representatives_per_cluster: {max_reps_per_cluster}")
+                print(f"📊 [DB MYSQL] representatives_per_cluster: {default_reps_per_cluster}")
+                print(f"📊 [DB MYSQL] selection_strategy: {selection_strategy}")
+                print(f"📊 [DB MYSQL] confidence_threshold_priority: {confidence_threshold_priority}")
+                min_cluster_size = 2  # Fisso, non configurabile
+            else:
+                # Fallback a config.yaml
+                with open(self.config_path, 'r', encoding='utf-8') as file:
+                    config = yaml.safe_load(file)
+                
+                supervised_config = config.get('supervised_training', {})
+                human_review_config = supervised_config.get('human_review', {})
+                
+                # Parametri di selezione
+                min_reps_per_cluster = human_review_config.get('min_representatives_per_cluster', 1)
+                max_reps_per_cluster = human_review_config.get('max_representatives_per_cluster', 5)
+                default_reps_per_cluster = human_review_config.get('representatives_per_cluster', 3)
+                selection_strategy = human_review_config.get('selection_strategy', 'prioritize_by_size')
+                min_cluster_size = human_review_config.get('min_cluster_size_for_review', 2)
+                print(f"📊 [CONFIG YAML] Parametri da config.yaml")
             
         except Exception as e:
             print(f"⚠️ Errore config, uso valori default: {e}")

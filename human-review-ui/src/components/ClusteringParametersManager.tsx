@@ -1178,16 +1178,16 @@ const ClusteringParametersManager: React.FC = () => {
                       <Paper sx={{ p: 2, height: '100%', bgcolor: 'background.paper' }}>
                         <Box display="flex" alignItems="center" mb={1}>
                           <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
-                            Soglia Propagato
+                            Soglia Qualità Propagazione
                           </Typography>
-                          <Tooltip title="Soglia di confidenza per casi PROPAGATO">
+                          <Tooltip title="Soglia di confidenza per validare la qualità delle propagazioni durante il training">
                             <IconButton size="small">
                               <InfoIcon fontSize="small" />
                             </IconButton>
                           </Tooltip>
                         </Box>
                         <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
-                          Casi PROPAGATO con confidenza sotto questa soglia vanno in review
+                          ⚠️ I propagati NON vanno MAI automaticamente in review. Questa soglia serve solo per validare la qualità delle propagazioni durante il training supervisionato.
                         </Typography>
                         <Slider
                           value={parameters.propagated_confidence_threshold.value as number}

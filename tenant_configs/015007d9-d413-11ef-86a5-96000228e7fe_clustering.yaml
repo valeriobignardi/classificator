@@ -1,0 +1,47 @@
+clustering_parameters:
+  allow_single_cluster: false
+  alpha: 0.4
+  cluster_selection_epsilon: 0.28
+  cluster_selection_method: eom
+  enable_smart_review: true
+  max_cluster_size: 0
+  max_pending_per_batch: 500
+  metric: euclidean
+  min_cluster_size: 13
+  min_samples: 16
+  minimum_consensus_threshold: 2
+  only_user: false
+  outlier_confidence_threshold: 0.95
+  propagated_confidence_threshold: 0.95
+  representative_confidence_threshold: 0.95
+  umap_metric: cosine
+  umap_min_dist: 0
+  umap_n_components: 17
+  umap_n_neighbors: 30
+  umap_random_state: 42
+  use_umap: true
+last_updated: '2025-09-04T12:56:30.272358'
+previous_config_backup:
+  allow_single_cluster: false
+  alpha: 0.7
+  cluster_selection_epsilon: 0.28
+  cluster_selection_method: eom
+  enable_smart_review: true
+  max_cluster_size: 0
+  max_pending_per_batch: 500
+  metric: euclidean
+  min_cluster_size: 14
+  min_samples: 16
+  minimum_consensus_threshold: 2
+  only_user: false
+  outlier_confidence_threshold: 0.95
+  propagated_confidence_threshold: 0.95
+  representative_confidence_threshold: 0.95
+  umap_metric: cosine
+  umap_min_dist: 0
+  umap_n_components: 17
+  umap_n_neighbors: 30
+  umap_random_state: 42
+  use_umap: true
+tenant_id: 015007d9-d413-11ef-86a5-96000228e7fe
+updated_by: web_interface

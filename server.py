@@ -5707,7 +5707,16 @@ def get_review_queue_thresholds_from_db(tenant_id):
                     'minimum_consensus_threshold': result['minimum_consensus_threshold'],
                     'outlier_confidence_threshold': float(result['outlier_confidence_threshold']),
                     'propagated_confidence_threshold': float(result['propagated_confidence_threshold']),
-                    'representative_confidence_threshold': float(result['representative_confidence_threshold'])
+                    'representative_confidence_threshold': float(result['representative_confidence_threshold']),
+                    
+                    # PARAMETRI TRAINING SUPERVISIONATO
+                    'confidence_threshold_priority': float(result['confidence_threshold_priority']),
+                    'max_representatives_per_cluster': result['max_representatives_per_cluster'],
+                    'max_total_sessions': result['max_total_sessions'],
+                    'min_representatives_per_cluster': result['min_representatives_per_cluster'],
+                    'overflow_handling': result['overflow_handling'],
+                    'representatives_per_cluster': result['representatives_per_cluster'],
+                    'selection_strategy': result['selection_strategy']
                 }
                 
                 return {
@@ -6030,6 +6039,207 @@ def get_clustering_parameters(tenant_id):
                 'recommendation': 'Usa un valore fisso (42) per riproducibilità o cambia per esplorare variazioni',
                 'gpu_supported': True,
                 'category': 'dimensionality_reduction'
+            },
+            
+            # 🆕 PARAMETRI TRAINING SUPERVISIONATO
+            'enable_smart_review': {
+                'value': clustering_config.get('enable_smart_review', True),
+                'default': True,
+                'options': [True, False],
+                'description': 'Abilita review intelligente',
+                'explanation': 'Attiva il sistema di review automatica intelligente che suggerisce classificazioni basate sui pattern appresi.',
+                'impact': {
+                    True: 'Sistema attivo - suggerisce classificazioni automatiche',
+                    False: 'Sistema disattivo - review completamente manuale'
+                },
+                'recommendation': 'Attiva per accelerare il processo di review e training',
+                'category': 'supervised_training'
+            },
+            'max_pending_per_batch': {
+                'value': clustering_config.get('max_pending_per_batch', 150),
+                'default': 150,
+                'min': 10,
+                'max': 500,
+                'step': 10,
+                'description': 'Massimo elementi per batch review',
+                'explanation': 'Numero massimo di conversazioni presentate contemporaneamente nella coda di review per evitare sovraccarico.',
+                'impact': {
+                    'low': 'Batch piccoli, interfaccia più veloce ma più iterazioni',
+                    'medium': 'Bilanciamento tra velocità interfaccia e produttività',
+                    'high': 'Batch grandi, più produttivo ma interfaccia più lenta'
+                },
+                'recommendation': 'Usa 100-200 per bilanciare velocità e produttività',
+                'category': 'supervised_training'
+            },
+            'minimum_consensus_threshold': {
+                'value': clustering_config.get('minimum_consensus_threshold', 2),
+                'default': 2,
+                'min': 1,
+                'max': 5,
+                'step': 1,
+                'description': 'Soglia minima consenso',
+                'explanation': 'Numero minimo di classificazioni concordi necessarie prima di considerare una classificazione "affidabile".',
+                'impact': {
+                    'low': 'Più flessibile, accetta classificazioni con meno consenso',
+                    'medium': 'Bilanciamento tra flessibilità e qualità',
+                    'high': 'Più rigoroso, richiede maggiore consenso per approvare'
+                },
+                'recommendation': 'Usa 2-3 per un buon bilanciamento qualità/velocità',
+                'category': 'supervised_training'
+            },
+            'outlier_confidence_threshold': {
+                'value': clustering_config.get('outlier_confidence_threshold', 0.6),
+                'default': 0.6,
+                'min': 0.1,
+                'max': 1.0,
+                'step': 0.05,
+                'description': 'Soglia confidenza outlier',
+                'explanation': 'Livello di confidenza minimo per classificare automaticamente una conversazione come outlier.',
+                'impact': {
+                    'low': 'Più conversazioni classificate come outlier automaticamente',
+                    'medium': 'Bilanciamento tra automazione e precisione',
+                    'high': 'Solo outlier molto evidenti classificati automaticamente'
+                },
+                'recommendation': 'Usa 0.6-0.8 per un buon livello di automazione',
+                'category': 'supervised_training'
+            },
+            'propagated_confidence_threshold': {
+                'value': clustering_config.get('propagated_confidence_threshold', 0.75),
+                'default': 0.75,
+                'min': 0.1,
+                'max': 1.0,
+                'step': 0.05,
+                'description': 'Soglia qualità propagazione',
+                'explanation': 'Soglia minima di confidenza per accettare una propagazione durante il training supervisionato. I propagati NON vanno MAI automaticamente in review - vanno solo se aggiunti manualmente.',
+                'impact': {
+                    'low': 'Accetta propagazioni con confidenza più bassa - più permissivo',
+                    'medium': 'Bilanciamento tra qualità e copertura delle propagazioni',
+                    'high': 'Solo propagazioni ad alta confidenza - più rigoroso'
+                },
+                'recommendation': 'Usa 0.7-0.8 per garantire buona qualità delle propagazioni nel training',
+                'category': 'supervised_training'
+            },
+            'representative_confidence_threshold': {
+                'value': clustering_config.get('representative_confidence_threshold', 0.85),
+                'default': 0.85,
+                'min': 0.1,
+                'max': 1.0,
+                'step': 0.05,
+                'description': 'Soglia confidenza rappresentanti',
+                'explanation': 'Livello di confidenza minimo per utilizzare una classificazione di rappresentante come base per la propagazione.',
+                'impact': {
+                    'low': 'Usa più rappresentanti come base, propagazione più ampia',
+                    'medium': 'Bilanciamento tra copertura e qualità della propagazione',
+                    'high': 'Solo rappresentanti molto affidabili usati per propagazione'
+                },
+                'recommendation': 'Usa 0.8-0.9 per garantire alta qualità della propagazione',
+                'category': 'supervised_training'
+            },
+            
+            # 🎓 PARAMETRI TRAINING SUPERVISIONATO
+            'confidence_threshold_priority': {
+                'value': clustering_config.get('confidence_threshold_priority', 0.7),
+                'default': 0.7,
+                'min': 0.1,
+                'max': 1.0,
+                'step': 0.05,
+                'description': 'Soglia confidenza priorità training',
+                'explanation': 'Soglia di confidenza per determinare la priorità nella selezione delle sessioni per il training supervisionato.',
+                'impact': {
+                    'low': 'Include più sessioni a bassa confidenza, training più completo',
+                    'medium': 'Bilanciamento tra completezza e qualità dei dati',
+                    'high': 'Solo sessioni ad alta confidenza, training più selettivo'
+                },
+                'recommendation': 'Usa 0.7-0.8 per bilanciare qualità e quantità',
+                'category': 'supervised_training'
+            },
+            'max_representatives_per_cluster': {
+                'value': clustering_config.get('max_representatives_per_cluster', 5),
+                'default': 5,
+                'min': 1,
+                'max': 20,
+                'description': 'Massimo rappresentanti per cluster',
+                'explanation': 'Numero massimo di sessioni rappresentative che possono essere selezionate per ogni cluster durante il training.',
+                'impact': {
+                    'low': 'Meno esempi per cluster, training più veloce ma meno preciso',
+                    'medium': 'Bilanciamento standard',
+                    'high': 'Più esempi per cluster, training più lento ma più accurato'
+                },
+                'recommendation': 'Usa 3-7 rappresentanti per cluster medio',
+                'category': 'supervised_training'
+            },
+            'max_total_sessions': {
+                'value': clustering_config.get('max_total_sessions', 500),
+                'default': 500,
+                'min': 10,
+                'max': 2000,
+                'description': 'Massimo sessioni totali training',
+                'explanation': 'Numero massimo totale di sessioni che verranno sottoposte a review umana durante il training supervisionato.',
+                'impact': {
+                    'low': 'Training veloce ma meno completo',
+                    'medium': 'Bilanciamento velocità/completezza',
+                    'high': 'Training completo ma più lento'
+                },
+                'recommendation': 'Usa 300-800 per dataset medio-grandi',
+                'category': 'supervised_training'
+            },
+            'min_representatives_per_cluster': {
+                'value': clustering_config.get('min_representatives_per_cluster', 1),
+                'default': 1,
+                'min': 1,
+                'max': 10,
+                'description': 'Minimo rappresentanti per cluster',
+                'explanation': 'Numero minimo di sessioni rappresentative che devono essere selezionate per ogni cluster durante il training.',
+                'impact': {
+                    'low': 'Alcuni cluster potrebbero non essere rappresentati',
+                    'medium': 'Garantisce rappresentanza minima',
+                    'high': 'Rappresentanza robusta per ogni cluster'
+                },
+                'recommendation': 'Usa almeno 1-2 rappresentanti per cluster',
+                'category': 'supervised_training'
+            },
+            'overflow_handling': {
+                'value': clustering_config.get('overflow_handling', 'proportional'),
+                'default': 'proportional',
+                'options': ['proportional', 'strict', 'none'],
+                'description': 'Gestione overflow sessioni',
+                'explanation': 'Strategia per gestire il caso in cui il numero totale di sessioni supera il limite massimo.',
+                'impact': {
+                    'proportional': 'Riduce proporzionalmente i rappresentanti per cluster',
+                    'strict': 'Rispetta rigorosamente i limiti per cluster',
+                    'none': 'Ignora i limiti e include tutte le sessioni'
+                },
+                'recommendation': 'Usa "proportional" per bilanciamento ottimale',
+                'category': 'supervised_training'
+            },
+            'representatives_per_cluster': {
+                'value': clustering_config.get('representatives_per_cluster', 3),
+                'default': 3,
+                'min': 1,
+                'max': 10,
+                'description': 'Rappresentanti standard per cluster',
+                'explanation': 'Numero standard di sessioni rappresentative da selezionare per ogni cluster durante il training.',
+                'impact': {
+                    'low': 'Meno esempi, clustering più veloce',
+                    'medium': 'Bilanciamento standard',
+                    'high': 'Più esempi, maggiore accuratezza'
+                },
+                'recommendation': 'Usa 2-4 per la maggior parte dei casi',
+                'category': 'supervised_training'
+            },
+            'selection_strategy': {
+                'value': clustering_config.get('selection_strategy', 'prioritize_by_size'),
+                'default': 'prioritize_by_size',
+                'options': ['prioritize_by_size', 'balanced', 'random'],
+                'description': 'Strategia selezione rappresentanti',
+                'explanation': 'Metodo per selezionare quali sessioni rappresentative includere nel training supervisionato.',
+                'impact': {
+                    'prioritize_by_size': 'Privilegi cluster più grandi',
+                    'balanced': 'Equilibra tra tutti i cluster',
+                    'random': 'Selezione casuale'
+                },
+                'recommendation': 'Usa "prioritize_by_size" per focalizzare sui pattern principali',
+                'category': 'supervised_training'
             }
         }
         
@@ -6129,7 +6339,16 @@ def update_clustering_parameters(tenant_id):
             'representative_confidence_threshold': (0.1, 1.0),
             'minimum_consensus_threshold': (1, 5),
             'enable_smart_review': [True, False],
-            'max_pending_per_batch': (10, 1000)
+            'max_pending_per_batch': (10, 1000),
+            
+            # 🎓 VALIDAZIONI PARAMETRI TRAINING SUPERVISIONATO
+            'confidence_threshold_priority': (0.1, 1.0),
+            'max_representatives_per_cluster': (1, 20),
+            'max_total_sessions': (10, 2000),
+            'min_representatives_per_cluster': (1, 10),
+            'overflow_handling': ['proportional', 'strict', 'none'],
+            'representatives_per_cluster': (1, 10),
+            'selection_strategy': ['prioritize_by_size', 'balanced', 'random']
         }
         
         for param_name, param_value in normalized_params.items():
@@ -6241,7 +6460,15 @@ def update_clustering_parameters(tenant_id):
                     normalized_params.get('umap_min_dist', 0.05),
                     normalized_params.get('umap_metric', 'euclidean'),
                     normalized_params.get('umap_n_components', 3),
-                    normalized_params.get('umap_random_state', 42)
+                    normalized_params.get('umap_random_state', 42),
+                    # TRAINING SUPERVISIONATO parameters
+                    normalized_params.get('confidence_threshold_priority', 0.7),
+                    normalized_params.get('max_representatives_per_cluster', 5),
+                    normalized_params.get('max_total_sessions', 500),
+                    normalized_params.get('min_representatives_per_cluster', 1),
+                    normalized_params.get('overflow_handling', 'proportional'),
+                    normalized_params.get('representatives_per_cluster', 3),
+                    normalized_params.get('selection_strategy', 'prioritize_by_size')
                 )
                 
                 # INSERT con ON DUPLICATE KEY UPDATE per gestire aggiornamenti
@@ -6253,8 +6480,10 @@ def update_clustering_parameters(tenant_id):
                     created_at,
                     min_cluster_size, min_samples, cluster_selection_epsilon, metric, cluster_selection_method,
                     alpha, max_cluster_size, allow_single_cluster, only_user,
-                    use_umap, umap_n_neighbors, umap_min_dist, umap_metric, umap_n_components, umap_random_state
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    use_umap, umap_n_neighbors, umap_min_dist, umap_metric, umap_n_components, umap_random_state,
+                    confidence_threshold_priority, max_representatives_per_cluster, max_total_sessions,
+                    min_representatives_per_cluster, overflow_handling, representatives_per_cluster, selection_strategy
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     config_source = VALUES(config_source),
                     last_updated = VALUES(last_updated),
@@ -6278,7 +6507,14 @@ def update_clustering_parameters(tenant_id):
                     umap_min_dist = VALUES(umap_min_dist),
                     umap_metric = VALUES(umap_metric),
                     umap_n_components = VALUES(umap_n_components),
-                    umap_random_state = VALUES(umap_random_state)
+                    umap_random_state = VALUES(umap_random_state),
+                    confidence_threshold_priority = VALUES(confidence_threshold_priority),
+                    max_representatives_per_cluster = VALUES(max_representatives_per_cluster),
+                    max_total_sessions = VALUES(max_total_sessions),
+                    min_representatives_per_cluster = VALUES(min_representatives_per_cluster),
+                    overflow_handling = VALUES(overflow_handling),
+                    representatives_per_cluster = VALUES(representatives_per_cluster),
+                    selection_strategy = VALUES(selection_strategy)
                 """
                 
                 cursor.execute(insert_query, insert_values)

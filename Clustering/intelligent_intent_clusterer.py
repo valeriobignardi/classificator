@@ -34,16 +34,19 @@ class IntelligentIntentClusterer:
     senza bisogno di pattern predefiniti. Approccio completamente ML-driven.
     """
     
-    def __init__(self, tenant: Optional[Tenant] = None, config_path: str = None, llm_classifier=None):
+    def __init__(self, tenant: Optional[Tenant] = None, config_path: str = None, llm_classifier=None, ensemble_classifier=None):
         """
         Inizializza il clusterer intelligente
         
         PRINCIPIO UNIVERSALE: Accetta oggetto Tenant completo
         
+        CORREZIONE 2025-09-04: Aggiunto ensemble_classifier per usare ML+LLM negli outlier
+        
         Args:
             tenant: Oggetto Tenant completo (None per compatibilità)
             config_path: Percorso del file di configurazione globale
-            llm_classifier: Classificatore LLM per analisi intent
+            llm_classifier: Classificatore LLM per analisi intent (legacy)
+            ensemble_classifier: Classificatore ensemble ML+LLM (priorità maggiore)
         """
         if config_path is None:
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
@@ -51,7 +54,21 @@ class IntelligentIntentClusterer:
         self.tenant = tenant
         self.tenant_id = tenant.tenant_id if tenant else None  # Estrae tenant_id dall'oggetto
         self.config_path = config_path
+        
+        # 🔧 CORREZIONE: Priorità all'ensemble_classifier se disponibile
+        self.ensemble_classifier = ensemble_classifier
         self.llm_classifier = llm_classifier
+        
+        # Determina quale classificatore usare
+        if self.ensemble_classifier is not None:
+            self.use_ensemble = True
+            print(f"✅ [INTELLIGENT_CLUSTERER] Usando ensemble_classifier (ML+LLM)")
+        elif self.llm_classifier is not None:
+            self.use_ensemble = False
+            print(f"⚠️ [INTELLIGENT_CLUSTERER] Usando solo llm_classifier (fallback)")
+        else:
+            self.use_ensemble = False
+            print(f"❌ [INTELLIGENT_CLUSTERER] Nessun classificatore disponibile")
         self.load_intelligent_config()
         
         # Setup logging
@@ -183,8 +200,28 @@ class IntelligentIntentClusterer:
         
         for i, text in enumerate(texts):
             try:
-                if self.llm_classifier and self.llm_classifier.is_available():
-                    # Usa LLM per classificazione intent automatica
+                # 🔧 CORREZIONE: Usa ensemble_classifier se disponibile, altrimenti fallback a llm_classifier
+                if self.use_ensemble and self.ensemble_classifier:
+                    # Usa ensemble ML+LLM per classificazione completa
+                    ensemble_result = self.ensemble_classifier.predict_with_ensemble(
+                        text,
+                        return_details=True,
+                        embedder=getattr(self.ensemble_classifier, 'embedder', None)
+                    )
+                    
+                    intent_info = {
+                        'intent': ensemble_result['predicted_label'],
+                        'confidence': ensemble_result['confidence'],
+                        'reasoning': f"Ensemble {ensemble_result['method']} - conf: {ensemble_result['confidence']:.3f}",
+                        'method': f"ensemble_{ensemble_result['method'].lower()}",
+                        'text_preview': text[:100] + '...' if len(text) > 100 else text,
+                        'ensemble_details': ensemble_result  # 🆕 Salva dettagli completi ensemble
+                    }
+                    
+                    print(f"🧠💻 [ENSEMBLE] Text {i+1}: '{ensemble_result['predicted_label']}' (conf: {ensemble_result['confidence']:.3f}, method: {ensemble_result['method']})")
+                    
+                elif self.llm_classifier and self.llm_classifier.is_available():
+                    # Fallback: Usa LLM per classificazione intent automatica
                     llm_result = self.llm_classifier.classify_with_motivation(text)
                     
                     # Il risultato è un oggetto ClassificationResult
@@ -197,11 +234,11 @@ class IntelligentIntentClusterer:
                     }
                     
                 else:
-                    # Fallback se LLM non disponibile
+                    # Fallback se nessun classificatore disponibile
                     intent_info = {
                         'intent': 'altro',
                         'confidence': 0.1,
-                        'reasoning': 'LLM non disponibile',
+                        'reasoning': 'Nessun classificatore disponibile',
                         'method': 'fallback',
                         'text_preview': text[:100] + '...' if len(text) > 100 else text
                     }

@@ -1162,13 +1162,14 @@ class EndToEndPipeline:
             self._last_hierarchical_clusterer = hierarchical_clusterer
             
         elif intelligent_config.get('enabled', True):  # Default TRUE per sistema intelligente
-            print(f"🧠 Usando clustering INTELLIGENTE (LLM + ML senza pattern)")
+            print(f"🧠 Usando clustering INTELLIGENTE (ML+LLM ensemble senza pattern)")
             
-            # USA SOLO IL SISTEMA INTELLIGENTE PURO
+            # 🔧 CORREZIONE 2025-09-04: Passa ensemble_classifier completo per usare ML+LLM negli outlier
             intelligent_clusterer = IntelligentIntentClusterer(
                 tenant=self.tenant,  # Passa oggetto Tenant completo
                 config_path=self.clusterer.config_path,
-                llm_classifier=self.ensemble_classifier.llm_classifier if self.ensemble_classifier else None
+                llm_classifier=self.ensemble_classifier.llm_classifier if self.ensemble_classifier else None,
+                ensemble_classifier=self.ensemble_classifier  # 🆕 Passa ensemble completo
             )
             cluster_labels, cluster_info = intelligent_clusterer.cluster_intelligently(testi, embeddings)
             cluster_labels = np.array(cluster_labels)

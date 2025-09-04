@@ -944,7 +944,12 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
                                         <Typography variant="caption" color="text.secondary">
                                           Pred: {propagatedCase.ml_prediction || 'N/A'}
                                         </Typography>
-                                        <Button size="small" variant="outlined" color="secondary">
+                                        <Button 
+                                          size="small" 
+                                          variant="outlined" 
+                                          color="secondary"
+                                          onClick={() => onCaseSelect(propagatedCase)}
+                                        >
                                           🔗 Rivedi Ereditata
                                         </Button>
                                       </Box>
@@ -1202,7 +1207,11 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
                                 Novelty: {caseItem.novelty_score.toFixed(3)}
                               </Typography>
                             </Box>
-                            <Button size="small" variant="outlined">
+                            <Button 
+                              size="small" 
+                              variant="outlined"
+                              onClick={() => onCaseSelect(caseItem)}
+                            >
                               {caseItem.is_representative === false ? "🔗 Rivedi Ereditata" : "👑 Rivedi Rappresentante"}
                             </Button>
                           </Box>

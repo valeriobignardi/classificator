@@ -240,27 +240,27 @@ class IntelligentTagSuggestionManager:
         try:
             # 🏗️ GESTIONE TENANT CENTRALIZZATA
             if tenant and TENANT_AVAILABLE:
-                # CORREZIONE: La tabella TAG usa tenant_slug, non tenant_id (UUID)
-                tenant_id = tenant.tenant_slug  # USA IL SLUG, NON L'UUID
+                # CORREZIONE CRITICA: La tabella tags usa tenant_id (UUID), non tenant_slug
+                tenant_id = tenant.tenant_id  # USA L'UUID, NON IL SLUG
                 client_name_resolved = tenant.tenant_slug
-                print(f"🎯 TAG: Uso tenant centralizzato {tenant} - Cerco con slug: {tenant.tenant_slug}")
+                print(f"🎯 TAG: Uso tenant centralizzato {tenant} - Cerco con UUID: {tenant.tenant_id}")
             elif client_name:
-                # Fallback legacy per compatibilità
-                tenant_id = client_name
+                # Fallback legacy: risolvi client_name in tenant_id
+                tenant_id = self._resolve_tenant_id_from_name(client_name)
                 client_name_resolved = client_name
-                print(f"🔄 TAG: Fallback legacy - uso client_name: {client_name}")
+                print(f"🔄 TAG: Fallback legacy - risolvo client_name {client_name} in UUID: {tenant_id}")
             else:
                 raise ValueError("Deve essere fornito 'tenant' (preferito) o 'client_name' (legacy)")
                 
-            self.logger.info(f"🔒 MULTI-TENANT: Client '{client_name_resolved}' → Cerco tag con tenant_id: {tenant_id}")
+            self.logger.info(f"🔒 MULTI-TENANT: Client '{client_name_resolved}' → Cerco tag con tenant_id UUID: {tenant_id}")
             
             # STEP 2: Ottieni SOLO i tag del tenant specificato
             all_tags = self._get_all_available_tags(tenant_id)
             
             # Se il cliente ha classificazioni esistenti, ordina i tag per uso frequente
-            if self.has_existing_classifications(client_name):
-                self.logger.info(f"Cliente esistente '{client_name}': ordinamento tag per uso frequente")
-                usage_stats = self._get_tag_usage_stats(client_name)
+            if self.has_existing_classifications(client_name_resolved, tenant=tenant):
+                self.logger.info(f"Cliente esistente '{client_name_resolved}': ordinamento tag per uso frequente")
+                usage_stats = self._get_tag_usage_stats(client_name_resolved, tenant=tenant)
                 
                 # Aggiungi statistiche di utilizzo ai tag
                 for tag_info in all_tags:
@@ -277,18 +277,18 @@ class IntelligentTagSuggestionManager:
                 # Ordina per uso frequente
                 all_tags.sort(key=lambda x: (x['usage_count'], x['avg_confidence']), reverse=True)
             else:
-                self.logger.info(f"Cliente nuovo '{client_name}': tutti i tag disponibili senza ordinamento")
+                self.logger.info(f"Cliente nuovo '{client_name_resolved}': tutti i tag disponibili senza ordinamento")
                 # Per clienti nuovi, aggiungi metadati base
                 for tag_info in all_tags:
                     tag_info['usage_count'] = 0
                     tag_info['avg_confidence'] = 0.0
                     tag_info['source'] = 'available'
             
-            self.logger.info(f"Cliente '{client_name}': {len(all_tags)} tag suggeriti restituiti")
+            self.logger.info(f"Cliente '{client_name_resolved}': {len(all_tags)} tag suggeriti restituiti")
             return all_tags
             
         except Exception as e:
-            self.logger.error(f"Errore nel recupero suggerimenti per {client_name}: {e}")
+            self.logger.error(f"Errore nel recupero suggerimenti per {client_name_resolved}: {e}")
             return []
     
     def _get_all_available_tags(self, tenant_id: str) -> List[Dict[str, Any]]:

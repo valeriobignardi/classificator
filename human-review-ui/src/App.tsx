@@ -91,14 +91,18 @@ function AppContent() {
   const { selectedTenant } = useTenant();
   // Passa l'oggetto tenant completo anziché solo il nome
   const tenant = selectedTenant || { 
-    tenant_id: '015007d9-d413-11ef-86a5-96000228e7fe',  // Default humanitas
-    tenant_name: 'humanitas',
+    tenant_id: '015007d9-d413-11ef-86a5-96000228e7fe',  // Default humanitas UUID
+    tenant_name: 'Humanitas',
+    tenant_slug: 'humanitas', 
     is_active: true 
   };
 
+  console.log('🔍 [App] Tenant utilizzato:', tenant);
+  console.log('🔍 [App] selectedTenant dal context:', selectedTenant);
+
   const handleCaseSelect = (caseItem: ReviewCase) => {
     setSelectedCase(caseItem);
-    setCurrentTab(selectedCase ? 5 : 5); // Switch to case detail tab (index 5 now)
+    setCurrentTab(5); // Switch to case detail tab (index 5 now)
   };
 
   const handleCaseResolved = () => {
@@ -109,7 +113,7 @@ function AppContent() {
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     // Non permettere di cambiare al tab caso se non c'è un caso selezionato
-    const caseTabIndex = selectedCase ? 5 : -1; // Cambiato da 3 a 5
+    const caseTabIndex = selectedCase ? 5 : -1; // Corretto: ora è indice 5
     if (newValue === caseTabIndex && !selectedCase) {
       return;
     }
@@ -219,7 +223,6 @@ function AppContent() {
               <Tab label="Configurazione" />
               <Tab label="Parametri Clustering" />
               <Tab label="📊 Statistiche Clustering" />
-              <Tab label="⚙️ Soglie Review Queue" />
               {selectedCase && (
                 <Tab label={`Caso: ${selectedCase.session_id.substring(0, 8)}...`} />
               )}
@@ -296,12 +299,8 @@ function AppContent() {
             <ClusteringStatisticsManager />
           </TabPanel>
 
-          <TabPanel value={currentTab} index={5}>
-            <ReviewQueueThresholdManager />
-          </TabPanel>
-
           {selectedCase && (
-            <TabPanel value={currentTab} index={6}>
+            <TabPanel value={currentTab} index={5}>
               <CaseDetail
                 case={selectedCase}
                 tenant={tenant}

@@ -1617,7 +1617,7 @@ def supervised_training(client_name: str):
     try:
         print(f"🎯 TRAINING SUPERVISIONATO - Cliente: {client_name}")
         
-        # Recupera parametri dal body della richiesta (solo quelli semplificati)
+        # Recupera solo force_review dal body della richiesta
         request_data = {}
         if request.content_type and 'application/json' in request.content_type:
             try:
@@ -1626,17 +1626,112 @@ def supervised_training(client_name: str):
                 print(f"⚠️  Errore parsing JSON: {e}")
                 request_data = {}
         
-        # PARAMETRI SEMPLIFICATI per l'utente
-        max_sessions = request_data.get('max_sessions', 500)  # Max sessioni rappresentative per review umana
-        confidence_threshold = request_data.get('confidence_threshold', 0.7)  # Soglia confidenza
-        force_review = request_data.get('force_review', False)  # Forza revisione casi già revisionati  
-        disagreement_threshold = request_data.get('disagreement_threshold', 0.3)  # Soglia ensemble disagreement
+        # Solo force_review dal frontend, tutti gli altri parametri dal database
+        force_review = request_data.get('force_review', False)
         
-        print(f"📋 Parametri utente semplificati:")
-        print(f"  � Max sessioni review: {max_sessions}")
+        print(f"📋 Parametro utente:")
+        print(f"  🔄 Forza review: {force_review}")
+        
+        # 🆕 CARICA PARAMETRI DAL DATABASE TAG.soglie
+        try:
+            # Risolvi tenant_id se necessario
+            from Utils.tenant import Tenant
+            if len(client_name) == 36 and '-' in client_name:
+                # È già un UUID
+                tenant_id = client_name
+            else:
+                # È uno slug, risolvi in UUID
+                tenant = Tenant.from_slug(client_name)
+                tenant_id = tenant.tenant_id
+            
+            # Carica parametri dal database usando l'API esistente
+            print(f"📊 Caricamento parametri da database TAG.soglie per tenant: {tenant_id}")
+            
+            import mysql.connector
+            import yaml
+            
+            # Carica configurazione database
+            config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+            
+            db_config = config['tag_database']
+            
+            # Connessione al database
+            connection = mysql.connector.connect(
+                host=db_config['host'],
+                port=db_config['port'],
+                user=db_config['user'],
+                password=db_config['password'],
+                database=db_config['database'],
+                autocommit=True
+            )
+            
+            cursor = connection.cursor(dictionary=True)
+            
+            # Query per recuperare i parametri dal database
+            query = """
+            SELECT *
+            FROM soglie 
+            WHERE tenant_id = %s 
+            ORDER BY id DESC 
+            LIMIT 1
+            """
+            
+            cursor.execute(query, (tenant_id,))
+            db_result = cursor.fetchone()
+            
+            if db_result:
+                # Parametri dal database
+                confidence_threshold = float(db_result['representative_confidence_threshold'])
+                disagreement_threshold = 1.0 - float(db_result['minimum_consensus_threshold']) / 2.0  # Conversione da consensus a disagreement
+                max_sessions = db_result['max_pending_per_batch']
+                
+                # Parametri HDBSCAN/UMAP dal database
+                clustering_params = {
+                    'min_cluster_size': db_result['min_cluster_size'],
+                    'min_samples': db_result['min_samples'],
+                    'metric': db_result['metric'],
+                    'cluster_selection_epsilon': float(db_result['cluster_selection_epsilon']),
+                    'use_umap': bool(db_result['use_umap']),
+                    'umap_n_neighbors': db_result['umap_n_neighbors'],
+                    'umap_min_dist': float(db_result['umap_min_dist']),
+                    'umap_n_components': db_result['umap_n_components']
+                }
+                
+                print(f"✅ Parametri caricati dal database (record ID {db_result['id']}):")
+                print(f"  🎯 Confidence threshold: {confidence_threshold}")
+                print(f"  ⚖️ Disagreement threshold: {disagreement_threshold}")
+                print(f"  📊 Max sessions: {max_sessions}")
+                print(f"  🧩 Clustering params: {clustering_params}")
+                
+                connection.close()
+                
+            else:
+                # Fallback a parametri default
+                confidence_threshold = 0.7
+                disagreement_threshold = 0.3
+                max_sessions = 500
+                clustering_params = {}
+                
+                print(f"⚠️ Nessun parametro trovato nel database, uso defaults")
+                
+                if connection:
+                    connection.close()
+                    
+        except Exception as e:
+            print(f"❌ Errore caricamento parametri dal database: {e}")
+            # Fallback a parametri default
+            confidence_threshold = 0.7
+            disagreement_threshold = 0.3
+            max_sessions = 500
+            clustering_params = {}
+        
+        print(f"📋 Parametri finali utilizzati:")
+        print(f"  📊 Max sessioni review: {max_sessions}")
         print(f"  🎯 Soglia confidenza: {confidence_threshold}")
         print(f"  🔄 Forza review: {force_review}")
-        print(f"  ⚖️  Soglia disagreement: {disagreement_threshold}")
+        print(f"  ⚖️ Soglia disagreement: {disagreement_threshold}")
         
         # Ottieni la pipeline per questo cliente
         pipeline = classification_service.get_pipeline(client_name)
@@ -3539,14 +3634,16 @@ def api_get_available_tags(tenant_id: str):
         )
         
         cursor = connection.cursor()
+        
+        # PROVA PRIMA CON tenant_id, POI CON tenant_slug
         query = """
         SELECT tenant_name, tenant_slug 
         FROM tenants 
-        WHERE tenant_id = %s AND is_active = 1
+        WHERE (tenant_id = %s OR tenant_slug = %s) AND is_active = 1
         LIMIT 1
         """
         
-        cursor.execute(query, (tenant_id,))
+        cursor.execute(query, (tenant_id, tenant_id))
         result = cursor.fetchone()
         cursor.close()
         connection.close()
@@ -3557,8 +3654,6 @@ def api_get_available_tags(tenant_id: str):
                 'error': f'Tenant non trovato o non attivo: {tenant_id}',
                 'tenant_id': tenant_id
             }), 404
-        
-        tenant_name, tenant_slug = result
         
         tenant_name, tenant_slug = result
         
@@ -3580,6 +3675,20 @@ def api_get_available_tags(tenant_id: str):
         
         # STEP 5: Verifica se è un tenant nuovo (basato su MongoDB)
         is_new_client = not tag_manager.has_existing_classifications(client_name)
+        
+        # 🆕 FALLBACK: Se non ci sono tag ma ci sono classificazioni, aggiungi tag comuni
+        if len(suggested_tags) == 0 and not is_new_client:
+            print(f"⚠️ [TAG FALLBACK] Nessun tag trovato per tenant {tenant_name}, aggiungo tag comuni")
+            suggested_tags = [
+                {'tag': 'prenotazione_esami', 'count': 100, 'source': 'common', 'avg_confidence': 0.8},
+                {'tag': 'ritiro_referti', 'count': 80, 'source': 'common', 'avg_confidence': 0.8},
+                {'tag': 'info_esami_specifici', 'count': 60, 'source': 'common', 'avg_confidence': 0.8},
+                {'tag': 'modifica_appuntamenti', 'count': 50, 'source': 'common', 'avg_confidence': 0.8},
+                {'tag': 'orari_contatti', 'count': 40, 'source': 'common', 'avg_confidence': 0.8},
+                {'tag': 'problemi_tecnici', 'count': 30, 'source': 'common', 'avg_confidence': 0.8},
+                {'tag': 'info_generali', 'count': 25, 'source': 'common', 'avg_confidence': 0.8},
+                {'tag': 'altro', 'count': 20, 'source': 'common', 'avg_confidence': 0.7}
+            ]
         
         return jsonify({
             'success': True,

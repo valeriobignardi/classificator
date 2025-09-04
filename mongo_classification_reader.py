@@ -1472,6 +1472,23 @@ class MongoClassificationReader:
                     else:
                         doc["metadata"]["propagation_confidence"] = float(confidence_value)
                 
+                # 🆕 METADATI BOOLEANI STRUTTURATI (SEMPRE PRESENTI)
+                # Determina i flag in base ai metadati del cluster
+                is_representative = cluster_metadata.get("is_representative", False)
+                cluster_id = cluster_metadata.get("cluster_id", None)
+                propagated_from = cluster_metadata.get("propagated_from", None)
+                
+                # Logica per determinare i tipi
+                is_outlier = (cluster_id == -1 or cluster_id == "-1")
+                is_propagated = bool(propagated_from) or (classified_by == "cluster_propagation")
+                
+                # Salva i metadati booleani strutturati
+                doc["metadata"]["representative"] = bool(is_representative)
+                doc["metadata"]["outlier"] = bool(is_outlier)
+                doc["metadata"]["propagated"] = bool(is_propagated)
+                
+                print(f"🏷️ METADATI BOOLEANI AGGIUNTI: representative={is_representative}, outlier={is_outlier}, propagated={is_propagated}")
+                
                 print(f"🐛 DEBUG save_classification_result - doc[metadata] finale: {doc['metadata']}")
                 
                 # Log per debug
@@ -1524,11 +1541,24 @@ class MongoClassificationReader:
                     doc["session_type"] = "outlier"
                     doc["classification_type"] = "OUTLIER"  # 🆕 EXPLICIT TYPE
                     
+                    # 🆕 METADATI BOOLEANI PER OUTLIER AUTOMATICO
+                    doc["metadata"]["representative"] = False
+                    doc["metadata"]["outlier"] = True
+                    doc["metadata"]["propagated"] = False
+                    
                     print(f"🎯 CLUSTERING OUTLIER DETECTED: Sessione {session_id} classificata come outlier (metodo={classified_by}) → cluster {outlier_cluster_id}")
+                    print(f"🏷️ METADATI BOOLEANI OUTLIER: representative=False, outlier=True, propagated=False")
                 else:
                     # 🔍 CLASSIFICAZIONE LLM DIRETTA (non cluster-based)
                     doc["classification_type"] = "NORMALE"  # 🆕 EXPLICIT TYPE
+                    
+                    # 🆕 METADATI BOOLEANI PER CLASSIFICAZIONE NORMALE
+                    doc["metadata"]["representative"] = False
+                    doc["metadata"]["outlier"] = False
+                    doc["metadata"]["propagated"] = False
+                    
                     print(f"🤖 LLM DIRECT CLASSIFICATION: Sessione {session_id} classificata tramite LLM diretto (classificazione={classified_by})")
+                    print(f"🏷️ METADATI BOOLEANI NORMALE: representative=False, outlier=False, propagated=False")
                     # Non aggiungere cluster_id per classificazioni normali
             
             # 🆕 AGGIUNGI SEMPRE session_type basato sui metadata per consistenza UI
@@ -1617,19 +1647,20 @@ class MongoClassificationReader:
         """
         Scopo: Recupera sessioni per Review Queue a 3 livelli (Rappresentanti/Propagate/Outliers)
         🔧 OPZIONE 1: Mostra solo casi con review_status = "pending" (non auto_classified)
+        🆕 NUOVO: Usa metadati booleani strutturati per filtri precisi
         
         Parametri input:
             - client_name: Nome del cliente
             - limit: Numero massimo di risultati
             - label_filter: Filtro per etichetta specifica
-            - show_representatives: Include rappresentanti di cluster (review_status: pending)
-            - show_propagated: Include conversazioni propagate dai cluster (review_status: pending)
-            - show_outliers: Include outliers (cluster_id: -1, review_status: pending)
+            - show_representatives: Include rappresentanti di cluster (metadata.representative=True)
+            - show_propagated: Include conversazioni propagate dai cluster (metadata.propagated=True)
+            - show_outliers: Include outliers (metadata.outlier=True)
             
         Output:
             - Lista di sessioni filtrate per Review Queue (solo status "pending")
             
-        Ultimo aggiornamento: 2025-09-01 - Valerio Bignardi - Fix OPZIONE 1
+        Ultimo aggiornamento: 2025-09-04 - Valerio Bignardi - Metadati booleani strutturati
         """
         try:
             if not self.ensure_connection():
@@ -1638,25 +1669,25 @@ class MongoClassificationReader:
             # Usa la collection appropriata per il tenant
             collection = self.db[self.get_collection_name()]
             
-            # 🆕 NUOVA LOGICA: Usa il campo classification_type
+            # 🆕 NUOVA LOGICA CON METADATI BOOLEANI
             or_conditions = []
             
-            # 1. RAPPRESENTANTI: classification_type = "RAPPRESENTANTE" 
+            # 1. RAPPRESENTANTI: metadata.representative = true
             if show_representatives:
                 or_conditions.append({
-                    "classification_type": "RAPPRESENTANTE"
+                    "metadata.representative": True
                 })
             
-            # 2. PROPAGATE: classification_type = "PROPAGATO"
+            # 2. PROPAGATE: metadata.propagated = true
             if show_propagated:
                 or_conditions.append({
-                    "classification_type": "PROPAGATO"
+                    "metadata.propagated": True
                 })
             
-            # 3. OUTLIERS: classification_type = "OUTLIER"
+            # 3. OUTLIERS: metadata.outlier = true
             if show_outliers:
                 or_conditions.append({
-                    "classification_type": "OUTLIER"
+                    "metadata.outlier": True
                 })
             
             # Query base per tenant con review_status filtering
@@ -1700,16 +1731,27 @@ class MongoClassificationReader:
                 print(f"🐛 DEBUG get_review_queue_sessions - classification_type: {doc.get('classification_type', 'N/A')}")
                 print(f"🐛 DEBUG get_review_queue_sessions - metadata: {doc.get('metadata', {})}")
                 
-                # Determina il tipo di sessione per metadata UI
+                # 🆕 DETERMINA IL TIPO DI SESSIONE CON METADATI BOOLEANI
                 session_type = "unknown"
                 metadata = doc.get('metadata', {})
                 
-                if metadata.get('is_representative', False):
+                # Usa i nuovi metadati booleani per determinazione precisa
+                if metadata.get('representative', False):
                     session_type = "representative"
-                elif metadata.get('propagated_from'):
+                elif metadata.get('propagated', False):
                     session_type = "propagated"
-                elif metadata.get('cluster_id') in [-1, "-1"] or not metadata.get('cluster_id'):
+                elif metadata.get('outlier', False):
                     session_type = "outlier"
+                else:
+                    # Fallback alla logica precedente per compatibilità con dati vecchi
+                    if metadata.get('is_representative', False):
+                        session_type = "representative"
+                    elif metadata.get('propagated_from'):
+                        session_type = "propagated"
+                    elif metadata.get('cluster_id') in [-1, "-1"] or not metadata.get('cluster_id'):
+                        session_type = "outlier"
+                
+                print(f"🏷️ TIPO SESSIONE DETERMINATO: {session_type} (representative={metadata.get('representative', False)}, propagated={metadata.get('propagated', False)}, outlier={metadata.get('outlier', False)})")
                 
                 # 🔧 FIX REVIEW QUEUE: Mappping intelligente per casi propagati
                 final_classification = doc.get('classification', doc.get('classificazione', ''))

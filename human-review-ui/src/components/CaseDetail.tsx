@@ -52,10 +52,14 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
     const loadAvailableTags = async () => {
       setTagsLoading(true);
       try {
+        console.log('🔍 [CaseDetail] Caricamento tag per tenant:', tenant);
+        console.log('🔍 [CaseDetail] Tenant ID utilizzato:', tenant.tenant_id);
+        
         const response = await apiService.getAvailableTags(tenant.tenant_id);
+        console.log('✅ [CaseDetail] Tag ricevuti:', response.tags.length);
         setAvailableTags(response.tags);
       } catch (err) {
-        console.error('Error loading available tags:', err);
+        console.error('❌ [CaseDetail] Error loading available tags:', err);
         // Non mostrare errore per i tag, continua senza di essi
       } finally {
         setTagsLoading(false);

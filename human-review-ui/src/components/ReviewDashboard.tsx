@@ -10,7 +10,6 @@ import {
   LinearProgress,
   IconButton,
   Tooltip,
-  TextField,
   FormControlLabel,
   Switch,
   Dialog,
@@ -83,13 +82,10 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
   // 🔍 Context per gestire tenant e prompt status
   const { promptStatus } = useTenant();
   
-  // Stato per dialogo training supervisionato SEMPLIFICATO - 4 PARAMETRI
+  // Stato per dialogo training supervisionato SEMPLIFICATO - SOLO Force Review
   const [trainingDialogOpen, setTrainingDialogOpen] = useState(false);
   const [trainingConfig, setTrainingConfig] = useState({
-    max_sessions: 500,                // Numero massimo sessioni per review umana
-    confidence_threshold: 0.7,        // Soglia di confidenza
-    force_review: false,              // Forza revisione casi già revisionati
-    disagreement_threshold: 0.3       // Soglia disagreement ensemble
+    force_review: false              // Forza revisione casi già revisionati
   });
 
   // Stato per gestire le tab
@@ -215,17 +211,14 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
     setTrainingDialogOpen(false);
 
     try {
-      // 🔧 FIX MAPPING: Mappa confidence_threshold → min_confidence per compatibilità API
+      // 🔧 NUOVO: Solo force_review, tutti gli altri parametri vengono dal database TAG.soglie
       const apiConfig = {
-        max_sessions: trainingConfig.max_sessions,
-        min_confidence: trainingConfig.confidence_threshold,  // FIX: mapping corretto
-        disagreement_threshold: trainingConfig.disagreement_threshold,
         force_review: trainingConfig.force_review
       };
       
-      console.log('🔍 [DEBUG] Mapping frontend → API:', {
-        'frontend confidence_threshold': trainingConfig.confidence_threshold,
-        'API min_confidence': apiConfig.min_confidence
+      console.log('🔍 [DEBUG] Training config (parametri centralizzati):', {
+        'force_review': apiConfig.force_review,
+        'note': 'Soglie e parametri clustering caricati dal database TAG.soglie'
       });
       
       const response = await apiService.startSupervisedTraining(tenant.tenant_id, apiConfig);
@@ -1244,63 +1237,21 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
         </DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            Il sistema estrarrà <strong>TUTTE le discussioni</strong> dal database per il clustering, 
-            ma limiterà la revisione umana ai cluster più rappresentativi.
+            Il sistema utilizzerà i parametri configurati in <strong>PARAMETRI CLUSTERING</strong> per
+            il processo di training supervisionato.
           </Typography>
           
           <Alert severity="info" sx={{ mb: 3 }}>
             <Typography variant="body2">
-              <strong>🚀 NUOVA LOGICA:</strong><br/>
-              • 📊 <strong>Estrazione:</strong> Tutte le discussioni (no limiti)<br/>
-              • 🧩 <strong>Clustering:</strong> Su dataset completo<br/>
-              • 👤 <strong>Review Umana:</strong> Solo {trainingConfig.max_sessions} sessioni rappresentative<br/>
+              <strong>🚀 CONFIGURAZIONE CENTRALIZZATA:</strong><br/>
+              • 📊 <strong>Soglie Review:</strong> Configurate in "Parametri Clustering"<br/>
+              • 🧩 <strong>Parametri HDBSCAN/UMAP:</strong> Dal database locale<br/>
+              • 👤 <strong>Force Review:</strong> Rivaluta casi già revisionati<br/>
             </Typography>
           </Alert>
           
           <Box display="flex" flexDirection="column" gap={3}>
-            {/* Max Sessions per Review Umana */}
-            <TextField
-              fullWidth
-              type="number"
-              label="📊 Max Sessioni per Review Umana"
-              value={trainingConfig.max_sessions}
-              onChange={(e) => setTrainingConfig({
-                ...trainingConfig,
-                max_sessions: parseInt(e.target.value) || 500
-              })}
-              helperText="Numero massimo di sessioni rappresentative da sottoporre all'umano"
-              inputProps={{ min: 10, max: 2000 }}
-            />
-            
-            {/* Confidence Threshold */}
-            <TextField
-              fullWidth
-              type="number"
-              label="🎯 Soglia Confidenza"
-              value={trainingConfig.confidence_threshold}
-              onChange={(e) => setTrainingConfig({
-                ...trainingConfig,
-                confidence_threshold: parseFloat(e.target.value) || 0.7
-              })}
-              helperText="Soglia di confidenza per auto-classificazione (0.0-1.0)"
-              inputProps={{ min: 0, max: 1, step: 0.1 }}
-            />
-            
-            {/* Disagreement Threshold */}
-            <TextField
-              fullWidth
-              type="number" 
-              label="⚖️ Soglia Disagreement"
-              value={trainingConfig.disagreement_threshold}
-              onChange={(e) => setTrainingConfig({
-                ...trainingConfig,
-                disagreement_threshold: parseFloat(e.target.value) || 0.3
-              })}
-              helperText="Soglia per ensemble disagreement - priorità review (0.0-1.0)"
-              inputProps={{ min: 0, max: 1, step: 0.1 }}
-            />
-            
-            {/* Force Review Switch */}
+            {/* Solo Force Review Switch */}
             <FormControlLabel
               control={
                 <Switch
@@ -1314,50 +1265,10 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
               label="🔄 Forza Review (rivaluta anche casi già revisionati)"
             />
             
-            {/* Quick preset buttons */}
-            <Box>
-              <Typography variant="body2" fontWeight="bold" mb={1}>
-                ⚡ Preset Rapidi:
-              </Typography>
-              <Box display="flex" gap={1} flexWrap="wrap">
-                <Button
-                  size="small"
-                  variant="outlined"
-                  onClick={() => setTrainingConfig({
-                    max_sessions: 200,
-                    confidence_threshold: 0.8,
-                    force_review: false,
-                    disagreement_threshold: 0.3
-                  })}
-                >
-                  🚀 Veloce
-                </Button>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  onClick={() => setTrainingConfig({
-                    max_sessions: 500,
-                    confidence_threshold: 0.7,
-                    force_review: false,
-                    disagreement_threshold: 0.3
-                  })}
-                >
-                  ⚖️ Standard
-                </Button>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  onClick={() => setTrainingConfig({
-                    max_sessions: 1000,
-                    confidence_threshold: 0.6,
-                    force_review: true,
-                    disagreement_threshold: 0.2
-                  })}
-                >
-                  🔍 Approfondito
-                </Button>
-              </Box>
-            </Box>
+            <Typography variant="body2" color="text.secondary">
+              <strong>📋 Nota:</strong> Per modificare soglie di confidenza, disagreement e parametri di clustering,
+              utilizzare la sezione <strong>"Parametri Clustering"</strong> nel menu principale.
+            </Typography>
           </Box>
         </DialogContent>
         <DialogActions>

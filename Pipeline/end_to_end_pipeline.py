@@ -4688,6 +4688,24 @@ class EndToEndPipeline:
                     stats['skipped_representatives'] += 1
                     continue
                 
+                # 🆕 CONTROLLO AGGIUNTIVO: VERIFICA SE GIÀ SALVATO COME RAPPRESENTANTE IN DB
+                try:
+                    collection = mongo_reader.db[mongo_reader.get_collection_name()]
+                    existing_doc = collection.find_one(
+                        {"session_id": session_id, "tenant_id": self.tenant.tenant_id}
+                    )
+                    if existing_doc and existing_doc.get("classification_type") == "RAPPRESENTANTE":
+                        print(f"👑 SALTATO RAPPRESENTANTE DA DB: {session_id} (già salvato come RAPPRESENTANTE)")
+                        stats['skipped_representatives'] += 1
+                        continue
+                    elif existing_doc and existing_doc.get("metadata", {}).get("representative", False):
+                        print(f"👑 SALTATO RAPPRESENTANTE DA METADATA: {session_id} (metadata.representative=True)")
+                        stats['skipped_representatives'] += 1
+                        continue
+                except Exception as e:
+                    print(f"⚠️ Errore controllo rappresentante per {session_id}: {e}")
+                    # Continua con il processo se il controllo fallisce
+                
                 # Trova il cluster di questa sessione
                 cluster_id = cluster_labels[i] if i < len(cluster_labels) else -1
                 

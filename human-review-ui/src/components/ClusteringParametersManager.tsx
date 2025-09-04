@@ -784,7 +784,22 @@ const ClusteringParametersManager: React.FC = () => {
             <>
                       <Box display="flex" flexWrap="wrap" gap={2}>
                 {Object.entries(parameters)
-                  .filter(([paramName]) => !paramName.startsWith('umap') && paramName !== 'use_umap') // 🆕 Esclude parametri UMAP dalla sezione principale
+                  .filter(([paramName]) => {
+                    // Esclude parametri UMAP dalla sezione principale
+                    if (paramName.startsWith('umap') || paramName === 'use_umap') return false;
+                    
+                    // Esclude parametri di Review Queue dalla sezione HDBSCAN
+                    const reviewQueueParams = [
+                      'min_consensus_threshold',           // Soglia minima consenso
+                      'outlier_confidence_threshold',      // Soglia confidenza outlier  
+                      'overflow_handling',                 // Gestione overflow sessioni
+                      'propagation_quality_threshold',     // Soglia qualità propagazione
+                      'representative_confidence_threshold', // Soglia confidenza rappresentanti
+                      'representative_selection_strategy'  // Strategia selezione rappresentanti
+                    ];
+                    
+                    return !reviewQueueParams.includes(paramName);
+                  })
                   .map(([paramName, param]) => (
                   <Box key={paramName} flex="1 1 400px" minWidth="300px">
                     <Paper sx={{ p: 2, height: '100%' }}>
@@ -1137,184 +1152,6 @@ const ClusteringParametersManager: React.FC = () => {
 
                 <Box display="flex" flexWrap="wrap" gap={2}>
                   
-                  {/* Soglia Outlier */}
-                  {parameters?.outlier_confidence_threshold && (
-                    <Box flex="1 1 300px" minWidth="250px">
-                      <Paper sx={{ p: 2, height: '100%', bgcolor: 'background.paper' }}>
-                        <Box display="flex" alignItems="center" mb={1}>
-                          <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
-                            Soglia Outlier
-                          </Typography>
-                          <Tooltip title="Soglia di confidenza per casi OUTLIER">
-                            <IconButton size="small">
-                              <InfoIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        </Box>
-                        <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
-                          Casi OUTLIER con confidenza sotto questa soglia vanno in review
-                        </Typography>
-                        <Slider
-                          value={parameters.outlier_confidence_threshold.value as number}
-                          onChange={(_, newValue) => updateParameter('outlier_confidence_threshold', newValue)}
-                          min={parameters.outlier_confidence_threshold.min || 0.1}
-                          max={parameters.outlier_confidence_threshold.max || 1.0}
-                          step={parameters.outlier_confidence_threshold.step || 0.01}
-                          marks={[
-                            { value: 0.1, label: '0.1' },
-                            { value: 0.5, label: '0.5' },
-                            { value: 1.0, label: '1.0' }
-                          ]}
-                          valueLabelDisplay="on"
-                          sx={{ mt: 1 }}
-                        />
-                      </Paper>
-                    </Box>
-                  )}
-
-                  {/* Soglia Propagato */}
-                  {parameters?.propagated_confidence_threshold && (
-                    <Box flex="1 1 300px" minWidth="250px">
-                      <Paper sx={{ p: 2, height: '100%', bgcolor: 'background.paper' }}>
-                        <Box display="flex" alignItems="center" mb={1}>
-                          <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
-                            Soglia Qualità Propagazione
-                          </Typography>
-                          <Tooltip title="Soglia di confidenza per validare la qualità delle propagazioni durante il training">
-                            <IconButton size="small">
-                              <InfoIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        </Box>
-                        <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
-                          ⚠️ I propagati NON vanno MAI automaticamente in review. Questa soglia serve solo per validare la qualità delle propagazioni durante il training supervisionato.
-                        </Typography>
-                        <Slider
-                          value={parameters.propagated_confidence_threshold.value as number}
-                          onChange={(_, newValue) => updateParameter('propagated_confidence_threshold', newValue)}
-                          min={parameters.propagated_confidence_threshold.min || 0.1}
-                          max={parameters.propagated_confidence_threshold.max || 1.0}
-                          step={parameters.propagated_confidence_threshold.step || 0.01}
-                          marks={[
-                            { value: 0.1, label: '0.1' },
-                            { value: 0.5, label: '0.5' },
-                            { value: 1.0, label: '1.0' }
-                          ]}
-                          valueLabelDisplay="on"
-                          sx={{ mt: 1 }}
-                        />
-                      </Paper>
-                    </Box>
-                  )}
-
-                  {/* Soglia Rappresentativo */}
-                  {parameters?.representative_confidence_threshold && (
-                    <Box flex="1 1 300px" minWidth="250px">
-                      <Paper sx={{ p: 2, height: '100%', bgcolor: 'background.paper' }}>
-                        <Box display="flex" alignItems="center" mb={1}>
-                          <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
-                            Soglia Rappresentativo
-                          </Typography>
-                          <Tooltip title="Soglia di confidenza per casi RAPPRESENTATIVO">
-                            <IconButton size="small">
-                              <InfoIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        </Box>
-                        <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
-                          Casi RAPPRESENTATIVO con confidenza sotto questa soglia vanno in review
-                        </Typography>
-                        <Slider
-                          value={parameters.representative_confidence_threshold.value as number}
-                          onChange={(_, newValue) => updateParameter('representative_confidence_threshold', newValue)}
-                          min={parameters.representative_confidence_threshold.min || 0.1}
-                          max={parameters.representative_confidence_threshold.max || 1.0}
-                          step={parameters.representative_confidence_threshold.step || 0.01}
-                          marks={[
-                            { value: 0.1, label: '0.1' },
-                            { value: 0.5, label: '0.5' },
-                            { value: 1.0, label: '1.0' }
-                          ]}
-                          valueLabelDisplay="on"
-                          sx={{ mt: 1 }}
-                        />
-                      </Paper>
-                    </Box>
-                  )}
-
-                  {/* Soglia Consenso Minimo */}
-                  {parameters?.minimum_consensus_threshold && (
-                    <Box flex="1 1 300px" minWidth="250px">
-                      <Paper sx={{ p: 2, height: '100%', bgcolor: 'background.paper' }}>
-                        <Box display="flex" alignItems="center" mb={1}>
-                          <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
-                            Consenso Minimo
-                          </Typography>
-                          <Tooltip title="Numero minimo di algoritmi che devono concordare">
-                            <IconButton size="small">
-                              <InfoIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        </Box>
-                        <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
-                          Numero minimo di algoritmi concordi per auto-classificazione
-                        </Typography>
-                        <Slider
-                          value={parameters.minimum_consensus_threshold.value as number}
-                          onChange={(_, newValue) => updateParameter('minimum_consensus_threshold', newValue)}
-                          min={parameters.minimum_consensus_threshold.min || 1}
-                          max={parameters.minimum_consensus_threshold.max || 5}
-                          step={parameters.minimum_consensus_threshold.step || 1}
-                          marks={[
-                            { value: 1, label: '1' },
-                            { value: 2, label: '2' },
-                            { value: 3, label: '3' },
-                            { value: 4, label: '4' },
-                            { value: 5, label: '5' }
-                          ]}
-                          valueLabelDisplay="on"
-                          sx={{ mt: 1 }}
-                        />
-                      </Paper>
-                    </Box>
-                  )}
-
-                  {/* Max Pending per Batch */}
-                  {parameters?.max_pending_per_batch && (
-                    <Box flex="1 1 300px" minWidth="250px">
-                      <Paper sx={{ p: 2, height: '100%', bgcolor: 'background.paper' }}>
-                        <Box display="flex" alignItems="center" mb={1}>
-                          <Typography variant="subtitle1" sx={{ flexGrow: 1 }}>
-                            Max Pending/Batch
-                          </Typography>
-                          <Tooltip title="Massimo numero di casi pending per ogni batch">
-                            <IconButton size="small">
-                              <InfoIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        </Box>
-                        <Typography variant="caption" color="text.secondary" sx={{ mb: 2, display: 'block' }}>
-                          Limite massimo casi da inviare in review per batch
-                        </Typography>
-                        <Slider
-                          value={parameters.max_pending_per_batch.value as number}
-                          onChange={(_, newValue) => updateParameter('max_pending_per_batch', newValue)}
-                          min={parameters.max_pending_per_batch.min || 10}
-                          max={parameters.max_pending_per_batch.max || 500}
-                          step={parameters.max_pending_per_batch.step || 10}
-                          marks={[
-                            { value: 50, label: '50' },
-                            { value: 150, label: '150' },
-                            { value: 300, label: '300' },
-                            { value: 500, label: '500' }
-                          ]}
-                          valueLabelDisplay="on"
-                          sx={{ mt: 1 }}
-                        />
-                      </Paper>
-                    </Box>
-                  )}
-
                 </Box>
 
                 {/* Toggle Smart Review */}

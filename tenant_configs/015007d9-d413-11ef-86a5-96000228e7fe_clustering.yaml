@@ -1,8 +1,20 @@
 clustering_parameters:
+  allow_single_cluster: false
+  alpha: 0.4
+  cluster_selection_epsilon: 0.28
+  cluster_selection_method: eom
   max_cluster_size: 0
-  min_cluster_size: 15
-  min_samples: 18
-last_updated: '2025-09-03T22:03:47.825831'
+  metric: euclidean
+  min_cluster_size: 14
+  min_samples: 16
+  only_user: false
+  umap_metric: cosine
+  umap_min_dist: 0
+  umap_n_components: 17
+  umap_n_neighbors: 30
+  umap_random_state: 42
+  use_umap: true
+last_updated: '2025-09-04T09:53:39.856485'
 previous_config_backup:
   allow_single_cluster: false
   alpha: 0.4

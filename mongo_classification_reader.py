@@ -2217,20 +2217,22 @@ class MongoClassificationReader:
     def _determine_classification_type(self, cluster_metadata: dict) -> str:
         """
         Scopo: Determina il tipo di classificazione basato sui metadati cluster
+        CORREZIONE: Restituisce solo i 3 tipi validi: RAPPRESENTANTE, OUTLIER, PROPAGATO
         
         Parametri input:
             - cluster_metadata: Metadati del clustering
             
         Output:
-            - Stringa che indica il tipo: RAPPRESENTANTE, OUTLIER, PROPAGATO, NORMALE
+            - Stringa che indica il tipo: RAPPRESENTANTE, OUTLIER, PROPAGATO
             
-        Ultimo aggiornamento: 2025-09-01
+        Ultimo aggiornamento: 2025-09-04 - CORREZIONE TIPI
         """
         print(f"🐛 DEBUG _determine_classification_type - Input: {cluster_metadata}")
         
         if not cluster_metadata:
-            print(f"🐛 DEBUG _determine_classification_type - Nessun metadata → NORMALE")
-            return "NORMALE"
+            print(f"🐛 DEBUG _determine_classification_type - Nessun metadata → OUTLIER (default)")
+            # CORREZIONE: Se non ci sono metadata, è probabilmente un outlier
+            return "OUTLIER"
             
         # RAPPRESENTANTE: è esplicitamente marcato come rappresentativo
         is_representative = cluster_metadata.get('is_representative', False)
@@ -2253,18 +2255,19 @@ class MongoClassificationReader:
             print(f"🐛 DEBUG _determine_classification_type - RISULTATO: OUTLIER")
             return "OUTLIER"
             
-        # PROPAGATO: ha propagated_from (è stato propagato da un rappresentante)
-        # NOTA: Questo controllo è DOPO outlier perché un outlier non può essere propagato
+        # PROPAGATO: ha cluster_id valido (>=0) E propagated_from
+        # NOTA: Questo controllo è DOPO outlier per evitare contraddizioni
         propagated_from = cluster_metadata.get('propagated_from')
         print(f"🐛 DEBUG _determine_classification_type - propagated_from: {propagated_from}")
         
-        if propagated_from:
+        if propagated_from and cluster_id is not None and cluster_id >= 0:
             print(f"🐛 DEBUG _determine_classification_type - RISULTATO: PROPAGATO")
             return "PROPAGATO"
             
-        # DEFAULT: Se ha cluster_metadata ma non rientra nelle categorie sopra
-        print(f"🐛 DEBUG _determine_classification_type - RISULTATO: CLUSTER_MEMBER")
-        return "CLUSTER_MEMBER"
+        # DEFAULT: Se ha cluster_id valido ma non è rappresentante né propagato
+        # Assumiamo sia un OUTLIER (caso edge)
+        print(f"🐛 DEBUG _determine_classification_type - RISULTATO: OUTLIER (fallback)")
+        return "OUTLIER"
 
 
 def main():

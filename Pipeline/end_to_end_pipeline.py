@@ -1977,10 +1977,10 @@ class EndToEndPipeline:
                 'human_feedback_stats': feedback_stats
             })
             
-            # IMPORTANTE: Propaga le etichette dai cluster a tutte le sessioni
-            print(f"🔄 Propagazione etichette da {len(reviewed_labels)} cluster a tutte le sessioni...")
+            # IMPORTANTE: Propaga le etichette dai cluster a tutte le sessioni (SOLO propagati, NON rappresentanti)
+            print(f"🔄 Propagazione etichette da {len(reviewed_labels)} cluster SOLO alle sessioni propagate...")
             propagation_stats = self._propagate_labels_to_sessions(
-                sessioni, cluster_labels, reviewed_labels
+                sessioni, cluster_labels, reviewed_labels, representatives
             )
             metrics.update({
                 'propagation_stats': propagation_stats
@@ -4474,49 +4474,117 @@ class EndToEndPipeline:
     def _propagate_labels_to_sessions(self, 
                                     sessioni: Dict[str, Dict],
                                     cluster_labels: np.ndarray,
-                                    reviewed_labels: Dict[int, str]) -> Dict[str, Any]:
+                                    reviewed_labels: Dict[int, str],
+                                    representatives: Dict[int, List[Dict]] = None) -> Dict[str, Any]:
         """
-        Propaga le etichette dai rappresentanti di cluster a tutte le sessioni del cluster
-        e applica etichette dai training agli outlier (che sono rappresentanti di se stessi).
-        Salva tutte le classificazioni nel database MongoDB.
+        Propaga le etichette dai rappresentanti di cluster SOLO alle sessioni propagate.
+        
+        CORREZIONE CRITICA: NON tocca rappresentanti né outliers già processati!
         
         LOGICA CORRETTA:
-        - Sessioni in cluster: propagazione da rappresentanti
-        - Outlier: utilizzano etichette già assegnate durante training (non riclassificati)
+        - RAPPRESENTANTI: GIÀ salvati con classified_by='supervised_training_pipeline' - SKIP
+        - OUTLIERS: GIÀ salvati con classified_by='supervised_training_pipeline' - SKIP  
+        - PROPAGATI: Solo questi vengono toccati con classified_by='cluster_propagation'
         
         Args:
             sessioni: Dizionario delle sessioni {session_id: session_data}
             cluster_labels: Array delle etichette cluster per ogni sessione
             reviewed_labels: Dizionario {cluster_id: final_label} dalle review umane
+            representatives: Dict dei rappresentanti per identificare chi NON toccare
                            (deve includere -1 per outlier se ci sono stati)
             
         Returns:
             Statistiche della propagazione
         """
-        print(f"🔄 PROPAGAZIONE ETICHETTE DAI CLUSTER ALLE SESSIONI")
+        print(f"🔄 PROPAGAZIONE ETICHETTE SOLO AI PROPAGATI (NON rappresentanti/outliers)")
         print(f"   📊 Sessioni totali: {len(sessioni)}")
         print(f"   🏷️  Etichette da propagare: {len(reviewed_labels)}")
+        
+        # 🆕 CREA SET DI RAPPRESENTANTI DA NON TOCCARE
+        representative_session_ids = set()
+        if representatives:
+            for cluster_reps in representatives.values():
+                for rep in cluster_reps:
+                    if isinstance(rep, dict):
+                        rep_id = rep.get('session_id')
+                        if rep_id:
+                            representative_session_ids.add(rep_id)
+                    else:
+                        representative_session_ids.add(str(rep))
+        
+        print(f"   👑 Rappresentanti da SALTARE: {len(representative_session_ids)}")
         
         stats = {
             'total_sessions': len(sessioni),
             'labeled_sessions': 0,
             'unlabeled_sessions': 0,
+            'skipped_representatives': 0,
+            'skipped_outliers': 0,
+            'propagated_sessions': 0,
             'propagated_by_cluster': {},
             'confidence_distribution': {},
             'save_errors': 0,
             'save_successes': 0,
-            'mongo_saves': 0  # Aggiungo contatore per MongoDB
+            'mongo_saves': 0
         }
         
         # Connetti al database TAG per il salvataggio
         self.tag_db.connetti()
         
         try:
+            # Connetti a MongoDB per salvataggio
+            from mongo_classification_reader import MongoClassificationReader
+            mongo_reader = MongoClassificationReader(tenant=self.tenant)
+            if not mongo_reader.connect():
+                print(f"❌ Errore connessione MongoDB per propagazione")
+                return stats
+            
             # Itera su tutte le sessioni
             session_ids = list(sessioni.keys())
             
             for i, session_id in enumerate(session_ids):
                 session_data = sessioni[session_id]
+                
+                # 🚨 CONTROLLO CRITICO: SALTA RAPPRESENTANTI
+                if session_id in representative_session_ids:
+                    print(f"👑 SALTATO RAPPRESENTANTE: {session_id}")
+                    stats['skipped_representatives'] += 1
+                    continue
+                
+                # Trova il cluster di questa sessione
+                cluster_id = cluster_labels[i] if i < len(cluster_labels) else -1
+                
+                # 🚨 CONTROLLO CRITICO: SALTA OUTLIERS (cluster_id = -1)
+                if cluster_id == -1:
+                    print(f"🔴 SALTATO OUTLIER: {session_id} (cluster {cluster_id})")
+                    stats['skipped_outliers'] += 1
+                    continue
+                
+                # 🆕 PROCESSA SOLO PROPAGATI (membri di cluster, NON rappresentanti)
+                if cluster_id in reviewed_labels:
+                    # Usa l'etichetta dal cluster
+                    final_label = reviewed_labels[cluster_id]
+                    confidence = 0.85  # Alta confidenza per propagazione da cluster
+                    method = 'CLUSTER_PROPAGATION'
+                    notes = f"Propagata da cluster {cluster_id}"
+                    stats['labeled_sessions'] += 1
+                    stats['propagated_sessions'] += 1
+                    
+                    print(f"🔗 PROPAGAZIONE: {session_id} -> {final_label} (da cluster {cluster_id})")
+                    
+                    # Aggiorna statistiche per cluster
+                    if cluster_id not in stats['propagated_by_cluster']:
+                        stats['propagated_by_cluster'][cluster_id] = {
+                            'label': final_label,
+                            'count': 0
+                        }
+                    stats['propagated_by_cluster'][cluster_id]['count'] += 1
+                    
+                else:
+                    # Cluster senza etichetta assegnata - skip
+                    print(f"⚠️ CLUSTER SENZA ETICHETTA: {session_id} (cluster {cluster_id}) - SALTATO")
+                    stats['unlabeled_sessions'] += 1
+                    continue
                 
                 # Trova il cluster di questa sessione
                 cluster_id = cluster_labels[i] if i < len(cluster_labels) else -1
@@ -4539,67 +4607,19 @@ class EndToEndPipeline:
                     stats['propagated_by_cluster'][cluster_id]['count'] += 1
                     
                 else:
-                    # � PROBLEMA RISOLTO: Outlier NON dovrebbero mai entrare in propagazione!
-                    # Gli outlier sono rappresentanti di se stessi e dovrebbero essere già stati processati
-                    print(f"❌ ERRORE ARCHITETTURALE: Outlier {session_id} (cluster {cluster_id}) in propagazione!")
-                    print(f"   🔧 Gli outlier dovrebbero essere già stati processati come rappresentanti")
-                    
-                    # 🎯 CORREZIONE TEMPORANEA: Usa etichetta outlier da reviewed_labels se disponibile
-                    if -1 in reviewed_labels:
-                        # Usa l'etichetta assegnata agli outlier durante il training
-                        final_label = reviewed_labels[-1]
-                        confidence = 0.7  # Confidenza media per outlier da training
-                        method = 'OUTLIER_FROM_TRAINING'
-                        notes = f"Outlier - etichetta da training rappresentanti (cluster {cluster_id})"
-                        print(f"✅ OUTLIER RECUPERATO DA TRAINING: {session_id} -> {final_label}")
-                        stats['labeled_sessions'] += 1
-                    else:
-                        # Fallback: outlier senza training (caso critico)
-                        final_label = 'altro'
-                        confidence = 0.3
-                        method = 'OUTLIER_NO_TRAINING_FALLBACK'
-                        notes = f"Outlier - fallback senza training (cluster {cluster_id})"
-                        print(f"⚠️ OUTLIER SENZA TRAINING: {session_id} -> fallback 'altro'")
-                        stats['unlabeled_sessions'] += 1
-                    
-                    # 🆕 VALIDAZIONE "ALTRO" solo se necessario
-                    if final_label == 'altro' and hasattr(self, 'interactive_trainer') and self.interactive_trainer.altro_validator:
-                        try:
-                            conversation_text = session_data.get('testo_completo', '')
-                            if conversation_text:
-                                print(f"🔍 VALIDAZIONE ALTRO per outlier {session_id}")
-                                validated_label, validated_confidence, validation_info = self.interactive_trainer.handle_altro_classification(
-                                    conversation_text=conversation_text,
-                                    force_human_decision=False
-                                )
-                                
-                                if validated_label != 'altro':
-                                    final_label = validated_label
-                                    confidence = validated_confidence
-                                    method = f"{method}_ALTRO_VAL"
-                                    notes = f"{notes} - Validato da 'altro' a '{validated_label}'"
-                                    print(f"✅ OUTLIER RICLASSIFICATO: {session_id} 'altro' -> '{validated_label}'")
-                                    
-                        except Exception as e:
-                            print(f"⚠️ Errore validazione altro per outlier {session_id}: {e}")
+                    # Cluster senza etichetta assegnata - skip
+                    print(f"⚠️ CLUSTER SENZA ETICHETTA: {session_id} (cluster {cluster_id}) - SALTATO")
+                    stats['unlabeled_sessions'] += 1
+                    continue
                 
+                # 🆕 SALVATAGGIO SOLO PER SESSIONI PROPAGATE
                 # Aggiorna distribuzione confidenze
                 conf_range = f"{int(confidence*10)*10}%-{int(confidence*10)*10+10}%"
                 stats['confidence_distribution'][conf_range] = stats['confidence_distribution'].get(conf_range, 0) + 1
                 
-                # Salva usando MongoDB (nuovo sistema unificato)
+                # Salva SOLO sessioni propagate con classified_by='cluster_propagation'
                 try:
-                    # Usa il connettore MongoDB per salvataggio unificato
-                    from mongo_classification_reader import MongoClassificationReader
-                    
-                    # CAMBIO RADICALE: Usa oggetto Tenant
-                    mongo_reader = MongoClassificationReader(tenant=self.tenant)
-                    
-                    # 🆕 CLASSIFICA LA SESSIONE CON L'ENSEMBLE PRIMA DEL SALVATAGGIO
-                    # Distingue tra outlier già classificati e altri casi
                     conversation_text = session_data.get('testo_completo', '')
-                    
-                    # Inizializza ml_result e llm_result per salvataggio MongoDB
                     ml_result = None
                     llm_result = None
                     
@@ -4688,16 +4708,18 @@ class EndToEndPipeline:
         # Mostra statistiche finali
         print(f"✅ PROPAGAZIONE COMPLETATA!")
         print(f"   💾 Salvate: {stats['save_successes']}/{stats['total_sessions']} sessioni")
+        print(f"   🔗 SOLO propagati toccati: {stats['propagated_sessions']}")
+        print(f"   👑 Rappresentanti SALTATI: {stats['skipped_representatives']}")
+        print(f"   � Outliers SALTATI: {stats['skipped_outliers']}")
         print(f"   🏷️  Etichettate da cluster: {stats['labeled_sessions']}")
-        print(f"   🔍 Outlier assegnati a 'altro': {stats['unlabeled_sessions']}")
         print(f"   ❌ Errori: {stats['save_errors']}")
         
         # Mostra distribuzione per cluster
         print(f"   📊 Distribuzione per cluster:")
         for cluster_id, cluster_info in stats['propagated_by_cluster'].items():
             print(f"      Cluster {cluster_id}: {cluster_info['count']} sessioni → '{cluster_info['label']}'")
-    
-    def reload_llm_configuration(self) -> Dict[str, Any]:
+            
+        return stats
         """
         Ricarica configurazione LLM per il tenant corrente della pipeline
         

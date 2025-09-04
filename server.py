@@ -5624,66 +5624,178 @@ def export_tools_for_tenant(tenant_id: str):
 
 # ==================== CLUSTERING PARAMETERS API ====================
 
-@app.route('/api/clustering/<tenant_id>/parameters', methods=['GET'])
-def get_clustering_parameters(tenant_id):
+def get_review_queue_thresholds_from_db(tenant_id):
     """
-    Recupera i parametri di clustering attuali per un tenant
+    Recupera i parametri di clustering dalla tabella MySQL 'soglie' per un tenant
     
+    Scopo: Leggere configurazione clustering dal database invece che dai file YAML
+    
+    Parametri:
+        tenant_id (str): ID del tenant
+        
     Returns:
-        JSON con parametri di clustering e loro spiegazioni
+        dict: Dizionario con clustering_parameters e metadati, None se non trovato
+        
+    Tracciamento aggiornamenti:
+        - 28/01/2025: Creazione funzione per leggere dalla tabella MySQL 'soglie'
     """
+    import mysql.connector
+    from mysql.connector import Error
+    import yaml
+    
     try:
-        # Carica configurazione attuale
+        # Leggi configurazione database da config.yaml
         config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
         with open(config_path, 'r', encoding='utf-8') as file:
             config = yaml.safe_load(file)
         
-        clustering_config = config.get('clustering', {})
+        db_config = config['tag_database']
         
-        # 🆕 CARICA PARAMETRI PERSONALIZZATI TENANT (se esistono)
-        config_status = "default"  # default, custom, error
-        custom_config_info = {}
-        tenant_config_dir = os.path.join(os.path.dirname(__file__), 'tenant_configs')
-        tenant_config_file = os.path.join(tenant_config_dir, f'{tenant_id}_clustering.yaml')
+        # Connessione al database
+        print(f"🔌 [DB SOGLIE] Connessione al database MySQL per tenant {tenant_id}")
+        connection = mysql.connector.connect(
+            host=db_config['host'],
+            database=db_config['database'],
+            user=db_config['user'],
+            password=db_config['password'],
+            port=db_config.get('port', 3306)
+        )
         
-        if os.path.exists(tenant_config_file):
-            try:
-                with open(tenant_config_file, 'r', encoding='utf-8') as f:
-                    tenant_config = yaml.safe_load(f)
-                    tenant_clustering_params = tenant_config.get('clustering_parameters', {})
+        if connection.is_connected():
+            cursor = connection.cursor(dictionary=True)
+            
+            # Query per recuperare tutti i parametri
+            query = """
+            SELECT * FROM soglie 
+            WHERE tenant_id = %s 
+            ORDER BY last_updated DESC 
+            LIMIT 1
+            """
+            
+            cursor.execute(query, (tenant_id,))
+            result = cursor.fetchone()
+            
+            if result:
+                print(f"✅ [DB SOGLIE] Trovato record per tenant {tenant_id}")
+                
+                # Costruisci struttura clustering_parameters
+                clustering_parameters = {
+                    # PARAMETRI HDBSCAN BASE
+                    'min_cluster_size': result['min_cluster_size'],
+                    'min_samples': result['min_samples'],
+                    'cluster_selection_epsilon': float(result['cluster_selection_epsilon']),
+                    'metric': result['metric'],
                     
-                    if tenant_clustering_params:
-                        print(f"🎯 [CLUSTERING CONFIG] Caricando parametri personalizzati per tenant {tenant_id}")
-                        config_status = "custom"
-                        custom_config_info = {
-                            "file_path": tenant_config_file,
-                            "last_updated": tenant_config.get('last_updated', 'unknown'),
-                            "updated_by": tenant_config.get('updated_by', 'unknown'),
-                            "custom_parameters": list(tenant_clustering_params.keys())
-                        }
-                        
-                        for param, value in tenant_clustering_params.items():
-                            old_value = clustering_config.get(param, 'non_definito')
-                            clustering_config[param] = value
-                            print(f"   {param}: {old_value} -> {value}")
-                    else:
-                        print(f"📋 [CLUSTERING CONFIG] File config personalizzata esiste ma è vuoto per tenant {tenant_id}")
-                        config_status = "default"
-                        custom_config_info = {"reason": "empty_custom_config"}
-                        
-            except Exception as e:
-                print(f"⚠️ [CLUSTERING CONFIG] Errore caricamento config personalizzata tenant {tenant_id}: {e}")
-                print("🔄 [CLUSTERING CONFIG] Fallback alla configurazione default")
-                config_status = "error"
-                custom_config_info = {
-                    "error": str(e),
-                    "fallback": "default_config"
+                    # PARAMETRI HDBSCAN AVANZATI
+                    'cluster_selection_method': result['cluster_selection_method'],
+                    'alpha': float(result['alpha']),
+                    'max_cluster_size': result['max_cluster_size'],
+                    'allow_single_cluster': bool(result['allow_single_cluster']),
+                    'only_user': bool(result['only_user']),
+                    
+                    # PARAMETRI UMAP
+                    'use_umap': bool(result['use_umap']),
+                    'umap_n_neighbors': result['umap_n_neighbors'],
+                    'umap_min_dist': float(result['umap_min_dist']),
+                    'umap_metric': result['umap_metric'],
+                    'umap_n_components': result['umap_n_components'],
+                    'umap_random_state': result['umap_random_state'],
+                    
+                    # SOGLIE REVIEW QUEUE
+                    'enable_smart_review': bool(result['enable_smart_review']),
+                    'max_pending_per_batch': result['max_pending_per_batch'],
+                    'minimum_consensus_threshold': result['minimum_consensus_threshold'],
+                    'outlier_confidence_threshold': float(result['outlier_confidence_threshold']),
+                    'propagated_confidence_threshold': float(result['propagated_confidence_threshold']),
+                    'representative_confidence_threshold': float(result['representative_confidence_threshold'])
                 }
-        else:
-            print(f"📋 [CLUSTERING CONFIG] Nessun file di configurazione personalizzata per tenant {tenant_id}")
-            print(f"🔄 [CLUSTERING CONFIG] Usando configurazione default da config.yaml")
-            config_status = "default"
-            custom_config_info = {"reason": "no_custom_config_file"}
+                
+                return {
+                    'clustering_parameters': clustering_parameters,
+                    'id': result['id'],
+                    'last_updated': result['last_updated'].isoformat() if result['last_updated'] else None,
+                    'config_source': result['config_source']
+                }
+            else:
+                print(f"⚠️ [DB SOGLIE] Nessun record trovato per tenant {tenant_id}")
+                return None
+                
+    except Error as e:
+        print(f"❌ [DB SOGLIE] Errore MySQL per tenant {tenant_id}: {e}")
+        return None
+    finally:
+        if 'connection' in locals() and connection.is_connected():
+            cursor.close()
+            connection.close()
+
+
+@app.route('/api/clustering/<tenant_id>/parameters', methods=['GET'])
+def get_clustering_parameters(tenant_id):
+    """
+    Recupera i parametri di clustering per un tenant:
+    1. Se esistono parametri nel database MySQL 'soglie' → usa quelli
+    2. Se non esistono parametri per il tenant → fallback a config.yaml
+    3. Se errore database → FERMA e mostra errore per debug
+    
+    CORREZIONE: Logica corretta per gestione errori database
+    
+    Returns:
+        JSON con parametri di clustering dal database MySQL o config.yaml
+    """
+    try:
+        print(f"🔍 [CLUSTERING API] Verifico parametri per tenant {tenant_id}")
+        
+        # 🚨 STEP 1: Prova a leggere dal database MySQL
+        try:
+            db_result = get_review_queue_thresholds_from_db(tenant_id)
+            print(f"🔍 [CLUSTERING API] Risultato database: {db_result}")
+            
+            # ✅ STEP 2: Se ci sono parametri nel database, usali
+            if db_result and 'clustering_parameters' in db_result and db_result['clustering_parameters']:
+                clustering_config = db_result['clustering_parameters']
+                config_status = "database"
+                custom_config_info = {
+                    "source": "mysql_soglie_table",
+                    "last_updated": db_result.get('last_updated', 'unknown'),
+                    "database_record_id": db_result.get('id', 'unknown')
+                }
+                print(f"✅ [CLUSTERING API] Parametri caricati dal database per tenant {tenant_id}")
+                print(f"📊 [CLUSTERING API] Parametri DB: min_cluster_size={clustering_config.get('min_cluster_size')}, min_samples={clustering_config.get('min_samples')}")
+                
+            else:
+                # 📁 STEP 3: Nessun parametro nel database → fallback a config.yaml
+                print(f"⚠️ [CLUSTERING API] Nessun parametro in DB per tenant {tenant_id} → uso config.yaml")
+                config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+                with open(config_path, 'r', encoding='utf-8') as file:
+                    config = yaml.safe_load(file)
+                
+                clustering_config = config.get('clustering', {})
+                config_status = "default"
+                custom_config_info = {
+                    "source": "config_yaml_fallback",
+                    "reason": "no_database_record_for_tenant"
+                }
+                print(f"📁 [CLUSTERING API] Caricati parametri default da config.yaml")
+                
+        except Exception as db_error:
+            # 🚨 STEP 4: ERRORE DATABASE → FERMA E MOSTRA ERRORE PER DEBUG
+            error_message = f"❌ [CLUSTERING API] ERRORE CRITICO DATABASE per tenant {tenant_id}: {str(db_error)}"
+            print(error_message)
+            import traceback
+            traceback.print_exc()
+            
+            # FERMA IL PROGRAMMA E RESTITUISCI ERRORE PER DEBUG
+            return jsonify({
+                'success': False,
+                'error': 'ERRORE CRITICO DATABASE',
+                'debug_info': {
+                    'tenant_id': tenant_id,
+                    'error_type': type(db_error).__name__,
+                    'error_message': str(db_error),
+                    'traceback': traceback.format_exc()
+                },
+                'action_required': 'Controllare connessione database MySQL e configurazione'
+            }), 500
         
         # Parametri con spiegazioni user-friendly
         parameters = {

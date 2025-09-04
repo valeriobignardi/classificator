@@ -456,7 +456,12 @@ class AdvancedEnsembleClassifier:
         llm_confidence = 0.0
         llm_available = False
         
+        # 🔍 DEBUG: Verifica stato LLM
+        print(f"🧪 DEBUG LLM:")
+        print(f"   📊 self.llm_classifier: {self.llm_classifier is not None}")
+        
         if self.llm_classifier and self.llm_classifier.is_available():
+            print(f"   📊 LLM disponibile - procedo con classificazione")
             try:
                 llm_result = self.llm_classifier.classify_with_motivation(text)
                 # Gestisci correttamente l'oggetto ClassificationResult
@@ -467,29 +472,49 @@ class AdvancedEnsembleClassifier:
                 }
                 llm_confidence = llm_result.confidence
                 llm_available = True
+                print(f"   📊 LLM Predizione: '{llm_result.predicted_label}' (conf: {llm_result.confidence:.3f})")
+                print(f"   ✅ LLM Prediction creata con successo")
             except Exception as e:
-                print(f"⚠️ Errore LLM: {e}")
+                print(f"❌ Errore LLM: {e}")
+                print(f"   📊 Tipo errore: {type(e).__name__}")
+                import traceback
+                print(f"   📊 Traceback: {traceback.format_exc()}")
                 llm_prediction = None
+        else:
+            if self.llm_classifier is None:
+                print(f"   ❌ LLM classifier NON inizializzato (None)")
+            else:
+                print(f"   ❌ LLM classifier non disponibile (is_available() = False)")
+            llm_prediction = None
         
         # 2. Predizione ML Ensemble
         ml_prediction = None
         ml_confidence = 0.0
         ml_available = False
         
+        # 🔍 DEBUG: Verifica stato ML ensemble
+        print(f"🧪 DEBUG ML ENSEMBLE:")
+        print(f"   📊 self.ml_ensemble is not None: {self.ml_ensemble is not None}")
+        print(f"   📊 Tipo ml_ensemble: {type(self.ml_ensemble)}")
+        
         if self.ml_ensemble is not None:
+            print(f"   📊 ML Ensemble disponibile - procedo con predizione")
             try:
                 # Usa l'embedder passato come parametro o creane uno nuovo solo se necessario
                 if embedder is not None:
                     embedding = embedder.encode([text])
+                    print(f"   📊 Embedding generato - shape: {embedding.shape}")
                 else:
                     print("⚠️ Nessun embedder fornito, creo uno nuovo (potenziale rischio CUDA OOM)")
                     from EmbeddingEngine.labse_embedder import LaBSEEmbedder
                     temp_embedder = LaBSEEmbedder()
                     embedding = temp_embedder.encode([text])
+                    print(f"   📊 Embedding generato (temp) - shape: {embedding.shape}")
                 
                 # Applica feature augmentation BERTopic se disponibile
                 ml_features = embedding
                 if self.bertopic_provider is not None:
+                    print(f"   📊 BERTopic provider disponibile - applico feature augmentation")
                     try:
                         topic_feats = self.bertopic_provider.transform(
                             [text], embeddings=embedding,
@@ -500,45 +525,74 @@ class AdvancedEnsembleClassifier:
                         if self.bertopic_return_one_hot and 'one_hot' in topic_feats:
                             parts.append(topic_feats['one_hot'])
                         ml_features = np.concatenate([p for p in parts if p is not None], axis=1)
+                        print(f"   📊 Features augmented - shape finale: {ml_features.shape}")
                     except Exception as be:
                         print(f"⚠️ BERTopic transform fallita: {be}. Uso solo embedding base.")
                         ml_features = embedding
+                else:
+                    print(f"   📊 Nessun BERTopic provider - uso solo embedding base")
                 
-                # Predizione
-                ml_proba = self.ml_ensemble.predict_proba(ml_features)[0]
-                ml_label_idx = np.argmax(ml_proba)
-                ml_label = self.ml_ensemble.classes_[ml_label_idx]
-                ml_confidence = ml_proba[ml_label_idx]
-                
-                # CONVERSIONE NUMPY -> PYTHON per evitare errori JSON serialization
-                ml_prediction = {
-                    'predicted_label': convert_numpy_types(ml_label),
-                    'confidence': convert_numpy_types(ml_confidence),
-                    'probabilities': convert_numpy_types(dict(zip(self.ml_ensemble.classes_, ml_proba)))
-                }
-                ml_available = True
+                # Verifica che ml_ensemble sia addestrato
+                if hasattr(self.ml_ensemble, 'classes_'):
+                    print(f"   📊 ML Ensemble addestrato - classi disponibili: {list(self.ml_ensemble.classes_)}")
+                    
+                    # Predizione
+                    ml_proba = self.ml_ensemble.predict_proba(ml_features)[0]
+                    ml_label_idx = np.argmax(ml_proba)
+                    ml_label = self.ml_ensemble.classes_[ml_label_idx]
+                    ml_confidence = ml_proba[ml_label_idx]
+                    
+                    print(f"   📊 ML Predizione: '{ml_label}' (conf: {ml_confidence:.3f})")
+                    
+                    # CONVERSIONE NUMPY -> PYTHON per evitare errori JSON serialization
+                    ml_prediction = {
+                        'predicted_label': convert_numpy_types(ml_label),
+                        'confidence': convert_numpy_types(ml_confidence),
+                        'probabilities': convert_numpy_types(dict(zip(self.ml_ensemble.classes_, ml_proba)))
+                    }
+                    ml_available = True
+                    print(f"   ✅ ML Prediction creata con successo")
+                    
+                else:
+                    print(f"   ❌ ML Ensemble NON addestrato - manca attributo 'classes_'")
+                    print(f"   📊 Attributi disponibili: {[attr for attr in dir(self.ml_ensemble) if not attr.startswith('_')]}")
+                    ml_prediction = None
                 
             except Exception as e:
-                print(f"⚠️ Errore ML Ensemble: {e}")
+                print(f"❌ Errore ML Ensemble: {e}")
+                print(f"   📊 Tipo errore: {type(e).__name__}")
+                import traceback
+                print(f"   📊 Traceback: {traceback.format_exc()}")
                 ml_prediction = None
+        else:
+            print(f"   ❌ ML Ensemble NON disponibile (None)")
+            ml_prediction = None
         
         # 3. Combinazione Ensemble
+        print(f"🧪 DEBUG COMBINAZIONE ENSEMBLE:")
+        print(f"   📊 LLM available: {llm_available}")
+        print(f"   📊 ML available: {ml_available}")
+        
         if llm_available and ml_available:
             # Entrambi disponibili - usa voting ponderato con supervisione umana
+            print(f"   ✅ Entrambi disponibili - uso ENSEMBLE voting")
             ensemble_prediction = self._combine_predictions(llm_prediction, ml_prediction, text)
             method = 'ENSEMBLE'
         elif llm_available:
             # Solo LLM disponibile
+            print(f"   ⚠️ Solo LLM disponibile - uso LLM")
             ensemble_prediction = llm_prediction.copy()
             ensemble_prediction['ensemble_confidence'] = llm_confidence
             method = 'LLM'
         elif ml_available:
             # Solo ML disponibile
+            print(f"   ⚠️ Solo ML disponibile - uso ML")
             ensemble_prediction = ml_prediction.copy()
             ensemble_prediction['ensemble_confidence'] = ml_confidence
             method = 'ML'
         else:
             # Nessuno disponibile - errore
+            print(f"   ❌ NESSUNO disponibile - errore critico")
             raise ValueError("Nessun classificatore disponibile")
         
         # 4. Risultato finale
@@ -575,6 +629,13 @@ class AdvancedEnsembleClassifier:
                 'ml_available': ml_available
             })
         
+        # 🔍 DEBUG: Risultato finale prima del return
+        print(f"📊 RISULTATO PREDICT_WITH_ENSEMBLE:")
+        print(f"   🎯 Final label: {results['predicted_label']}")
+        print(f"   📈 Final confidence: {results['confidence']:.3f}")
+        print(f"   🔧 Method: {results['method']}")
+        print(f"   📋 Results completi: {results}")
+
         # DEBUG: Log predizione completa
         processing_time = (datetime.now() - start_time).total_seconds()
         if self.ml_debugger and self.ml_debugger.enabled:

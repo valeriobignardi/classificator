@@ -829,8 +829,14 @@ class EndToEndPipeline:
         Returns:
             BERTopicFeatureProvider addestrato o None se non abilitato/disponibile
         """
+        print(f"🤖 DEBUG: INIZIO TRAINING BERTOPIC ANTICIPATO")
+        print(f"   📊 Sessioni ricevute: {len(sessioni)}")
+        print(f"   📊 Embeddings shape: {embeddings.shape}")
+        print(f"   🔧 BERTopic config enabled: {self.bertopic_config.get('enabled', False)}")
+        print(f"   🔧 BERTopic disponibile: {_BERTopic_AVAILABLE}")
+        
         if not self.bertopic_config.get('enabled', False):
-            print("🔄 BERTopic non abilitato, salto training anticipato")
+            print("❌ BERTopic non abilitato nella configurazione, salto training anticipato")
             return None
             
         if not _BERTopic_AVAILABLE:
@@ -1079,14 +1085,27 @@ class EndToEndPipeline:
         
         # 🆕 NUOVO: Training BERTopic anticipato su dataset completo
         print(f"\n📊 FASE 2A: TRAINING BERTOPIC ANTICIPATO")
+        print(f"🔍 DEBUG: Avvio training BERTopic anticipato...")
+        print(f"   📊 Sessioni per training: {len(sessioni)}")
+        print(f"   📊 Embeddings shape: {embeddings.shape}")
+        print(f"   🔧 Config BERTopic enabled: {self.bertopic_config.get('enabled', False)}")
+        
         self._bertopic_provider_trained = self._addestra_bertopic_anticipato(sessioni, embeddings)
+        
+        print(f"🔍 DEBUG: Risultato training BERTopic:")
+        print(f"   📋 Provider creato: {self._bertopic_provider_trained is not None}")
         if self._bertopic_provider_trained:
             print(f"   ✅ BERTopic provider disponibile per augmentation features")
+            print(f"   📊 Tipo provider: {type(self._bertopic_provider_trained)}")
+            if hasattr(self._bertopic_provider_trained, 'model'):
+                print(f"   📊 Modello interno: {type(self._bertopic_provider_trained.model)}")
+                print(f"   📊 Numero topic: {len(self._bertopic_provider_trained.model.get_topics()) if hasattr(self._bertopic_provider_trained.model, 'get_topics') else 'N/A'}")
             # Assegna il modello BERTopic al trainer interattivo per validazione "altro"
             if hasattr(self._bertopic_provider_trained, 'model'):
                 self.interactive_trainer.bertopic_model = self._bertopic_provider_trained.model
                 print(f"   🔗 BERTopic model assegnato al trainer per validazione ALTRO")
         else:
+            print(f"   ❌ BERTopic provider NON CREATO!")
             print(f"   ⚠️ BERTopic provider non disponibile, proseguo con sole embeddings")
         
         print(f"\n📊 FASE 2B: CLUSTERING HDBSCAN")
@@ -1744,6 +1763,27 @@ class EndToEndPipeline:
         print(f"📊 Sessioni da processare: {len(sessioni)}")
         print(f"🏷️  Etichette suggerite: {len(suggested_labels)}")
         print(f"👤 Modalità interattiva: {interactive_mode}")
+        
+        # 🔍 DEBUG: Stato BERTopic Provider per training ML
+        print(f"\n🤖 DEBUG: STATO BERTOPIC PROVIDER:")
+        bertopic_provider = getattr(self, '_bertopic_provider_trained', None)
+        print(f"   📋 Provider disponibile: {bertopic_provider is not None}")
+        if bertopic_provider:
+            print(f"   📊 Tipo: {type(bertopic_provider)}")
+            if hasattr(bertopic_provider, 'model') and bertopic_provider.model:
+                try:
+                    topics = bertopic_provider.model.get_topics()
+                    print(f"   📊 Numero topic: {len(topics)}")
+                    print(f"   📊 Topic validi: {len([t for t in topics.keys() if t != -1])}")
+                except Exception as e:
+                    print(f"   ❌ Errore accesso topic: {e}")
+            else:
+                print(f"   ❌ Modello interno mancante!")
+        else:
+            print(f"   ❌ NESSUN PROVIDER BERTOPIC DISPONIBILE!")
+            print(f"   🔍 Verificare fase 2A (training BERTopic anticipato)")
+        print(f"   🔧 Config BERTopic enabled: {self.bertopic_config.get('enabled', False)}")
+        print(f"")  # Linea vuota per separazione
         
         # 🆕 DEBUG MIGLIORATO: Analizza risultati clustering
         n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)

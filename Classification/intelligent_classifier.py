@@ -115,6 +115,43 @@ except ImportError:
     BERTOPIC_AVAILABLE = False
 
 
+def clean_label_text(label: str) -> str:
+    """
+    Pulisce l'etichetta da caratteri speciali che possono causare problemi nel salvataggio
+    
+    Scopo della funzione: Rimuove virgolette esterne e backslash dalle etichette LLM
+    Parametri di input: label (stringa etichetta da pulire)
+    Parametri di output: Etichetta pulita
+    Valori di ritorno: Stringa depurata da caratteri speciali
+    Tracciamento aggiornamenti: 2025-09-04 - Creata per correggere bug virgolette
+    
+    Args:
+        label: Etichetta da pulire
+        
+    Returns:
+        Etichetta depurata da caratteri speciali
+        
+    Autore: Valerio Bignardi
+    Data: 2025-09-04
+    """
+    if not label or not isinstance(label, str):
+        return label
+    
+    # Rimuovi virgolette esterne (doppie e singole)
+    cleaned = label.strip()
+    if (cleaned.startswith('"') and cleaned.endswith('"')) or \
+       (cleaned.startswith("'") and cleaned.endswith("'")):
+        cleaned = cleaned[1:-1]
+    
+    # Rimuovi backslash di escape
+    cleaned = cleaned.replace('\\"', '"').replace("\\'", "'").replace('\\\\', '\\')
+    
+    # Rimuovi spazi extra
+    cleaned = cleaned.strip()
+    
+    return cleaned
+
+
 @dataclass
 class ClassificationResult:
     """Risultato della classificazione LLM"""
@@ -2036,9 +2073,14 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             result = json.loads(corrected_json)
             
             # Estrazione e validazione campi
-            predicted_label = result.get('predicted_label', '').strip().lower()
+            raw_predicted_label = result.get('predicted_label', '').strip()
+            predicted_label = clean_label_text(raw_predicted_label).lower()  # 🧹 PULIZIA ETICHETTA
             confidence = float(result.get('confidence', 0.0))
             motivation = result.get('motivation', '').strip()
+            
+            # 🐛 DEBUG: Log pulizia etichetta se necessaria
+            if raw_predicted_label != predicted_label:
+                self.logger.info(f"🧹 Etichetta pulita (parse): '{raw_predicted_label}' → '{predicted_label}'")
             
             # Validazione valori
             if not predicted_label:
@@ -2104,7 +2146,12 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         
         # Se il LLM ha menzionato esattamente una etichetta, probabilmente è quella giusta
         if len(mentioned_labels) == 1:
-            predicted_label = mentioned_labels[0]
+            raw_predicted_label = mentioned_labels[0]
+            predicted_label = clean_label_text(raw_predicted_label)  # 🧹 PULIZIA ETICHETTA
+            
+            # 🐛 DEBUG: Log pulizia etichetta se necessaria
+            if raw_predicted_label != predicted_label:
+                self.logger.info(f"🧹 Etichetta pulita (fallback): '{raw_predicted_label}' → '{predicted_label}'")
             
             # Cerca confidence nel testo in modo generico
             confidence_match = re.search(r'(\d+\.?\d*)%?', response_text)
@@ -3049,10 +3096,16 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 print(f"🔍 STRUCTURED RESPONSE DEBUG: {structured_result}")
                 
                 # Estrai i risultati dal JSON strutturato (garantito valido)
-                predicted_label = structured_result["predicted_label"]
+                raw_predicted_label = structured_result["predicted_label"]
+                predicted_label = clean_label_text(raw_predicted_label)  # 🧹 PULIZIA ETICHETTA
                 confidence = float(structured_result["confidence"])
                 motivation = structured_result["motivation"]
                 original_llm_label = predicted_label  # È già l'etichetta originale
+                
+                # 🐛 DEBUG: Log pulizia etichetta se necessaria
+                if raw_predicted_label != predicted_label:
+                    print(f"🧹 LABEL CLEANING: '{raw_predicted_label}' → '{predicted_label}'")
+                    self.logger.info(f"🧹 Etichetta pulita: '{raw_predicted_label}' → '{predicted_label}'")
                 
                 self.logger.info(f"✅ Structured Output: {predicted_label} (conf: {confidence:.3f})")
                 
@@ -4030,6 +4083,12 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             return False
         
         try:
+            # 🧹 PULIZIA FINALE ETICHETTA prima del salvataggio
+            clean_tag_name = clean_label_text(tag_name)
+            if clean_tag_name != tag_name:
+                self.logger.info(f"🧹 Etichetta pulita prima del salvataggio: '{tag_name}' → '{clean_tag_name}'")
+                tag_name = clean_tag_name
+            
             # Aggiungi il tag usando TagDatabaseConnector
             success = self.mysql_connector.add_tag_if_not_exists(
                 tag_name=tag_name,

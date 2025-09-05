@@ -530,7 +530,7 @@ class ClassificationService:
         
         return mongo_reader
     
-    def get_pipeline(self, client_name: str) -> EndToEndPipeline:
+    def get_pipeline(self, client_name: str, threshold = 0.7) -> EndToEndPipeline:
         """
         Ottieni o crea la pipeline per un cliente specifico
         SOLUZIONE ALLA RADICE: Usa lock per cliente per evitare inizializzazioni simultanee
@@ -541,15 +541,15 @@ class ClassificationService:
         Returns:
             Pipeline configurata per il cliente
         """
-        # Crea lock specifico per questo cliente se non esiste
+        # Crea lock specifico per questo cliente se non esiste ancora 
         if client_name not in self._pipeline_locks:
-            with self._global_init_lock:
-                if client_name not in self._pipeline_locks:
-                    self._pipeline_locks[client_name] = threading.Lock()
+            with self._global_init_lock: # Lock globale per inizializzazioni critiche 
+                if client_name not in self._pipeline_locks: # Doppio check
+                    self._pipeline_locks[client_name] = threading.Lock() # Lock specifico cliente
         
         # Usa lock specifico del cliente
-        with self._pipeline_locks[client_name]:
-            if client_name not in self.pipelines:
+        with self._pipeline_locks[client_name]: # Lock specifico cliente
+            if client_name not in self.pipelines: # Doppio check
                 print(f"🔧 Inizializzazione pipeline per cliente: {client_name} (con lock)")
                 
                 # MODIFICA 2025-08-25: Pipeline inizializzata SENZA embedder
@@ -560,7 +560,7 @@ class ClassificationService:
                 # NOTA: auto_retrain ora viene gestito da config.yaml
                 pipeline = EndToEndPipeline(
                     tenant_slug=client_name,
-                    confidence_threshold=0.7,
+                    confidence_threshold=threshold,
                     auto_mode=True,  # Modalità completamente automatica
                     shared_embedder=None  # LAZY LOADING: embedder caricato quando serve!
                     # auto_retrain rimosso: ora gestito da config.yaml
@@ -574,7 +574,7 @@ class ClassificationService:
     def get_quality_gate(self, client_name: str, user_thresholds: Dict[str, float] = None) -> QualityGateEngine:
         """
         Ottieni o crea il QualityGateEngine per un cliente specifico
-        SOLUZIONE ALLA RADICE: Usa lock per cliente per evitare inizializzazioni simultanee
+        Usa lock per cliente per evitare inizializzazioni simultanee
         
         Args:
             client_name: Nome del cliente (es. 'humanitas')
@@ -1575,7 +1575,7 @@ def supervised_training(client_name: str):
     
     Questo endpoint:
     1. Analizza le classificazioni esistenti per identificare casi che richiedono revisione umana
-    2. Popola la coda di revisione con casi di ensemble disagreement, low confidence, o edge cases
+    2. Popola la coda di revisione con casi di ensemble disagreement, low confidence
     3. Restituisce statistiche sui casi identificati per la revisione
     
     Args:
@@ -1615,11 +1615,11 @@ def supervised_training(client_name: str):
              -d '{"batch_size": 50, "min_confidence": 0.8}'
     """
     try:
-        print(f"🎯 TRAINING SUPERVISIONATO - Cliente: {client_name}")
+        print(f"🎯 INIZIO TRAINING SUPERVISIONATO - Cliente: {client_name}")
         
         # Recupera solo force_review dal body della richiesta
         request_data = {}
-        if request.content_type and 'application/json' in request.content_type:
+        if request.content_type and 'application/json' in request.content_type: # Controlla che il content-type sia JSON
             try:
                 request_data = request.get_json() or {}
             except Exception as e:
@@ -1678,25 +1678,26 @@ def supervised_training(client_name: str):
             LIMIT 1
             """
             
-            cursor.execute(query, (tenant_id,))
-            db_result = cursor.fetchone()
+            cursor.execute(query, (tenant_id,)) # Usa tenant_id risolto
+            db_result = cursor.fetchone() # Recupera il primo (e unico) risultato
             
             if db_result:
                 # Parametri dal database
-                confidence_threshold = float(db_result['representative_confidence_threshold'])
+                confidence_threshold = float(db_result['representative_confidence_threshold']) # Es. 0.95 la confidenza sotto la quale deve andare in review
                 disagreement_threshold = 1.0 - float(db_result['minimum_consensus_threshold']) / 2.0  # Conversione da consensus a disagreement
-                max_sessions = db_result['max_pending_per_batch']
+                max_sessions = db_result['max_pending_per_batch'] # Es. 500 sessioni da sottoporre all'utente
                 
                 # Parametri HDBSCAN/UMAP dal database
                 clustering_params = {
-                    'min_cluster_size': db_result['min_cluster_size'],
-                    'min_samples': db_result['min_samples'],
-                    'metric': db_result['metric'],
-                    'cluster_selection_epsilon': float(db_result['cluster_selection_epsilon']),
-                    'use_umap': bool(db_result['use_umap']),
-                    'umap_n_neighbors': db_result['umap_n_neighbors'],
-                    'umap_min_dist': float(db_result['umap_min_dist']),
-                    'umap_n_components': db_result['umap_n_components']
+                    'min_cluster_size': db_result['min_cluster_size'], # es. 5 o 10
+                    'min_samples': db_result['min_samples'], # es. 1 o 5
+                    'metric': db_result['metric'], # es. 'euclidean', 'cosine'
+                    'cluster_selection_epsilon': float(db_result['cluster_selection_epsilon']), # es. 0.5
+                    'use_umap': bool(db_result['use_umap']), # es. True
+                    'umap_n_neighbors': db_result['umap_n_neighbors'], # es. 15
+                    'umap_min_dist': float(db_result['umap_min_dist']), # es. 0.1
+                    'umap_n_components': db_result['umap_n_components'], # es. 2 o 3
+                    'umap_metric': db_result['umap_metric'] # es. 'euclidean', 'cosine'
                 }
                 
                 print(f"✅ Parametri caricati dal database (record ID {db_result['id']}):")
@@ -1734,7 +1735,7 @@ def supervised_training(client_name: str):
         print(f"  ⚖️ Soglia disagreement: {disagreement_threshold}")
         
         # Ottieni la pipeline per questo cliente
-        pipeline = classification_service.get_pipeline(client_name)
+        pipeline = classification_service.get_pipeline(client_name) # 
         
         if not pipeline:
             return jsonify({

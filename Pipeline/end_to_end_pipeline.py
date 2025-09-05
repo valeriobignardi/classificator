@@ -1761,10 +1761,29 @@ class EndToEndPipeline:
         Returns:
             Metriche di training
         """
+        print(f"🚨🚨🚨 [DEBUG CRITICO] DENTRO allena_classificatore()!!!")
+        print(f"🚨🚨🚨 [DEBUG CRITICO] allena_classificatore() È STATA CHIAMATA!")
+        print(f"🚨🚨🚨 [DEBUG CRITICO] Parametri ricevuti:")
+        print(f"     - sessioni: {len(sessioni)}")
+        print(f"     - cluster_labels: {len(cluster_labels)}")
+        print(f"     - representatives: {len(representatives)}")
+        print(f"     - suggested_labels: {len(suggested_labels)}")
+        print(f"     - interactive_mode: {interactive_mode}")
         print(f"🎓 Training del classificatore...")
         print(f"📊 Sessioni da processare: {len(sessioni)}")
         print(f"🏷️  Etichette suggerite: {len(suggested_labels)}")
         print(f"👤 Modalità interattiva: {interactive_mode}")
+        
+        # Setup debug logging - riutilizza il logger già configurato  
+        try:
+            import logging
+            debug_logger = logging.getLogger('pipeline_debug')
+            debug_logger.info(f"🚨 DENTRO allena_classificatore()! FUNZIONE CHIAMATA!")
+            debug_logger.info(f"   Parametri: sessioni={len(sessioni)}, cluster_labels={len(cluster_labels)}")
+            debug_logger.info(f"   representatives={len(representatives)}, suggested_labels={len(suggested_labels)}")
+            debug_logger.info(f"   interactive_mode={interactive_mode}")
+        except Exception as e:
+            print(f"🚨 Warning: Debug logging non disponibile: {e}")
         
         # 🔍 DEBUG: Stato BERTopic Provider per training ML
         print(f"\n🤖 DEBUG: STATO BERTOPIC PROVIDER:")
@@ -2032,7 +2051,34 @@ class EndToEndPipeline:
         
         # Allena l'ensemble ML con le feature (augmentate o raw)
         print("🎓 Training ensemble ML avanzato...")
+        print(f"🚨🚨🚨 [DEBUG CRITICO] AVVIO TRAINING ML ENSEMBLE!")
+        print(f"🚨🚨🚨 [DEBUG CRITICO] Features shape: {ml_features.shape}")
+        print(f"🚨🚨🚨 [DEBUG CRITICO] Train labels: {len(train_labels)}")
+        print(f"🚨🚨🚨 [DEBUG CRITICO] Unique labels: {len(set(train_labels))}")
+        print(f"🚨🚨🚨 [DEBUG CRITICO] self.ensemble_classifier: {self.ensemble_classifier}")
+        
+        # Log anche nel file ext.log
+        try:
+            import logging
+            debug_logger = logging.getLogger('pipeline_debug')
+            debug_logger.info(f"🔥 CHIAMATA train_ml_ensemble()!")
+            debug_logger.info(f"   Features shape: {ml_features.shape}")
+            debug_logger.info(f"   Train labels: {len(train_labels)}")
+            debug_logger.info(f"   Unique labels: {len(set(train_labels))}")
+        except Exception as e:
+            print(f"🚨 Warning: Debug logging non disponibile: {e}")
+        
         metrics = self.ensemble_classifier.train_ml_ensemble(ml_features, train_labels)
+        
+        print(f"🚨🚨🚨 [DEBUG CRITICO] TRAINING ML ENSEMBLE COMPLETATO!")
+        print(f"🚨🚨🚨 [DEBUG CRITICO] Metrics ricevute: {metrics}")
+        
+        # Log completamento training
+        try:
+            debug_logger.info(f"✅ train_ml_ensemble() COMPLETATO!")
+            debug_logger.info(f"   Metrics ricevute: {type(metrics)}")
+        except Exception as e:
+            print(f"🚨 Warning: Debug logging non disponibile: {e}")
         
         # 🆕 ASSICURA CHE BERTOPIC PROVIDER SIA SEMPRE INIETTATO NELL'ENSEMBLE
         # Inietta il provider anche se non è stato usato per il training
@@ -2561,9 +2607,31 @@ class EndToEndPipeline:
                 disagreement_score = 0.0
                 
                 if prediction:
-                    # 🆕 SUPPORTO TRAINING SUPERVISIONATO: Converte risultato LLM in struttura ensemble
-                    if prediction.get('method') == 'LLM' and 'ml_prediction' not in prediction:
-                        # Training supervisionato - solo LLM disponibile  
+                    # 🔧 FIX CRITICO: Estrazione corretta ML/LLM predictions
+                    # Distingui tra metodo ensemble (per final_decision) e metodo cluster (per metadata)
+                    ensemble_method = prediction.get('method', '')  # ENSEMBLE, LLM, ML
+                    cluster_method = prediction.get('cluster_method', ensemble_method)  # REPRESENTATIVE, OUTLIER, CLUSTER_PROPAGATED
+                    
+                    print(f"   🔧 [EXTRACTION] Session {session_id}: ensemble_method={ensemble_method}, cluster_method={cluster_method}")
+                    
+                    # ✅ SEMPRE estrai da ensemble predictions se disponibili
+                    if ensemble_method in ['ENSEMBLE', 'LLM', 'ML'] and prediction.get('ml_prediction') is not None:
+                        # Predizione ensemble completa - estrai predizioni separate
+                        ml_prediction_data = prediction.get('ml_prediction')
+                        llm_prediction_data = prediction.get('llm_prediction')
+                        
+                        # ✅ Estrai ML prediction se disponibile
+                        if ml_prediction_data is not None:
+                            ml_result = ml_prediction_data
+                            print(f"   ✅ [EXTRACTION] ML result estratto: {ml_result.get('predicted_label', 'N/A')}")
+                        
+                        # ✅ Estrai LLM prediction se disponibile  
+                        if llm_prediction_data is not None:
+                            llm_result = llm_prediction_data
+                            print(f"   ✅ [EXTRACTION] LLM result estratto: {llm_result.get('predicted_label', 'N/A')}")
+                            
+                    elif prediction.get('method') == 'LLM' and 'ml_prediction' not in prediction:
+                        # 🔄 FALLBACK: Training supervisionato - solo LLM disponibile  
                         llm_result = {
                             'predicted_label': prediction.get('predicted_label'),
                             'confidence': prediction.get('confidence', 0.0),
@@ -2571,17 +2639,10 @@ class EndToEndPipeline:
                             'method': 'LLM'
                         }
                         ml_result = None  # ML non disponibile durante training
+                        print(f"   🔄 [EXTRACTION] Fallback LLM-only per training supervisionato")
                     else:
-                        # Ensemble completo - estrai predizioni separate
-                        ml_prediction_data = prediction.get('ml_prediction')
-                        llm_prediction_data = prediction.get('llm_prediction')
-                        
-                        # Solo se non sono None, preparali per il salvataggio
-                        if ml_prediction_data is not None:
-                            ml_result = ml_prediction_data
-                        
-                        if llm_prediction_data is not None:
-                            llm_result = llm_prediction_data
+                        print(f"   ⚠️ [EXTRACTION] Nessuna prediction ensemble trovata per {session_id}")
+                        print(f"      ensemble_method={ensemble_method}, has_ml_prediction={prediction.get('ml_prediction') is not None}")
                     
                     # Calcola disagreement se entrambi disponibili
                     if ml_result and llm_result:
@@ -2595,6 +2656,10 @@ class EndToEndPipeline:
                             disagreement_score = 1.0
                         else:
                             disagreement_score = abs(ml_conf - llm_conf)
+                        
+                        print(f"   📊 [DISAGREEMENT] ML={ml_label}({ml_conf:.2f}) vs LLM={llm_label}({llm_conf:.2f}) → disagreement={has_disagreement}")
+                else:
+                    print(f"   ❌ [EXTRACTION] Nessuna prediction disponibile per {session_id}")
                 
                 # 🆕 VALUTAZIONE INTELLIGENTE PER REVIEW QUEUE
                 # Determina se serve review in base al tipo e confidenza
@@ -2650,19 +2715,24 @@ class EndToEndPipeline:
                 # 🆕 COSTRUISCI CLUSTER METADATA per classificazione ottimizzata
                 cluster_metadata = None
                 if optimize_clusters and prediction:
-                    # Estrai metadati dalla classificazione ottimizzata
-                    method = prediction.get('method', '')
+                    # 🔧 FIX CRITICO: Distingui metodo ensemble da metodo cluster
+                    ensemble_method = prediction.get('method', '')  # ENSEMBLE, LLM, ML
+                    cluster_method = prediction.get('cluster_method', '')  # REPRESENTATIVE, OUTLIER, CLUSTER_PROPAGATED
                     cluster_id = prediction.get('cluster_id', -1)
                     
-                    if 'REPRESENTATIVE' in method:
+                    print(f"   🔧 [METADATA] Session {session_id}: ensemble={ensemble_method}, cluster={cluster_method}, cluster_id={cluster_id}")
+                    
+                    # ✅ USA CLUSTER_METHOD per metadata (non ensemble_method)
+                    if 'REPRESENTATIVE' in cluster_method:
                         cluster_metadata = {
                             'cluster_id': cluster_id,
                             'is_representative': True,
                             'cluster_size': None,  # Potremmo calcolarlo se necessario
                             'confidence': confidence,
-                            'method': method
+                            'method': cluster_method,  # ✅ Usa cluster method per metadata
+                            'ensemble_method': ensemble_method  # ✅ Traccia anche ensemble method
                         }
-                    elif 'CLUSTER_PROPAGATED' in method or method == 'CLUSTER_PROPAGATED':
+                    elif 'CLUSTER_PROPAGATED' in cluster_method or cluster_method == 'CLUSTER_PROPAGATED':
                         # 🔧 FIX: usa 'in' invece di '==' e prendi il vero source_representative
                         source_rep = prediction.get('source_representative', 'cluster_propagation')
                         cluster_metadata = {
@@ -2670,14 +2740,16 @@ class EndToEndPipeline:
                             'is_representative': False,
                             'propagated_from': source_rep,  # Usa il vero session_id del rappresentante
                             'propagation_confidence': confidence,
-                            'method': method
+                            'method': cluster_method,  # ✅ Usa cluster method per metadata
+                            'ensemble_method': ensemble_method  # ✅ Traccia anche ensemble method
                         }
-                    elif 'OUTLIER' in method:
+                    elif 'OUTLIER' in cluster_method:
                         cluster_metadata = {
                             'cluster_id': -1,
                             'is_representative': False,
                             'outlier_score': 1.0 - confidence,  # Outlier score inversamente correlato alla confidenza
-                            'method': method
+                            'method': cluster_method,  # ✅ Usa cluster method per metadata
+                            'ensemble_method': ensemble_method  # ✅ Traccia anche ensemble method
                         }
                 else:
                     # 🆕 FIX: Se optimize_clusters=False o prediction senza cluster info,
@@ -2702,32 +2774,12 @@ class EndToEndPipeline:
                     "classified_by": 'post_training_pipeline'
                 }, "INFO")
                 
-                # 🚨 DEBUG CLASSIFIED_BY: Traccia parametro classified_by
-                classified_by_param = 'post_training_pipeline'
-                print(f"🚨 [DEBUG-CLASSIFIED_BY] Session {session_id}:")
-                print(f"   📋 classified_by parameter: '{classified_by_param}'")
-                print(f"   📋 method: '{method}'")
-                print(f"   📋 has_cluster_metadata: {bool(cluster_metadata)}")
-                if cluster_metadata:
-                    print(f"   📋 cluster_metadata keys: {list(cluster_metadata.keys())}")
+                # � FIX CRITICO: USA ENSEMBLE METHOD per final_decision
+                final_decision_method = prediction.get('method', 'UNKNOWN') if prediction else 'UNKNOWN'
                 
-                # 🆕 ESTRAI EMBEDDING PER QUESTA SESSIONE (Question 4 implementation)
-                session_embedding = None
-                embedding_model = None
-                try:
-                    if hasattr(self, '_last_embeddings') and self._last_embeddings is not None:
-                        # Trova l'indice della sessione corrente nella lista session_ids
-                        session_index = session_ids.index(session_id)
-                        if session_index < len(self._last_embeddings):
-                            session_embedding = self._last_embeddings[session_index]
-                            embedding_model = self._get_embedder_name()
-                            print(f"   🧠 Embedding estratto per {session_id}: shape {session_embedding.shape}")
-                        else:
-                            print(f"   ⚠️ Indice embedding non trovato per {session_id}")
-                    else:
-                        print(f"   ⚠️ Nessun embedding salvato dalla classificazione per {session_id}")
-                except Exception as embed_err:
-                    print(f"   ❌ Errore estrazione embedding per {session_id}: {embed_err}")
+                print(f"� [FINAL-DECISION] Session {session_id}:")
+                print(f"   📋 final_decision method: '{final_decision_method}' (DOVREBBE essere ENSEMBLE/LLM/ML)")
+                print(f"   📋 cluster_method: '{prediction.get('cluster_method', 'N/A') if prediction else 'N/A'}' (per metadata)")
                 
                 success = mongo_reader.save_classification_result(
                     session_id=session_id,
@@ -2737,7 +2789,7 @@ class EndToEndPipeline:
                     final_decision={
                         'predicted_label': predicted_label,
                         'confidence': confidence,
-                        'method': method,
+                        'method': final_decision_method,  # ✅ USA ENSEMBLE METHOD 
                         'reasoning': f"Auto-classificato post-training con confidenza {confidence:.3f}"
                     },
                     conversation_text=session_data['testo_completo'],
@@ -2746,8 +2798,8 @@ class EndToEndPipeline:
                     classified_by='post_training_pipeline',  # Specifica fase
                     notes=f"Classificazione post-training automatica (confidenza {confidence:.3f})",
                     cluster_metadata=cluster_metadata,  # Metadata cluster per filtri UI
-                    embedding=session_embedding,  # 🆕 Question 4: Salva embedding della sessione
-                    embedding_model=embedding_model  # 🆕 Question 4: Salva nome del modello
+                    embedding=None,  # ✅ TEMPORAL FIX: Disabled embedding per ora
+                    embedding_model=None  # ✅ TEMPORAL FIX: Disabled embedding per ora
                 )
                 
                 if success:
@@ -3359,6 +3411,29 @@ class EndToEndPipeline:
         """
         start_time = datetime.now()
         
+        # 🔍 DEBUG: Setup logging dettagliato
+        import logging
+        debug_logger = logging.getLogger('training_debug')
+        debug_logger.setLevel(logging.DEBUG)
+        if not debug_logger.handlers:
+            fh = logging.FileHandler('/home/ubuntu/classificatore/ext.log')
+            fh.setLevel(logging.DEBUG)
+            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+            fh.setFormatter(formatter)
+            debug_logger.addHandler(fh)
+        
+        debug_logger.info("=" * 80)
+        debug_logger.info("🚀 INIZIO esegui_training_interattivo()")
+        debug_logger.info(f"   📋 Parametri ricevuti:")
+        debug_logger.info(f"      giorni_indietro: {giorni_indietro}")
+        debug_logger.info(f"      limit: {limit}")
+        debug_logger.info(f"      max_human_review_sessions: {max_human_review_sessions}")
+        debug_logger.info(f"      confidence_threshold: {confidence_threshold}")
+        debug_logger.info(f"      force_review: {force_review}")
+        debug_logger.info(f"      disagreement_threshold: {disagreement_threshold}")
+        debug_logger.info(f"   🏢 Tenant: {self.tenant.tenant_name if self.tenant else 'N/A'}")
+        debug_logger.info("=" * 80)
+        
         # 🔧 CORREZIONE: Aggiorna il confidence threshold con il valore passato
         self.confidence_threshold = confidence_threshold
         print(f"🎯 Confidence threshold aggiornato a: {self.confidence_threshold}")
@@ -3403,7 +3478,22 @@ class EndToEndPipeline:
             print(f"⚠️ Errore lettura config: {e}")
             human_limit = limit or 500
         
+        debug_logger.info(f"📊 PARAMETRI DETERMINATI:")
+        debug_logger.info(f"   human_limit: {human_limit}")
+        debug_logger.info(f"   confidence_threshold: {confidence_threshold}")
+        debug_logger.info(f"   force_review: {force_review}")
+        debug_logger.info(f"   disagreement_threshold: {disagreement_threshold}")
+
         print(f"🎓 TRAINING SUPERVISIONATO AVANZATO")
+        print(f"🚨 [DEBUG] esegui_training_interattivo() CHIAMATA CONFERMATA")
+        print(f"🚨 [DEBUG] Funzione: esegui_training_interattivo")
+        print(f"🚨 [DEBUG] Parametri ricevuti:")
+        print(f"   - giorni_indietro: {giorni_indietro}")
+        print(f"   - limit: {limit}")
+        print(f"   - max_human_review_sessions: {max_human_review_sessions}")
+        print(f"   - confidence_threshold: {confidence_threshold}")
+        print(f"   - force_review: {force_review}")
+        print(f"   - disagreement_threshold: {disagreement_threshold}")
         print(f"� NUOVA LOGICA:")
         print(f"  🔄 Estrazione: TUTTE le discussioni dal database")
         print(f"  🧩 Clustering: Su tutto il dataset completo")
@@ -3421,17 +3511,33 @@ class EndToEndPipeline:
                 raise ValueError(f"Troppo poche sessioni ({len(sessioni)}) per training significativo")
             
             print(f"✅ Dataset completo: {len(sessioni)} sessioni totali")
+            print(f"🚨 [DEBUG] FASE 1 COMPLETATA - Estrazione sessioni")
+            print(f"🚨 [DEBUG] Sessioni estratte: {len(sessioni)}")
             
+            debug_logger.info(f"📊 FASE 1 COMPLETATA - Estrazione sessioni")
+            debug_logger.info(f"   Sessioni estratte: {len(sessioni)}")
+
             # 2. Clustering COMPLETO su tutto il dataset
             print(f"\n📊 FASE 2: CLUSTERING COMPLETO")
+            print(f"🚨 [DEBUG] AVVIO CLUSTERING nella funzione esegui_training_interattivo")
+            
+            debug_logger.info(f"📊 AVVIO FASE 2 - Clustering completo")
             embeddings, cluster_labels, representatives, suggested_labels = self.esegui_clustering(sessioni)
             
             n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
             n_outliers = sum(1 for label in cluster_labels if label == -1)
             print(f"✅ Clustering completo: {n_clusters} cluster, {n_outliers} outlier")
+            print(f"🚨 [DEBUG] FASE 2 COMPLETATA - Clustering")
+            print(f"🚨 [DEBUG] Cluster trovati: {n_clusters}, Outlier: {n_outliers}")
+            print(f"🚨 [DEBUG] Rappresentanti totali: {len(representatives)}")
             
+            debug_logger.info(f"📊 FASE 2 COMPLETATA - Clustering")
+            debug_logger.info(f"   Cluster trovati: {n_clusters}, Outlier: {n_outliers}")
+            debug_logger.info(f"   Rappresentanti totali: {len(representatives)}")
+
             # 3. Selezione intelligente rappresentanti per review umana
             print(f"\n📊 FASE 3: SELEZIONE RAPPRESENTANTI PER REVIEW UMANA")
+            print(f"🚨 [DEBUG] AVVIO SELEZIONE RAPPRESENTANTI - funzione esegui_training_interattivo")
             limited_representatives, selection_stats = self._select_representatives_for_human_review(
                 representatives, suggested_labels, human_limit, sessioni,
                 confidence_threshold=confidence_threshold,
@@ -3444,9 +3550,20 @@ class EndToEndPipeline:
             print(f"  👤 Cluster per review: {len(limited_representatives)}")
             print(f"  📝 Sessioni per review: {selection_stats['total_sessions_for_review']}")
             print(f"  🚫 Cluster esclusi: {selection_stats['excluded_clusters']}")
+            print(f"🚨 [DEBUG] FASE 3 COMPLETATA - Selezione rappresentanti")
+            print(f"🚨 [DEBUG] Limited representatives keys: {list(limited_representatives.keys())}")
             
+            debug_logger.info(f"📊 FASE 3 COMPLETATA - Selezione rappresentanti")
+            debug_logger.info(f"   Cluster originali: {len(representatives)}")
+            debug_logger.info(f"   Cluster per review: {len(limited_representatives)}")
+            debug_logger.info(f"   Sessioni per review: {selection_stats['total_sessions_for_review']}")
+            debug_logger.info(f"   Cluster esclusi: {selection_stats['excluded_clusters']}")
+
             # 🆕 FASE 3.5: SALVATAGGIO RAPPRESENTANTI IN MONGODB PER REVIEW QUEUE
             print(f"\n💾 FASE 3.5: POPOLAMENTO REVIEW QUEUE")
+            print(f"🚨 [DEBUG] AVVIO POPOLAMENTO REVIEW QUEUE")
+            
+            debug_logger.info(f"📊 AVVIO FASE 3.5 - Popolamento review queue")
             
             # Salva TUTTI i rappresentanti (non solo quelli limitati) per review queue completa
             save_success = self._save_representatives_for_review(
@@ -3460,12 +3577,27 @@ class EndToEndPipeline:
             else:
                 print(f"⚠️ Warning: Impossibile popolare review queue - continuo con training")
             
+            print(f"🚨 [DEBUG] FASE 3.5 COMPLETATA - Review queue popolata")
+
             # 4. Training interattivo con rappresentanti selezionati
             print(f"\n📊 FASE 4: TRAINING SUPERVISIONATO")
+            print(f"🚨🚨🚨 [DEBUG CRITICO] AVVIO FASE 4 - TRAINING SUPERVISIONATO")
+            print(f"🚨🚨🚨 [DEBUG CRITICO] Sto per chiamare allena_classificatore()")
+            print(f"🚨🚨🚨 [DEBUG CRITICO] Parametri per allena_classificatore:")
+            print(f"    - sessioni: {len(sessioni)} elementi")
+            print(f"    - cluster_labels: {len(cluster_labels)} elementi")
+            print(f"    - limited_representatives: {len(limited_representatives)} cluster")
+            print(f"    - suggested_labels: {len(suggested_labels)} elementi")
+            print(f"    - interactive_mode: True")
+            
             training_metrics = self.allena_classificatore(
                 sessioni, cluster_labels, limited_representatives, suggested_labels, 
                 interactive_mode=True
             )
+            
+            print(f"🚨🚨🚨 [DEBUG CRITICO] allena_classificatore() COMPLETATO!")
+            print(f"🚨🚨🚨 [DEBUG CRITICO] Training metrics ricevuti: {type(training_metrics)}")
+            print(f"🚨🚨🚨 [DEBUG CRITICO] Training metrics keys: {list(training_metrics.keys()) if isinstance(training_metrics, dict) else 'Not a dict'}")
             
             end_time = datetime.now()
             duration = end_time - start_time
@@ -3919,7 +4051,28 @@ class EndToEndPipeline:
             
             if not config_files:
                 print(f"⚠️ Nessun modello trovato per tenant '{self.tenant_slug}' nella directory models/")
-                return
+                print(f"🚀 ATTIVAZIONE AUTO-TRAINING: Tentativo di addestramento automatico...")
+                
+                # Verifica se auto-training è possibile
+                if self._should_enable_auto_training():
+                    print(f"✅ Auto-training abilitato - Esecuzione training automatico")
+                    auto_training_result = self._execute_auto_training()
+                    if auto_training_result:
+                        print(f"✅ Auto-training completato con successo!")
+                        # Ri-tenta il caricamento del modello appena creato
+                        config_files = glob.glob(tenant_pattern)
+                        if config_files:
+                            print(f"🔄 Ricaricamento modello auto-addestrato...")
+                            # Continua con il normale flusso di caricamento
+                        else:
+                            print(f"⚠️ Auto-training completato ma nessun modello trovato")
+                            return
+                    else:
+                        print(f"❌ Auto-training fallito - Continuando senza modelli")
+                        return
+                else:
+                    print(f"⚠️ Auto-training non possibile - Continuando senza modelli")
+                    return
             
             # Ordina per data (più recente per ultimo)
             config_files.sort()
@@ -4416,9 +4569,20 @@ class EndToEndPipeline:
                                 break
                         
                         if original_pred:
-                            # Usa predizione originale per rappresentante
+                            # 🔧 FIX CRITICO: Preserva le predictions ensemble originali
                             prediction = original_pred.copy()
-                            prediction['method'] = 'REPRESENTATIVE'
+                            
+                            # ✅ PRESERVA metodo ensemble originale per final_decision
+                            ensemble_method = prediction.get('method', 'ENSEMBLE')  # ENSEMBLE, LLM, ML
+                            
+                            # ✅ SALVA metodo cluster separato per metadata
+                            prediction['cluster_method'] = 'REPRESENTATIVE'
+                            
+                            # ✅ MANTIENI metodo ensemble originale 
+                            prediction['method'] = ensemble_method
+                            
+                            print(f"   ✅ RAPPRESENTANTE {session_id}: ensemble_method={ensemble_method}, cluster_method=REPRESENTATIVE")
+                            
                         else:
                             # 🚨 ERRORE GRAVE: Un rappresentante non ha predizione originale!
                             # Questo non dovrebbe mai accadere se il codice funziona correttamente
@@ -4442,7 +4606,8 @@ class EndToEndPipeline:
                             'predicted_label': cluster_label_info['label'],
                             'confidence': cluster_label_info['confidence'],
                             'ensemble_confidence': cluster_label_info['confidence'],
-                            'method': 'CLUSTER_PROPAGATED',
+                            'method': 'CLUSTER_PROPAGATED',  # ✅ Mantieni metodo cluster per propagati
+                            'cluster_method': 'CLUSTER_PROPAGATED',  # ✅ Aggiungi anche cluster_method 
                             'cluster_id': cluster_id,
                             'source_representative': cluster_label_info['source_representative'],
                             'llm_prediction': None,
@@ -4461,57 +4626,54 @@ class EndToEndPipeline:
                         }
                 
                 else:
-                    # 🎯 OUTLIER: Trattato come rappresentante di se stesso
-                    # Gli outlier sono già stati processati come rappresentanti durante il training
-                    # e hanno già un'etichetta assegnata tramite reviewed_labels[-1]
-                    print(f"   🎯 Outlier {session_id}: usando etichetta da rappresentante...")
+                    # 🎯 OUTLIER: Classifica con ensemble ML+LLM (NON con IntelligentIntentClusterer)
+                    print(f"   🎯 Outlier {session_id}: classificazione diretta con ensemble ML+LLM...")
                     
-                    # Verifica se esiste etichetta outlier da training
-                    outlier_label = cluster_final_labels.get(-1)
-                    if outlier_label:
-                        # Usa l'etichetta definita per gli outlier durante il training
+                    # 🔧 FIX CRITICO: OUTLIER DEVONO USARE ENSEMBLE ESATTAMENTE COME I RAPPRESENTANTI
+                    try:
+                        # ✅ CLASSIFICAZIONE ENSEMBLE DIRETTA per outlier
+                        prediction = self.ensemble_classifier.predict_with_ensemble(
+                            session_texts[i],
+                            return_details=True,
+                            embedder=self.embedder
+                        )
+                        
+                        # ✅ PRESERVA metodo ensemble originale per final_decision
+                        ensemble_method = prediction.get('method', 'ENSEMBLE')  # ENSEMBLE, LLM, ML
+                        
+                        # ✅ SALVA metodo cluster separato per metadata
+                        prediction['cluster_method'] = 'OUTLIER'
+                        prediction['cluster_id'] = -1
+                        
+                        # ✅ MANTIENI metodo ensemble originale 
+                        prediction['method'] = ensemble_method
+                        
+                        print(f"   ✅ OUTLIER {session_id}: ensemble_method={ensemble_method}, cluster_method=OUTLIER")
+                        print(f"   📊 ML prediction: {prediction.get('ml_prediction', {}).get('predicted_label', 'N/A')}")
+                        print(f"   📊 LLM prediction: {prediction.get('llm_prediction', {}).get('predicted_label', 'N/A')}")
+                        
+                    except Exception as e:
+                        print(f"❌ ERRORE: Classificazione ensemble outlier fallita per {session_id}: {e}")
+                        # Fallback con etichetta di default
                         prediction = {
-                            'predicted_label': outlier_label['label'],
-                            'confidence': outlier_label['confidence'],
-                            'ensemble_confidence': outlier_label['confidence'],
-                            'method': 'OUTLIER_AS_REPRESENTATIVE',
+                            'predicted_label': 'altro',
+                            'confidence': 0.3,
+                            'ensemble_confidence': 0.3,
+                            'method': 'OUTLIER_FALLBACK',
+                            'cluster_method': 'OUTLIER_FALLBACK',
                             'cluster_id': -1,
-                            'llm_prediction': None,
-                            'ml_prediction': {
-                                'predicted_label': outlier_label['label'],
-                                'confidence': outlier_label['confidence']
-                            }
+                            'llm_prediction': {'predicted_label': 'altro', 'confidence': 0.3},
+                            'ml_prediction': {'predicted_label': 'altro', 'confidence': 0.3}
                         }
-                    else:
-                        # Fallback: se non c'è etichetta outlier, significa che non è stato fatto training
-                        # In questo caso classifichiamo direttamente (scenario senza training)
-                        print(f"   ⚠️ Nessuna etichetta outlier da training, classificazione diretta...")
-                        try:
-                            prediction = self.ensemble_classifier.predict_with_ensemble(
-                                session_texts[i],
-                                return_details=True,
-                                embedder=self.embedder
-                            )
-                            prediction['method'] = 'OUTLIER_NO_TRAINING'
-                            prediction['cluster_id'] = -1
-                        except Exception as e:
-                            print(f"❌ ERRORE: Classificazione outlier fallita per {session_id}: {e}")
-                            # Fallback con etichetta di default
-                            prediction = {
-                                'predicted_label': 'altro',
-                                'confidence': 0.3,
-                                'ensemble_confidence': 0.3,
-                                'method': 'OUTLIER_FALLBACK',
-                                'cluster_id': -1
-                            }
                     
                     # ✅ Aggiungi cluster_metadata per OUTLIER
                     prediction['cluster_metadata'] = {
                         'cluster_id': -1,
-                        'selection_reason': 'outlier_as_representative',
+                        'selection_reason': 'outlier_ensemble_classification',  # ✅ Aggiornato
                         'is_outlier': True,
-                        'is_representative': True,  # 🎯 CORREZIONE: outlier = rappresentante
-                        'classified_as_representative': True
+                        'is_representative': True,  # 🎯 CORREZIONE: outlier = rappresentante di se stesso
+                        'classified_as_representative': True,
+                        'ensemble_method': prediction.get('method', 'ENSEMBLE')  # ✅ Traccia metodo ensemble
                     }
                 
                 all_predictions.append(prediction)
@@ -5096,5 +5258,162 @@ class EndToEndPipeline:
             print(f"⚠️ Errore valutazione clustering incrementale: {str(e)}")
         
         return False
+
+    def _should_enable_auto_training(self) -> bool:
+        """
+        Determina se l'auto-training dovrebbe essere abilitato
+        
+        Criteri:
+        - Deve esserci abbastanza dati per training
+        - Auto-training deve essere abilitato in configurazione
+        - Non deve essere in modalità solo-LLM
+        
+        Returns:
+            True se auto-training è possibile, False altrimenti
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-05
+        """
+        try:
+            print(f"🔍 Valutazione auto-training per tenant '{self.tenant_slug}'...")
+            
+            # 1. Controlla configurazione auto_retrain
+            if not getattr(self, 'auto_retrain', False):
+                print(f"   ❌ Auto-retrain disabilitato in configurazione")
+                return False
+            
+            # 2. Estrai campione dati per valutare dimensione dataset
+            try:
+                test_sessions = self.estrai_sessioni(limit=100)  # Campione piccolo per test
+                if not test_sessions or len(test_sessions) < 20:
+                    print(f"   ❌ Dataset insufficiente: {len(test_sessions) if test_sessions else 0} sessioni")
+                    return False
+                
+                print(f"   ✅ Dataset sufficiente: {len(test_sessions)}+ sessioni disponibili")
+                
+            except Exception as e:
+                print(f"   ❌ Errore estrazione dati test: {e}")
+                return False
+            
+            # 3. Verifica disponibilità componenti necessari
+            if not hasattr(self, 'ensemble_classifier') or not self.ensemble_classifier:
+                print(f"   ❌ Ensemble classifier non disponibile")
+                return False
+            
+            print(f"   ✅ Ensemble classifier disponibile")
+            
+            # 4. Controlla se BERTopic è disponibile per clustering
+            try:
+                from TopicModeling.bertopic_feature_provider import BERTopicFeatureProvider
+                if not BERTopicFeatureProvider().is_available():
+                    print(f"   ⚠️ BERTopic non disponibile, auto-training limitato")
+                    # Continua comunque - può fare training solo ML
+                else:
+                    print(f"   ✅ BERTopic disponibile")
+            except Exception as e:
+                print(f"   ⚠️ Controllo BERTopic fallito: {e}")
+            
+            print(f"✅ Auto-training abilitato per '{self.tenant_slug}'")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Errore valutazione auto-training: {e}")
+            return False
+    
+    def _execute_auto_training(self) -> bool:
+        """
+        Esegue l'auto-training quando non esistono modelli
+        
+        Flusso:
+        1. Estrae dataset per training
+        2. Esegue clustering per generare etichette
+        3. Addestra ML ensemble
+        4. Salva modelli
+        
+        Returns:
+            True se training completato con successo, False altrimenti
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-05
+        """
+        try:
+            print(f"🚀 ESECUZIONE AUTO-TRAINING per tenant '{self.tenant_slug}'")
+            start_time = datetime.now()
+            
+            # 1. Estrazione dataset per training
+            print(f"📥 FASE 1: Estrazione dataset...")
+            training_sessions = self.estrai_sessioni(limit=None)  # Estrai tutto per training
+            
+            if not training_sessions or len(training_sessions) < 50:
+                print(f"❌ Dataset insufficiente per training: {len(training_sessions) if training_sessions else 0} sessioni")
+                return False
+            
+            print(f"✅ Dataset estratto: {len(training_sessions)} sessioni")
+            
+            # 2. Clustering per generare etichette automatiche
+            print(f"🧩 FASE 2: Clustering automatico...")
+            embeddings, cluster_labels, representatives, suggested_labels = self.esegui_clustering(training_sessions)
+            
+            n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
+            n_outliers = sum(1 for label in cluster_labels if label == -1)
+            
+            if n_clusters < 3:
+                print(f"❌ Troppi pochi cluster per training affidabile: {n_clusters}")
+                return False
+            
+            print(f"✅ Clustering completato: {n_clusters} cluster, {n_outliers} outlier")
+            
+            # 3. Training automatico ML ensemble (non interattivo)
+            print(f"🎓 FASE 3: Training ML ensemble...")
+            training_metrics = self.allena_classificatore(
+                training_sessions, 
+                cluster_labels, 
+                representatives, 
+                suggested_labels, 
+                interactive_mode=False  # IMPORTANTE: Modalità non interattiva
+            )
+            
+            if not training_metrics or not training_metrics.get('training_success', False):
+                print(f"❌ Training ML ensemble fallito")
+                return False
+            
+            training_accuracy = training_metrics.get('training_accuracy', 0.0)
+            print(f"✅ Training completato - Accuracy: {training_accuracy:.3f}")
+            
+            # 4. Verifica che i modelli siano stati salvati
+            print(f"🔍 FASE 4: Verifica salvataggio modelli...")
+            
+            import os
+            import glob
+            models_dir = "models"
+            tenant_pattern = os.path.join(models_dir, f"{self.tenant_slug}_*_config.json")
+            saved_models = glob.glob(tenant_pattern)
+            
+            if not saved_models:
+                print(f"❌ Nessun modello salvato dopo training")
+                return False
+            
+            print(f"✅ Modelli salvati: {len(saved_models)} file trovati")
+            
+            # 5. Statistiche finali
+            end_time = datetime.now()
+            duration = (end_time - start_time).total_seconds()
+            
+            print(f"")
+            print(f"🎉 AUTO-TRAINING COMPLETATO PER '{self.tenant_slug}'!")
+            print(f"   ⏱️ Durata: {duration:.1f} secondi")
+            print(f"   📊 Sessioni processate: {len(training_sessions)}")
+            print(f"   🧩 Cluster generati: {n_clusters}")
+            print(f"   🎯 Accuracy ML: {training_accuracy:.3f}")
+            print(f"   💾 Modelli salvati: {len(saved_models)}")
+            print(f"")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ ERRORE AUTO-TRAINING: {e}")
+            import traceback
+            print(f"Stack trace: {traceback.format_exc()}")
+            return False
 
 

@@ -3610,6 +3610,8 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         Args:
             conversation_text: Testo della conversazione classificata
             result: Risultato della classificazione
+            
+        🔧 FIX 2025-09-05: Popola correttamente ml_result e llm_result per interfaccia
         """
         if not self.mongo_reader or not self.client_name:
             return
@@ -3639,10 +3641,37 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             tenant_id = hashlib.md5(self.client_name.encode()).hexdigest()[:16]
             tenant_name = self.client_name
             
+            # 🔧 FIX: Popola ml_result e llm_result basati sul metodo utilizzato
+            ml_result = None
+            llm_result = None
+            
+            # Determina quale metodo è stato utilizzato dal result.method
+            method = result.method.upper() if hasattr(result, 'method') and result.method else 'LLM'
+            
+            if 'ML' in method or 'ENSEMBLE' in method:
+                # Se è stato utilizzato ML, popola ml_result
+                ml_result = {
+                    'predicted_label': result.predicted_label,
+                    'confidence': result.confidence,
+                    'method': method
+                }
+                self.logger.debug(f"🤖 ML result salvato: {result.predicted_label} (conf: {result.confidence:.3f})")
+            else:
+                # Altrimenti è LLM (default per intelligent_clustering)
+                llm_result = {
+                    'predicted_label': result.predicted_label,
+                    'confidence': result.confidence,
+                    'reasoning': result.motivation,
+                    'method': method
+                }
+                self.logger.debug(f"🧠 LLM result salvato: {result.predicted_label} (conf: {result.confidence:.3f})")
+            
             # Salva in MongoDB usando il metodo corretto
             success = self.mongo_reader.save_classification_result(
                 session_id=session_id,
                 client_name=self.client_name,
+                ml_result=ml_result,  # 🔧 FIX: Aggiungi ml_result
+                llm_result=llm_result,  # 🔧 FIX: Aggiungi llm_result
                 final_decision={
                     'predicted_label': result.predicted_label,
                     'confidence': result.confidence,
@@ -3660,7 +3689,9 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                     'method': 'intelligent_clustering_outlier',
                     'classified_individually': True,
                     'clustering_stage': 'intelligent_intent_extraction'
-                }
+                },
+                embedding=embedding,  # 🔧 FIX: Aggiungi embedding
+                embedding_model=embedding_model  # 🔧 FIX: Aggiungi embedding_model
             )
             
             if success:

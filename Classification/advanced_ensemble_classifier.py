@@ -347,6 +347,12 @@ class AdvancedEnsembleClassifier:
             Metriche di training
         """
         print("🎓 Training ML ensemble...")
+        print(f"🚨🚨🚨 [DEBUG ENSEMBLE] train_ml_ensemble() CHIAMATA!")
+        print(f"🚨🚨🚨 [DEBUG ENSEMBLE] X_train shape: {X_train.shape}")
+        print(f"🚨🚨🚨 [DEBUG ENSEMBLE] y_train length: {len(y_train)}")
+        print(f"🚨🚨🚨 [DEBUG ENSEMBLE] unique labels: {len(set(y_train))}")
+        print(f"🚨🚨🚨 [DEBUG ENSEMBLE] labels: {set(y_train)}")
+        
         start_time = datetime.now()
         
         # Crea voting classifier con i migliori algoritmi
@@ -389,6 +395,11 @@ class AdvancedEnsembleClassifier:
             )
         
         print(f"✅ ML ensemble training completato!")
+        print(f"🚨🚨🚨 [DEBUG ENSEMBLE] TRAINING ML COMPLETATO CON SUCCESSO!")
+        print(f"🚨🚨🚨 [DEBUG ENSEMBLE] Training result: {training_result}")
+        print(f"🚨🚨🚨 [DEBUG ENSEMBLE] self.ml_ensemble dopo training: {self.ml_ensemble}")
+        print(f"🚨🚨🚨 [DEBUG ENSEMBLE] self.ml_ensemble type: {type(self.ml_ensemble)}")
+        
         try:
             accuracy_val = float(train_accuracy) if isinstance(train_accuracy, (str, int)) else train_accuracy
             print(f"   📊 Training accuracy: {accuracy_val:.3f}")

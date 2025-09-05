@@ -1427,6 +1427,7 @@ class MongoClassificationReader:
             # Aggiunge decisione finale
             if final_decision:
                 doc["classification"] = final_decision.get("predicted_label", "")
+                doc["predicted_label"] = final_decision.get("predicted_label", "")  # 🔧 FIX: Campo per interfaccia
                 doc["confidence"] = float(final_decision.get("confidence", 0.0))
                 doc["classification_method"] = final_decision.get("method", "unknown")
                 if "reasoning" in final_decision:

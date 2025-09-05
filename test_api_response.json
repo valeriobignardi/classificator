@@ -224,7 +224,7 @@
       "category": "supervised_training",
       "default": 0.75,
       "description": "Soglia qualit\u00e0 propagazione",
-      "explanation": "Soglia minima di confidenza per accettare una propagazione durante il training supervisionato. I propagati NON vanno MAI automaticamente in review - vanno solo se aggiunti manualmente.",
+      "explanation": "Soglia minima di confidenza per accettare una propagazione durante il training supervisionato. I propagati vengono sempre auto-classificati e NON vanno MAI automaticamente in review - solo quando aggiunti manualmente dall'utente.",
       "impact": {
         "high": "Solo propagazioni ad alta confidenza - pi\u00f9 rigoroso",
         "low": "Accetta propagazioni con confidenza pi\u00f9 bassa - pi\u00f9 permissivo",

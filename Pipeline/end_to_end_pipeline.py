@@ -1511,11 +1511,11 @@ class EndToEndPipeline:
         """
         Determina lo status dei propagated basandosi sui rappresentanti del cluster
         
-        Scopo della funzione: Logica intelligente per decidere se propagated vanno in review
+        Scopo della funzione: I propagati vengono SEMPRE auto-classificati, mai review automatico
         Parametri di input: cluster_representatives, consensus_threshold
         Parametri di output: Dict con status e label da propagare
-        Valori di ritorno: needs_review, propagated_label, reason
-        Tracciamento aggiornamenti: 2025-08-28 - Nuovo per logica consenso 70%
+        Valori di ritorno: needs_review (sempre False), propagated_label, reason
+        Tracciamento aggiornamenti: 2025-09-05 - CORREZIONE: Propagati mai in review automatico
         
         Args:
             cluster_representatives: Lista rappresentanti del cluster
@@ -1568,18 +1568,20 @@ class EndToEndPipeline:
                 'reason': f'consensus_{int(consensus_ratio*100)}%'
             }
         elif consensus_ratio == 0.5 and len(reviewed_labels) == 2:
-            # CASO 50-50 → Review obbligatoria come richiesto
+            # 🚫 CORREZIONE: Anche caso 50-50 viene auto-classificato
+            # Non più review obbligatoria - usa label più votata
             return {
-                'needs_review': True,  
-                'propagated_label': most_voted_label,  # Label provvisoria
-                'reason': 'disagreement_50_50_mandatory_review'
+                'needs_review': False,  # 🚫 FORZA: Mai review automatico
+                'propagated_label': most_voted_label,
+                'reason': 'auto_classified_despite_50_50_split'
             }
         else:
-            # DISACCORDO → Propagated vanno in review
+            # 🚫 CORREZIONE: PROPAGATED NON vanno MAI automaticamente in review
+            # Anche con disaccordo, vengono auto-classificati con label più votata
             return {
-                'needs_review': True,  
-                'propagated_label': most_voted_label,  # Label provvisoria
-                'reason': f'disagreement_{int(consensus_ratio*100)}%'
+                'needs_review': False,  # 🚫 FORZA: Mai review automatico per propagati
+                'propagated_label': most_voted_label,
+                'reason': f'auto_classified_despite_disagreement_{int(consensus_ratio*100)}%'
             }
             
     def _save_propagated_sessions_metadata(self, 
@@ -2627,20 +2629,13 @@ class EndToEndPipeline:
                     else:
                         review_reason = f"representative_high_confidence_{confidence:.3f}_threshold_{representative_threshold}"
                 
-                # 🎯 FIX: PROPAGATED con disaccordo o bassa confidenza vanno in review
+                # 🚫 CORREZIONE: PROPAGATED NON vanno MAI automaticamente in review
                 elif prediction and 'PROPAGATED' in prediction.get('method', ''):
-                    disagreement_threshold = 0.4  # Soglia disaccordo hardcoded per ora
-                    
-                    if enable_smart_review and has_disagreement and disagreement_score > disagreement_threshold:
-                        needs_review = True
-                        review_reason = f"propagated_disagreement_{disagreement_score:.3f}_threshold_{disagreement_threshold}"
-                        print(f"   🎯 PROPAGATED {session_id}: disaccordo {disagreement_score:.3f} > {disagreement_threshold} → PENDING REVIEW")
-                    elif enable_smart_review and confidence < propagated_threshold:
-                        needs_review = True
-                        review_reason = f"propagated_low_confidence_{confidence:.3f}_threshold_{propagated_threshold}"
-                        print(f"   🎯 PROPAGATED {session_id}: confidenza {confidence:.3f} < {propagated_threshold} → PENDING REVIEW")
-                    else:
-                        review_reason = f"propagated_high_confidence_{confidence:.3f}_threshold_{propagated_threshold}"
+                    # I propagati sono SEMPRE auto-classificati, mai in review automaticamente
+                    # Vanno in review SOLO quando aggiunti manualmente dall'utente via UI
+                    needs_review = False  # 🚫 FORZA: Nessun review automatico per propagati
+                    review_reason = f"propagated_auto_classified_conf_{confidence:.3f}"
+                    print(f"   ✅ PROPAGATED {session_id}: auto-classificato (conf: {confidence:.3f}) - NO REVIEW automatico")
                 
                 # Debug: mostra solo casi che vanno in review
                 if needs_review:

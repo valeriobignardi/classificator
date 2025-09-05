@@ -118,7 +118,7 @@ const ReviewQueueThresholdManager: React.FC = () => {
         max: 1.0,
         step: 0.05,
         description: "Soglia Qualità Propagazione",
-        explanation: "Soglia minima di confidenza per validare propagazioni durante training supervisionato. I propagati NON vanno MAI automaticamente in review.",
+        explanation: "Soglia minima di confidenza per validare propagazioni durante training supervisionato. I propagati vengono sempre auto-classificati e NON vanno MAI automaticamente in review.",
         impact: "Valori più alti = propagazioni più rigorose durante il training, maggiore qualità",
         recommendation: "0.7-0.8 è ottimale per garantire buona qualità delle propagazioni"
       },

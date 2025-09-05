@@ -6219,7 +6219,7 @@ def get_clustering_parameters(tenant_id):
                 'max': 1.0,
                 'step': 0.05,
                 'description': 'Soglia qualità propagazione',
-                'explanation': 'Soglia minima di confidenza per accettare una propagazione durante il training supervisionato. I propagati NON vanno MAI automaticamente in review - vanno solo se aggiunti manualmente.',
+                'explanation': 'Soglia minima di confidenza per accettare una propagazione durante il training supervisionato. I propagati vengono sempre auto-classificati e NON vanno MAI automaticamente in review - solo quando aggiunti manualmente dall\'utente.',
                 'impact': {
                     'low': 'Accetta propagazioni con confidenza più bassa - più permissivo',
                     'medium': 'Bilanciamento tra qualità e copertura delle propagazioni',

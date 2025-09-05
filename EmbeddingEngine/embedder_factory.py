@@ -143,28 +143,11 @@ class EmbedderFactory:
             return embedder
             
         except Exception as remote_error:
-            print(f"⚠️ LaBSE remoto fallito: {remote_error}")
-            print(f"🔄 Fallback su LaBSE locale...")
+            print(f"❌ LaBSE remoto fallito: {remote_error}")
+            print(f"� NESSUN FALLBACK LOCALE - Solo Docker service")
             
-            try:
-                from labse_embedder import LaBSEEmbedder
-                
-                # Parametri default per locale
-                local_config = {
-                    'test_on_init': config.get('test_on_init', False),
-                    'model_name': config.get('model_name', 'sentence-transformers/LaBSE'),
-                    'device': config.get('device', None)
-                }
-                
-                print(f"📦 Caricamento LaBSEEmbedder locale...")
-                embedder = LaBSEEmbedder(**local_config)
-                print(f"✅ LaBSEEmbedder locale caricato")
-                return embedder
-                
-            except ImportError as e:
-                raise RuntimeError(f"Impossibile importare LaBSEEmbedder: {e}")
-            except Exception as e:
-                raise RuntimeError(f"Errore creazione LaBSEEmbedder locale: {e}")
+            # � FALLBACK LOCALE DISABILITATO
+            raise RuntimeError(f"Servizio Docker LaBSE richiesto ma non disponibile: {remote_error}")
     
     @classmethod  
     def _create_labse_remote(cls, config: Dict[str, Any]) -> Any:

@@ -181,16 +181,14 @@ class AltroTagValidator:
                 self.logger.info(f"✅ Embedder dinamico inizializzato per tenant {self.tenant.tenant_name} ({self.tenant.tenant_id})")
                 return embedder
             else:
-                # Fallback al LaBSE embedder
-                self.logger.warning("⚠️ Usando fallback LaBSEEmbedder")
-                return LaBSEEmbedder()
+                # 🚫 NESSUN FALLBACK LOCALE - Solo Docker service
+                self.logger.error("❌ Simple embedding manager non disponibile - RICHIESTO!")
+                raise RuntimeError("Simple embedding manager richiesto ma non disponibile")
                 
         except Exception as e:
             self.logger.error(f"❌ Errore inizializzazione embedder: {e}")
-            # Fallback estremo
-            if not EMBEDDING_MANAGER_AVAILABLE:
-                return LaBSEEmbedder()
-            raise e
+            # 🚫 NESSUN FALLBACK LOCALE - Solo Docker service
+            raise RuntimeError(f"Embedder Docker richiesto ma non disponibile: {e}")
 
     def _get_tag_embedding(self, tag_text: str) -> np.ndarray:
         """

@@ -23,7 +23,10 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'TagDat
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'EmbeddingEngine'))
 
 from tag_database_connector import TagDatabaseConnector
-from labse_embedder import LaBSEEmbedder
+# RIMOSSO: from labse_embedder import LaBSEEmbedder - Ora usa Docker service
+
+# Import per simple_embedding_manager
+from simple_embedding_manager import SimpleEmbeddingManager
 
 # Import per MongoDB (sostituisce MySQL per le classificazioni)
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__))))
@@ -42,7 +45,7 @@ class SemanticMemoryManager:
     def __init__(self, 
                  tenant: Tenant,  # OGGETTO TENANT OBBLIGATORIO
                  config_path: str = None,
-                 embedder: Optional[LaBSEEmbedder] = None):
+                 embedder = None):  # Any embedder type
         """
         Inizializza il gestore della memoria semantica
         CAMBIO RADICALE: USA OGGETTO TENANT
@@ -82,8 +85,18 @@ class SemanticMemoryManager:
         
         self.enable_logging = self.memory_config.get('enable_detailed_logging', True)
         
-        # Componenti
-        self.embedder = embedder or LaBSEEmbedder()
+        # Componenti - usa embedder Docker se non fornito
+        if embedder is None:
+            try:
+                # Usa SimpleEmbeddingManager per ottenere embedder configurato
+                sem = SimpleEmbeddingManager()
+                self.embedder = sem.get_embedder_for_tenant(self.tenant)
+            except Exception as e:
+                # 🚫 NESSUN FALLBACK LOCALE - Solo Docker service
+                raise RuntimeError(f"Embedder Docker richiesto ma non disponibile: {e}")
+        else:
+            self.embedder = embedder
+            
         self.db_connector = TagDatabaseConnector(tenant=self.tenant)
         
         # MongoDB reader per classificazioni con OGGETTO TENANT

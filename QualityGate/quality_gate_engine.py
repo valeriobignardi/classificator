@@ -174,11 +174,13 @@ class QualityGateEngine:
             print(f"⚠️ QualityGate fallback embedder: {e}")
             try:
                 from EmbeddingEngine.labse_remote_client import LaBSERemoteClient
-                return LaBSERemoteClient(service_url="http://localhost:8081")
-            except Exception:
-                # Doppio fallback su locale
-                from EmbeddingEngine.labse_embedder import LaBSEEmbedder
-                return LaBSEEmbedder()
+                return LaBSERemoteClient(
+                    service_url="http://localhost:8081", 
+                    fallback_local=False  # 🚫 NESSUN FALLBACK LOCALE
+                )
+            except Exception as e:
+                # 🚫 NESSUN FALLBACK LOCALE - Solo Docker service
+                raise RuntimeError(f"Servizio Docker LaBSE richiesto ma non disponibile: {e}")
 
     def evaluate_classification(self, 
                               session_id: str,
@@ -1624,9 +1626,9 @@ class QualityGateEngine:
         # AGGIORNAMENTO 2025-08-29: Usa embedder dinamico invece di hardcode
         try:
             embedder = self._get_dynamic_embedder()
-        except:
-            from EmbeddingEngine.labse_embedder import LaBSEEmbedder
-            embedder = LaBSEEmbedder()
+        except Exception as e:
+            # 🚫 NESSUN FALLBACK LOCALE - Solo Docker service
+            raise RuntimeError(f"Embedder Docker richiesto ma non disponibile: {e}")
             
         from Classification.advanced_ensemble_classifier import AdvancedEnsembleClassifier
         from Preprocessing.session_aggregator import SessionAggregator
@@ -1878,9 +1880,9 @@ class QualityGateEngine:
         # AGGIORNAMENTO 2025-08-29: Usa embedder dinamico
         try:
             embedder = self._get_dynamic_embedder()
-        except:
-            from EmbeddingEngine.labse_embedder import LaBSEEmbedder
-            embedder = LaBSEEmbedder()
+        except Exception as e:
+            # 🚫 NESSUN FALLBACK LOCALE - Solo Docker service
+            raise RuntimeError(f"Embedder Docker richiesto ma non disponibile: {e}")
             
         from Classification.advanced_ensemble_classifier import AdvancedEnsembleClassifier
         from Preprocessing.session_aggregator import SessionAggregator
@@ -2076,9 +2078,9 @@ class QualityGateEngine:
         # AGGIORNAMENTO 2025-08-29: Usa embedder dinamico
         try:
             embedder = self._get_dynamic_embedder()
-        except:
-            from EmbeddingEngine.labse_embedder import LaBSEEmbedder
-            embedder = LaBSEEmbedder()
+        except Exception as e:
+            # 🚫 NESSUN FALLBACK LOCALE - Solo Docker service
+            raise RuntimeError(f"Embedder Docker richiesto ma non disponibile: {e}")
             
         from Classification.advanced_ensemble_classifier import AdvancedEnsembleClassifier
         from Preprocessing.session_aggregator import SessionAggregator

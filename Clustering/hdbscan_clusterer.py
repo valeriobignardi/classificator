@@ -54,7 +54,7 @@ except Exception as e:
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'EmbeddingEngine'))
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Preprocessing'))
 
-from labse_embedder import LaBSEEmbedder
+# RIMOSSO: from labse_embedder import LaBSEEmbedder - Ora usa solo Docker service
 from session_aggregator import SessionAggregator
 
 class HDBSCANClusterer:
@@ -1355,7 +1355,14 @@ if __name__ == "__main__":
     print("=== TEST HDBSCAN CLUSTERING ===\n")
     
     # Inizializza componenti
-    embedder = LaBSEEmbedder()
+    print("🔧 Caricamento embedder per test - SOLO Docker")
+    from EmbeddingEngine.labse_remote_client import LaBSERemoteClient
+    embedder = LaBSERemoteClient(
+        service_url="http://localhost:8081",
+        fallback_local=False  # 🚫 NESSUN FALLBACK LOCALE
+    )
+    print("✅ Embedder Docker remoto caricato per test")
+    
     aggregator = SessionAggregator(schema='humanitas')
     clusterer = HDBSCANClusterer(min_cluster_size=3, min_samples=2)
     

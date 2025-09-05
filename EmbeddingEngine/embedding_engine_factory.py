@@ -293,10 +293,8 @@ class EmbeddingEngineFactory:
             from labse_remote_client import LaBSERemoteClient
             return LaBSERemoteClient(service_url="http://localhost:8081")
         except Exception as e:
-            print(f"⚠️ Default embedder remoto fallito: {e}")
-            print(f"🔄 Fallback su LaBSE locale...")
-            from labse_embedder import LaBSEEmbedder
-            return LaBSEEmbedder()
+            print(f"❌ CRITICO: Servizio Docker LaBSE non disponibile: {e}")
+            raise RuntimeError(f"Servizio Docker LaBSE richiesto ma non disponibile: {e}")
     
     def reload_tenant_embedder(self, tenant_id: str) -> BaseEmbedder:
         """

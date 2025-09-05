@@ -169,22 +169,14 @@ class LaBSERemoteClient(BaseEmbedder):
     
     def _get_local_fallback(self):
         """
-        Ottieni istanza locale di LaBSEEmbedder come fallback
+        🚫 FALLBACK LOCALE DISABILITATO - Solo Docker service
         
         Returns:
-            Istanza LaBSEEmbedder locale (lazy loading)
+            None - Nessun fallback locale disponibile
         """
-        if self._local_embedder is None and self.fallback_local:
-            try:
-                print(f"🔄 Caricamento fallback locale LaBSEEmbedder...")
-                from labse_embedder import LaBSEEmbedder
-                self._local_embedder = LaBSEEmbedder(test_on_init=False)
-                print(f"✅ Fallback locale disponibile")
-            except Exception as e:
-                print(f"❌ Impossibile caricare fallback locale: {e}")
-                self._local_embedder = None
-        
-        return self._local_embedder
+        if self.fallback_local:
+            print(f"⚠️ Fallback locale richiesto ma DISABILITATO - solo Docker")
+        return None
     
     def encode(self, 
                texts: Union[str, List[str]], 

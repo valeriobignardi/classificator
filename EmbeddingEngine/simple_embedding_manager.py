@@ -214,19 +214,15 @@ class SimpleEmbeddingManager:
                     service_url="http://localhost:8081",
                     timeout=300,
                     max_retries=3,
-                    fallback_local=True  # Fallback automatico se servizio non disponibile
+                    fallback_local=False  # 🚫 NESSUN FALLBACK LOCALE
                 )
                 
                 print(f"✅ LaBSE Remote Client configurato con successo")
                 return remote_client
                 
             except Exception as e:
-                print(f"⚠️ Errore configurazione servizio remoto LaBSE: {e}")
-                print(f"🔄 Fallback su LaBSE locale...")
-                
-                # Fallback su istanza locale se servizio remoto non disponibile
-                from labse_embedder import LaBSEEmbedder
-                return LaBSEEmbedder()
+                print(f"❌ CRITICO: Servizio Docker LaBSE non disponibile: {e}")
+                raise RuntimeError(f"Servizio Docker LaBSE richiesto ma non disponibile: {e}")
             
         elif engine_type == 'bge_m3':
             from bge_m3_embedder import BGE_M3_Embedder
@@ -267,15 +263,14 @@ class SimpleEmbeddingManager:
                 service_url="http://localhost:8081",
                 timeout=300,
                 max_retries=2,  # Meno retry per fallback
-                fallback_local=True
+                fallback_local=False  # 🚫 NESSUN FALLBACK LOCALE
             )
             
             return remote_client
             
         except Exception as e:
-            print(f"⚠️ Fallback su LaBSE locale per default: {e}")
-            from labse_embedder import LaBSEEmbedder
-            return LaBSEEmbedder()
+            print(f"❌ CRITICO: Servizio Docker LaBSE non disponibile: {e}")
+            raise RuntimeError(f"Servizio Docker LaBSE richiesto ma non disponibile: {e}")
     
     def _normalize_tenant_id(self, tenant_identifier: str) -> str:
         """

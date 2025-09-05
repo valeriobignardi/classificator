@@ -24,7 +24,7 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Embedd
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Clustering'))
 
 from end_to_end_pipeline import EndToEndPipeline
-from labse_embedder import LaBSEEmbedder
+# RIMOSSO: from labse_embedder import LaBSEEmbedder - Ora usa Docker service
 from hdbscan_clusterer import HDBSCANClusterer
 
 

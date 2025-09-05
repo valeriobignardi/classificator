@@ -292,8 +292,14 @@ class AdvancedEnsembleClassifier:
             Features arricchite
         """
         try:
-            from EmbeddingEngine.labse_embedder import LaBSEEmbedder
-            embedder = LaBSEEmbedder()
+            print("🔧 Caricamento embedder per arricchimento semantico...")
+            from EmbeddingEngine.labse_remote_client import LaBSERemoteClient
+            embedder = LaBSERemoteClient(
+                service_url="http://localhost:8081",
+                fallback_local=False  # 🚫 NESSUN FALLBACK LOCALE
+            )
+            print("✅ Embedder Docker remoto caricato per arricchimento")
+            
             
             # Crea embeddings delle descrizioni per ogni classe
             description_embeddings = {}
@@ -505,11 +511,15 @@ class AdvancedEnsembleClassifier:
                     embedding = embedder.encode([text])
                     print(f"   📊 Embedding generato - shape: {embedding.shape}")
                 else:
-                    print("⚠️ Nessun embedder fornito, creo uno nuovo (potenziale rischio CUDA OOM)")
-                    from EmbeddingEngine.labse_embedder import LaBSEEmbedder
-                    temp_embedder = LaBSEEmbedder()
+                    print("⚠️ Nessun embedder fornito - usando servizio Docker obbligatorio")
+                    from EmbeddingEngine.labse_remote_client import LaBSERemoteClient
+                    temp_embedder = LaBSERemoteClient(
+                        service_url="http://localhost:8081",
+                        fallback_local=False  # 🚫 NESSUN FALLBACK LOCALE
+                    )
                     embedding = temp_embedder.encode([text])
-                    print(f"   📊 Embedding generato (temp) - shape: {embedding.shape}")
+                    print(f"   📊 Embedding generato (Docker remoto) - shape: {embedding.shape}")
+                
                 
                 # Applica feature augmentation BERTopic se disponibile
                 ml_features = embedding
@@ -980,9 +990,14 @@ class AdvancedEnsembleClassifier:
         
         # Crea embedder se non fornito
         if embedder is None:
-            from EmbeddingEngine.labse_embedder import LaBSEEmbedder
-            embedder = LaBSEEmbedder()
-            print("✅ Embedder creato per il batch")
+            print("⚠️ Nessun embedder fornito per batch - usando Docker obbligatorio")
+            from EmbeddingEngine.labse_remote_client import LaBSERemoteClient
+            embedder = LaBSERemoteClient(
+                service_url="http://localhost:8081",
+                fallback_local=False  # 🚫 NESSUN FALLBACK LOCALE
+            )
+            print("✅ Embedder Docker remoto creato per il batch")
+        
         
         results = []
         for i in range(0, len(texts), batch_size):

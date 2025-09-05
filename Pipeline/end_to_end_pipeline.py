@@ -685,10 +685,9 @@ class EndToEndPipeline:
                     self.embedder = LaBSERemoteClient(service_url="http://localhost:8081")
                     print(f"✅ Fallback remoto configurato")
                 except Exception as remote_error:
-                    print(f"⚠️ Fallback remoto fallito: {remote_error}")
-                    from labse_embedder import LaBSEEmbedder
-                    self.embedder = LaBSEEmbedder()
-                    print(f"✅ Fallback locale configurato")
+                    print(f"❌ CRITICO: Servizio Docker LaBSE non disponibile: {remote_error}")
+                    raise RuntimeError(f"Servizio Docker LaBSE richiesto ma non disponibile: {remote_error}")
+                
                 
         return self.embedder
     

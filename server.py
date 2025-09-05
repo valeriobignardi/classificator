@@ -530,7 +530,7 @@ class ClassificationService:
         
         return mongo_reader
     
-    def get_pipeline(self, client_name: str, threshold = 0.7) -> EndToEndPipeline:
+    def get_pipeline(self, client_name: str) -> EndToEndPipeline:
         """
         Ottieni o crea la pipeline per un cliente specifico
         SOLUZIONE ALLA RADICE: Usa lock per cliente per evitare inizializzazioni simultanee
@@ -560,7 +560,7 @@ class ClassificationService:
                 # NOTA: auto_retrain ora viene gestito da config.yaml
                 pipeline = EndToEndPipeline(
                     tenant_slug=client_name,
-                    confidence_threshold=threshold,
+                    confidence_threshold=0.7, # Da verificare se ha senso perchè tanto viene sovrascritto
                     auto_mode=True,  # Modalità completamente automatica
                     shared_embedder=None  # LAZY LOADING: embedder caricato quando serve!
                     # auto_retrain rimosso: ora gestito da config.yaml
@@ -1568,6 +1568,17 @@ def get_client_status(client_name: str):
         print(f"❌ Errore endpoint status: {e}")
         return jsonify(error_response), 500
 
+
+
+
+
+
+
+
+
+
+
+
 @app.route('/train/supervised/<client_name>', methods=['POST'])
 def supervised_training(client_name: str):
     """
@@ -1632,7 +1643,8 @@ def supervised_training(client_name: str):
         print(f"📋 Parametro utente:")
         print(f"  🔄 Forza review: {force_review}")
         
-        # 🆕 CARICA PARAMETRI DAL DATABASE TAG.soglie
+        # 🆕 CARICA SOLO LE SOGLIE REVIEW QUEUE DAL DATABASE TAG.soglie
+        # I parametri di clustering saranno caricati dalla pipeline tramite get_all_clustering_parameters_for_tenant()
         try:
             # Risolvi tenant_id se necessario
             from Utils.tenant import Tenant
@@ -1644,8 +1656,8 @@ def supervised_training(client_name: str):
                 tenant = Tenant.from_slug(client_name)
                 tenant_id = tenant.tenant_id
             
-            # Carica parametri dal database usando l'API esistente
-            print(f"📊 Caricamento parametri da database TAG.soglie per tenant: {tenant_id}")
+            # Carica SOLO le soglie review queue dal database
+            print(f"📊 Caricamento soglie review queue da database TAG.soglie per tenant: {tenant_id}")
             
             import mysql.connector
             import yaml
@@ -1669,42 +1681,31 @@ def supervised_training(client_name: str):
             
             cursor = connection.cursor(dictionary=True)
             
-            # Query per recuperare i parametri dal database
+            # Query per recuperare SOLO le soglie review queue
             query = """
-            SELECT *
+            SELECT 
+                representative_confidence_threshold,
+                minimum_consensus_threshold,
+                max_pending_per_batch
             FROM soglie 
             WHERE tenant_id = %s 
             ORDER BY id DESC 
             LIMIT 1
             """
             
-            cursor.execute(query, (tenant_id,)) # Usa tenant_id risolto
-            db_result = cursor.fetchone() # Recupera il primo (e unico) risultato
+            cursor.execute(query, (tenant_id,))
+            db_result = cursor.fetchone()
             
             if db_result:
-                # Parametri dal database
-                confidence_threshold = float(db_result['representative_confidence_threshold']) # Es. 0.95 la confidenza sotto la quale deve andare in review
-                disagreement_threshold = 1.0 - float(db_result['minimum_consensus_threshold']) / 2.0  # Conversione da consensus a disagreement
-                max_sessions = db_result['max_pending_per_batch'] # Es. 500 sessioni da sottoporre all'utente
+                # Parametri soglie review dal database
+                confidence_threshold = float(db_result['representative_confidence_threshold'])
+                disagreement_threshold = 1.0 - float(db_result['minimum_consensus_threshold']) / 2.0
+                max_sessions = db_result['max_pending_per_batch']
                 
-                # Parametri HDBSCAN/UMAP dal database
-                clustering_params = {
-                    'min_cluster_size': db_result['min_cluster_size'], # es. 5 o 10
-                    'min_samples': db_result['min_samples'], # es. 1 o 5
-                    'metric': db_result['metric'], # es. 'euclidean', 'cosine'
-                    'cluster_selection_epsilon': float(db_result['cluster_selection_epsilon']), # es. 0.5
-                    'use_umap': bool(db_result['use_umap']), # es. True
-                    'umap_n_neighbors': db_result['umap_n_neighbors'], # es. 15
-                    'umap_min_dist': float(db_result['umap_min_dist']), # es. 0.1
-                    'umap_n_components': db_result['umap_n_components'], # es. 2 o 3
-                    'umap_metric': db_result['umap_metric'] # es. 'euclidean', 'cosine'
-                }
-                
-                print(f"✅ Parametri caricati dal database (record ID {db_result['id']}):")
+                print(f"✅ Soglie review queue caricate dal database (record per tenant {tenant_id}):")
                 print(f"  🎯 Confidence threshold: {confidence_threshold}")
                 print(f"  ⚖️ Disagreement threshold: {disagreement_threshold}")
                 print(f"  📊 Max sessions: {max_sessions}")
-                print(f"  🧩 Clustering params: {clustering_params}")
                 
                 connection.close()
                 
@@ -1713,26 +1714,19 @@ def supervised_training(client_name: str):
                 confidence_threshold = 0.7
                 disagreement_threshold = 0.3
                 max_sessions = 500
-                clustering_params = {}
                 
-                print(f"⚠️ Nessun parametro trovato nel database, uso defaults")
+                print(f"⚠️ Nessuna soglia trovata nel database per tenant {tenant_id}, uso defaults")
                 
                 if connection:
                     connection.close()
                     
         except Exception as e:
-            print(f"❌ Errore caricamento parametri dal database: {e}")
+            print(f"❌ Errore caricamento soglie dal database: {e}")
             # Fallback a parametri default
             confidence_threshold = 0.7
             disagreement_threshold = 0.3
             max_sessions = 500
-            clustering_params = {}
         
-        print(f"📋 Parametri finali utilizzati:")
-        print(f"  📊 Max sessioni review: {max_sessions}")
-        print(f"  🎯 Soglia confidenza: {confidence_threshold}")
-        print(f"  🔄 Forza review: {force_review}")
-        print(f"  ⚖️ Soglia disagreement: {disagreement_threshold}")
         
         # Ottieni la pipeline per questo cliente
         pipeline = classification_service.get_pipeline(client_name) # 
@@ -1757,12 +1751,13 @@ def supervised_training(client_name: str):
             disagreement_threshold=disagreement_threshold
         )
         
-        # Aggiungi configurazione utente ai risultati
+        # Aggiungi configurazione utente ai risultati - CORREZIONE DOPPIO RECUPERO
         results['user_configuration'] = {
             'max_sessions': max_sessions,
             'confidence_threshold': confidence_threshold,
             'force_review': force_review,
             'disagreement_threshold': disagreement_threshold
+            # RIMOSSO: clustering_parameters - ora caricati dalla pipeline via get_all_clustering_parameters_for_tenant()
         }
         
         response = {
@@ -1802,263 +1797,14 @@ def supervised_training(client_name: str):
             'timestamp': datetime.now().isoformat()
         }), 500
 
-@app.route('/train/supervised/advanced/<client_name>', methods=['POST'])
-def supervised_training_advanced(client_name: str):
-    """
-    NUOVO: Training supervisionato avanzato con estrazione completa del dataset
-    
-    LOGICA MIGLIORATA:
-    - Estrae SEMPRE tutte le discussioni dal database (ignora limiti per clustering)
-    - Il clustering viene eseguito su tutto il dataset disponibile
-    - Il limite si applica solo alle sessioni rappresentative sottoposte all'umano
-    
-    Args:
-        client_name: Nome del cliente (es. 'humanitas')
-        
-    Body (opzionale):
-        {
-            "max_human_review_sessions": 500,  # Limite max sessioni per review umana
-            "representatives_per_cluster": 3,  # Rappresentanti per cluster
-            "force_retrain": true              # Forza riaddestramento modelli
-        }
-    
-    Returns:
-        {
-            "success": true,
-            "message": "Training supervisionato avanzato completato",
-            "client": "humanitas",
-            "extraction_stats": {
-                "total_sessions_extracted": 10000,
-                "extraction_mode": "FULL_DATASET"
-            },
-            "clustering_stats": {
-                "total_sessions_clustered": 10000,
-                "n_clusters": 45,
-                "n_outliers": 120,
-                "clustering_mode": "COMPLETE"
-            },
-            "human_review_stats": {
-                "max_sessions_for_review": 500,
-                "actual_sessions_for_review": 485,
-                "clusters_reviewed": 42,
-                "clusters_excluded": 3
-            },
-            "training_metrics": {...}
-        }
-    """
-    try:
-        print(f"🚀 AVVIO TRAINING SUPERVISIONATO AVANZATO - Cliente: {client_name}")
-        
-        # Recupera parametri dal body della richiesta
-        request_data = {}
-        if request.content_type and 'application/json' in request.content_type:
-            try:
-                request_data = request.get_json() or {}
-            except Exception as e:
-                print(f"⚠️  Errore parsing JSON: {e}")
-                request_data = {}
-        
-        max_human_review_sessions = request_data.get('max_human_review_sessions', 500)
-        representatives_per_cluster = request_data.get('representatives_per_cluster', 3)
-        force_retrain = request_data.get('force_retrain', True)
-        
-        print(f"📋 Parametri avanzati:")
-        print(f"  👤 Max sessioni review umana: {max_human_review_sessions}")
-        print(f"  📝 Rappresentanti per cluster: {representatives_per_cluster}")
-        print(f"  🔄 Forza riaddestramento: {force_retrain}")
-        
-        # Ottieni la pipeline per questo cliente
-        pipeline = classification_service.get_pipeline(client_name)
-        
-        if not pipeline:
-            return jsonify({
-                'success': False,
-                'error': f'Pipeline non trovata per cliente {client_name}',
-                'client': client_name
-            }), 404
-        
-        # Esegui training supervisionato avanzato
-        print("🎓 Avvio training supervisionato con estrazione completa...")
-        
-        training_results = pipeline.esegui_training_interattivo(
-            giorni_indietro=90,  # Parametro simbolico (estrazione completa ignora questo)
-            limit=100,           # DEPRECATO - ora indica max sessioni per review umana
-            max_human_review_sessions=max_human_review_sessions
-        )
-        
-        response = {
-            'success': True,
-            'message': f'Training supervisionato avanzato completato per {client_name}',
-            'client': client_name,
-            'parameters': {
-                'max_human_review_sessions': max_human_review_sessions,
-                'representatives_per_cluster': representatives_per_cluster,
-                'force_retrain': force_retrain,
-                'extraction_mode': 'FULL_DATASET'
-            },
-            'results': training_results,
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        print(f"✅ Training supervisionato avanzato completato per {client_name}")
-        
-        # 🛠️ SANITIZZAZIONE PER JSON SERIALIZATION
-        print(f"🧹 Sanitizzazione dati per JSON serialization...")
-        sanitized_response = sanitize_for_json(response)
-        print(f"✅ Dati sanitizzati per JSON")
-        
-        return jsonify(sanitized_response)
-        
-    except Exception as e:
-        print(f"❌ ERRORE nel training supervisionato avanzato: {e}")
-        import traceback
-        traceback.print_exc()
-        
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'client': client_name,
-            'timestamp': datetime.now().isoformat()
-        }), 500
-    """
-    Avvia il processo di training supervisionato per un cliente
-    
-    Questo endpoint:
-    1. Analizza le classificazioni esistenti per identificare casi che richiedono revisione umana
-    2. Popola la coda di revisione con casi di ensemble disagreement, low confidence, o edge cases
-    3. Restituisce statistiche sui casi identificati per la revisione
-    
-    Args:
-        client_name: Nome del cliente (es. 'humanitas')
-        
-    Body (opzionale):
-        {
-            "batch_size": 100,           # Numero di classificazioni da analizzare per batch
-            "min_confidence": 0.7,       # Soglia di confidenza minima
-            "disagreement_threshold": 0.3, # Soglia per ensemble disagreement
-            "force_review": false,       # Se true, forza la revisione anche di casi già revisionati
-            "max_review_cases": null,    # Limite massimo di casi da aggiungere alla coda (null = nessun limite)
-            "use_optimal_selection": null # null=auto-rileva, true=selezione ottimale, false=ensemble disagreement
-        }
-    
-    Returns:
-        {
-            "success": true,
-            "message": "Training supervisionato avviato",
-            "client": "humanitas",
-            "analysis": {
-                "total_classifications": 1500,
-                "reviewed_cases": 45,
-                "pending_review": 23,
-                "disagreement_cases": 12,
-                "low_confidence_cases": 8,
-                "edge_cases": 3
-            },
-            "review_queue_size": 23,
-            "timestamp": "2024-01-01T12:00:00"
-        }
-    
-    Esempio:
-        curl -X POST http://localhost:5000/train/supervised/humanitas
-        curl -X POST http://localhost:5000/train/supervised/humanitas \
-             -H "Content-Type: application/json" \
-             -d '{"batch_size": 50, "min_confidence": 0.8}'
-    """
-    try:
-        print(f"🎯 AVVIO TRAINING SUPERVISIONATO - Cliente: {client_name}")
-        
-        # Recupera parametri dal body della richiesta (se presente)
-        request_data = {}
-        if request.content_type and 'application/json' in request.content_type:
-            try:
-                request_data = request.get_json() or {}
-            except Exception as e:
-                print(f"⚠️  Errore parsing JSON: {e}")
-                request_data = {}
-        
-        batch_size = request_data.get('batch_size', 100)
-        min_confidence = request_data.get('min_confidence', 0.7)
-        disagreement_threshold = request_data.get('disagreement_threshold', 0.3)
-        force_review = request_data.get('force_review', False)
-        max_review_cases = request_data.get('max_review_cases', None)  # Limite massimo casi da aggiungere alla coda
-        use_optimal_selection = request_data.get('use_optimal_selection', None)  # Auto-rileva se None
-        analyze_all_or_new_only = request_data.get('analyze_all_or_new_only', 'ask_user')  # 'all', 'new_only', 'ask_user'
-        
-        # 🐛 DEBUG CRITICO: Verifica che il mapping frontend funzioni
-        print(f"🐛 [DEBUG MAPPING] Raw request_data: {request_data}")
-        print(f"🐛 [DEBUG MAPPING] min_confidence estratto: {min_confidence} (dovrebbe essere 0.95 se impostato dall'utente)")
-        print(f"🐛 [DEBUG MAPPING] disagreement_threshold estratto: {disagreement_threshold}")
-        
-        print(f"📋 Parametri: batch_size={batch_size}, min_confidence={min_confidence}")
-        print(f"📋 disagreement_threshold={disagreement_threshold}, force_review={force_review}")
-        print(f"📋 max_review_cases={max_review_cases}, use_optimal_selection={use_optimal_selection}")
-        print(f"📋 analyze_all_or_new_only={analyze_all_or_new_only}")
-        
-        # Prepara soglie personalizzate per il QualityGateEngine
-        user_thresholds = {
-            'confidence_threshold': min_confidence,
-            'disagreement_threshold': disagreement_threshold
-        }
-        
-        # Ottieni il QualityGateEngine per questo cliente con soglie personalizzate
-        quality_gate = classification_service.get_quality_gate(client_name, user_thresholds)
-        print(f"🎯 QualityGateEngine configurato con soglie utente: confidence={quality_gate.confidence_threshold}")
-        
-        # Analizza le classificazioni esistenti per identificare casi da rivedere
-        print("🔍 Analisi classificazioni per identificare casi da rivedere...")
-        
-        analysis_result = quality_gate.analyze_classifications_for_review(
-            batch_size=batch_size,
-            min_confidence=min_confidence,
-            disagreement_threshold=disagreement_threshold,
-            force_review=force_review,
-            max_review_cases=max_review_cases,
-            use_optimal_selection=use_optimal_selection,
-            analyze_all_or_new_only=analyze_all_or_new_only
-        )
-        
-        # Statistiche della coda di revisione
-        review_stats = quality_gate.get_review_stats()
-        
-        response = {
-            'success': True,
-            'message': f'Training supervisionato avviato per {client_name}',
-            'client': client_name,
-            'parameters': {
-                'batch_size': batch_size,
-                'min_confidence': min_confidence,
-                'disagreement_threshold': disagreement_threshold,
-                'force_review': force_review,
-                'max_review_cases': max_review_cases
-            },
-            'analysis': analysis_result,
-            'review_queue_size': review_stats.get('total_pending', 0),
-            'review_stats': review_stats,
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        print(f"✅ Training supervisionato completato: {analysis_result}")
-        print(f"📊 Coda di revisione: {review_stats.get('pending_cases', 0)} casi")
-        
-        # 🛠️ SANITIZZAZIONE PER JSON SERIALIZATION  
-        print(f"🧹 Sanitizzazione dati per JSON serialization...")
-        sanitized_response = sanitize_for_json(response)
-        print(f"✅ Dati sanitizzati per JSON")
-        
-        return jsonify(sanitized_response), 200
-        
-    except Exception as e:
-        error_response = {
-            'success': False,
-            'error': f'Errore nel training supervisionato: {str(e)}',
-            'client': client_name,
-            'timestamp': datetime.now().isoformat(),
-            'traceback': traceback.format_exc()
-        }
-        
-        print(f"❌ Errore endpoint training supervisionato: {e}")
-        print(f"🔍 Traceback: {traceback.format_exc()}")
-        return jsonify(error_response), 500
+
+
+
+
+
+
+
+
 
 @app.route('/dev/create-mock-cases/<client_name>', methods=['POST'])
 def create_mock_cases(client_name: str):
@@ -2244,11 +1990,12 @@ def api_get_review_cases(tenant_id: str):
                 'case_id': session.get('id', session.get('session_id', '')),
                 'session_id': session.get('session_id', ''),
                 'conversation_text': session.get('conversation_text', session.get('testo_completo', '')),
-                # 🔧 FIX: Gestione corretta dei campi predizione
-                'ml_prediction': session.get('ml_prediction', session.get('classification_ML', session.get('classification', 'N/A'))),
-                'ml_confidence': float(session.get('ml_confidence', session.get('precision_ML', session.get('confidence', 0.0) if session.get('classification_method') == 'ML' else 0.0))),
-                'llm_prediction': session.get('llm_prediction', session.get('classification_LLM', session.get('classification', 'N/A'))),
-                'llm_confidence': float(session.get('llm_confidence', session.get('precision_LLM', session.get('confidence', 0.0) if session.get('classification_method') == 'LLM' else 0.0))),
+                # 🔧 FIX BUG N/A: Usa direttamente i valori MongoDB già mappati correttamente
+                # Il metodo get_review_queue_sessions() gestisce già i fallback per casi propagati
+                'ml_prediction': session.get('ml_prediction', 'N/A'),
+                'ml_confidence': float(session.get('ml_confidence', 0.0)),
+                'llm_prediction': session.get('llm_prediction', 'N/A'),
+                'llm_confidence': float(session.get('llm_confidence', 0.0)),
                 'uncertainty_score': 1.0 - float(session.get('confidence', 0.0)),
                 'novelty_score': 0.0,  # Non disponibile da MongoDB
                 'reason': session.get('motivation', session.get('motivazione', '')),
@@ -4810,65 +4557,7 @@ def get_prompts_for_tenant(tenant_id: str):
         }), 500
 
 
-# COMMENTATO: Endpoint ridondante - L'UI usa direttamente /api/prompts/{tenant_id}/status
-# @app.route('/api/prompts/tenant/<tenant_id>/status', methods=['GET'])
-# def get_prompts_status_for_tenant(tenant_id: str):
-#     """
-#     Recupera lo status dei prompt per un tenant specifico (accetta tenant_slug)
-#     
-#     GET /api/prompts/tenant/alleanza/status
-#     
-#     Returns:
-#         {
-#             "tenant_id": "alleanza",
-#             "tenant_name": "Alleanza",
-#             "total_prompts": 5,
-#             "active_prompts": 3,
-#             "inactive_prompts": 2,
-#             "last_updated": "2025-01-16T10:00:00",
-#             "status": "ready"
-#         }
-#     """
-#     try:
-#         print(f"🔍 API: Recupero status prompt per tenant_slug: {tenant_id}")
-#         
-#         prompt_manager = PromptManager()
-#         prompts = prompt_manager.get_all_prompts_for_tenant(tenant_id)
-#         
-#         # Calcola statistiche
-#         total_prompts = len(prompts)
-#         active_prompts = len([p for p in prompts if p.get('is_active', False)])
-#         inactive_prompts = total_prompts - active_prompts
-#         
-#         # Trova ultimo aggiornamento
-#         last_updated = None
-#         if prompts:
-#             last_updated = max(p.get('updated_at', '') for p in prompts if p.get('updated_at'))
-#         
-#         # Determina tenant name
-#         tenant_name = prompts[0].get('tenant_name', 'unknown') if prompts else 'unknown'
-#         
-#         status = {
-#             "tenant_id": tenant_id,
-#             "tenant_name": tenant_name,
-#             "total_prompts": total_prompts,
-#             "active_prompts": active_prompts,
-#             "inactive_prompts": inactive_prompts,
-#             "last_updated": last_updated,
-#             "status": "ready" if active_prompts > 0 else "no_active_prompts"
-#         }
-#         
-#         print(f"✅ Status prompt per tenant {tenant_id}: {active_prompts}/{total_prompts} attivi")
-#         
-#         return jsonify(status)
-#         
-#     except Exception as e:
-#         print(f"❌ Errore status prompt per tenant {tenant_id}: {e}")
-#         return jsonify({
-#             'error': str(e),
-#             'tenant_id': tenant_id,
-#             'status': 'error'
-#         }), 500
+
 
 
 @app.route('/api/prompts/<tenant_identifier>/status', methods=['GET'])
@@ -7828,200 +7517,7 @@ def get_review_queue_thresholds(tenant_id):
             'error': error_msg,
             'tenant_id': tenant_id
         }), 500
-    """
-    Recupera le soglie per la review queue di un tenant dal database MySQL
     
-    Args:
-        tenant_id: ID del tenant
-        
-    Returns:
-        JSON con soglie review queue (ultimo record per tenant)
-        
-    Data ultima modifica: 2025-09-03 - Valerio Bignardi
-    """
-    try:
-        import mysql.connector
-        from mysql.connector import Error
-        import yaml
-        
-        # Carica configurazione database
-        config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
-        
-        db_config = config['tag_database']
-        
-        # Connessione al database
-        connection = mysql.connector.connect(
-            host=db_config['host'],
-            port=db_config['port'],
-            user=db_config['user'],
-            password=db_config['password'],
-            database=db_config['database'],
-            autocommit=True
-        )
-        
-        cursor = connection.cursor(dictionary=True)
-        
-        # Query per recuperare l'ultimo record per il tenant
-        query = """
-        SELECT 
-            config_source,
-            last_updated,
-            enable_smart_review,
-            max_pending_per_batch,
-            minimum_consensus_threshold,
-            outlier_confidence_threshold,
-            propagated_confidence_threshold,
-            representative_confidence_threshold
-        FROM soglie 
-        WHERE tenant_id = %s 
-        ORDER BY id DESC 
-        LIMIT 1
-        """
-        
-        cursor.execute(query, (tenant_id,))
-        db_result = cursor.fetchone()
-        
-        if db_result:
-            # Soglie dal database
-            thresholds = {
-                'outlier_confidence_threshold': float(db_result['outlier_confidence_threshold']),
-                'propagated_confidence_threshold': float(db_result['propagated_confidence_threshold']),
-                'representative_confidence_threshold': float(db_result['representative_confidence_threshold']),
-                'minimum_consensus_threshold': db_result['minimum_consensus_threshold'],
-                'enable_smart_review': bool(db_result['enable_smart_review']),
-                'max_pending_per_batch': db_result['max_pending_per_batch']
-            }
-            
-            config_source = db_result['config_source']
-            last_updated = db_result['last_updated'].isoformat() if db_result['last_updated'] else datetime.now().isoformat()
-        else:
-            # Soglie default da config.yaml (fallback)
-            thresholds = {
-                'outlier_confidence_threshold': 0.6,
-                'propagated_confidence_threshold': 0.75, 
-                'representative_confidence_threshold': 0.85,
-                'minimum_consensus_threshold': 2,
-                'enable_smart_review': True,
-                'max_pending_per_batch': 150
-            }
-            
-            config_source = 'default'
-            last_updated = datetime.now().isoformat()
-        
-        cursor.close()
-        connection.close()
-        
-        response = {
-            'success': True,
-            'tenant_id': tenant_id,
-            'thresholds': thresholds,
-            'config_source': config_source,
-            'last_updated': last_updated
-        }
-        
-        print(f"📊 [SOGLIE GET] Tenant {tenant_id}: {config_source} soglie caricate")
-        return jsonify(response)
-        
-    except Error as db_error:
-        error_msg = f'Errore database: {str(db_error)}'
-        print(f"❌ [SOGLIE GET] {error_msg}")
-        
-        # Fallback a soglie default in caso di errore database
-        return jsonify({
-            'success': True,
-            'tenant_id': tenant_id,
-            'thresholds': {
-                'outlier_confidence_threshold': 0.6,
-                'propagated_confidence_threshold': 0.75,
-                'representative_confidence_threshold': 0.85,
-                'minimum_consensus_threshold': 2,
-                'enable_smart_review': True,
-                'max_pending_per_batch': 150
-            },
-            'config_source': 'fallback',
-            'last_updated': datetime.now().isoformat(),
-            'database_error': error_msg
-        })
-        
-    except Exception as e:
-        error_msg = f'Errore generico: {str(e)}'
-        print(f"❌ [SOGLIE GET] {error_msg}")
-        
-        return jsonify({
-            'success': False,
-            'error': error_msg,
-            'tenant_id': tenant_id
-        }), 500
-    """
-    Recupera le soglie per la review queue di un tenant
-    
-    Args:
-        tenant_id: ID del tenant
-        
-    Returns:
-        JSON con soglie review queue
-        
-    Data ultima modifica: 2025-09-03
-    """
-    try:
-        # Percorso file configurazione soglie per il tenant
-        tenant_config_dir = os.path.join(os.path.dirname(__file__), 'tenant_configs')
-        tenant_thresholds_file = os.path.join(tenant_config_dir, f'{tenant_id}_review_thresholds.yaml')
-        
-        # Soglie default
-        default_thresholds = {
-            'outlier_confidence_threshold': 0.7,  # Sotto 0.7 → pending
-            'propagated_confidence_threshold': 0.8,  # Sotto 0.8 → pending
-            'representative_confidence_threshold': 0.9,  # Sotto 0.9 → pending
-            'minimum_consensus_threshold': 3,  # Minimo consenso per auto_classified
-            'enable_smart_review': True,  # Abilita review intelligente
-            'max_pending_per_batch': 100  # Max casi pending per batch
-        }
-        
-        # Carica soglie personalizzate se esistono
-        if os.path.exists(tenant_thresholds_file):
-            try:
-                with open(tenant_thresholds_file, 'r', encoding='utf-8') as f:
-                    config = yaml.safe_load(f)
-                    custom_thresholds = config.get('review_thresholds', {})
-                    
-                    # Merge con default (custom override default)
-                    thresholds = {**default_thresholds, **custom_thresholds}
-                    config_source = 'custom'
-                    last_updated = config.get('last_updated', 'unknown')
-                    
-                    print(f"📊 [REVIEW-QUEUE] Caricamento soglie personalizzate per tenant {tenant_id}")
-                    
-            except Exception as e:
-                print(f"⚠️ [REVIEW-QUEUE] Errore caricamento soglie personalizzate: {e}")
-                thresholds = default_thresholds
-                config_source = 'default_fallback'
-                last_updated = 'error'
-        else:
-            thresholds = default_thresholds
-            config_source = 'default'
-            last_updated = 'never'
-        
-        return jsonify({
-            'success': True,
-            'tenant_id': tenant_id,
-            'thresholds': thresholds,
-            'config_source': config_source,
-            'last_updated': last_updated,
-            'config_file': tenant_thresholds_file if config_source == 'custom' else None
-        }), 200
-        
-    except Exception as e:
-        error_msg = f'Errore caricamento soglie review queue: {str(e)}'
-        print(f"❌ [REVIEW-QUEUE] {error_msg}")
-        
-        return jsonify({
-            'success': False,
-            'error': error_msg,
-            'tenant_id': tenant_id
-        }), 500
 
 
 @app.route('/api/review-queue/<tenant_id>/thresholds', methods=['POST'])

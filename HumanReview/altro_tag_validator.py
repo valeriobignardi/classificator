@@ -484,7 +484,7 @@ class AltroTagValidator:
         Autore: Valerio Bignardi
         Data: 2025-08-28
         """
-        self.logger.info(f"🔍 Validazione ALTRO per conversazione {conversation_id}")
+        self.logger.info(f"🔍 VALERIO AltroValidator -  Validazione ALTRO per conversazione {conversation_id}")
         
         try:
             # Step 1: Estrai tag dalla response LLM

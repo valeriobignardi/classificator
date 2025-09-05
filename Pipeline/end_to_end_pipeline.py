@@ -49,6 +49,8 @@ from tag_database_connector import TagDatabaseConnector
 from semantic_memory_manager import SemanticMemoryManager
 from interactive_trainer import InteractiveTrainer
 from intelligent_label_deduplicator import IntelligentLabelDeduplicator
+# Importa funzione di pulizia tag per prevenire caratteri speciali
+from Classification.intelligent_classifier import clean_label_text
 
 # Import del classificatore ensemble avanzato
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Classification'))
@@ -173,15 +175,15 @@ class EndToEndPipeline:
     delle sessioni di conversazione
     """
     
-    def __init__(self,
-                 tenant: Tenant = None,
+    def __init__(self,# Nuovo sistema di gestione tenant UUID centralizzato
+                 tenant: Tenant = None, # Nuovo - oggetto Tenant
                  tenant_slug: str = None,  # Retrocompatibilità - DEPRECATO
-                 confidence_threshold: float = None,
-                 min_cluster_size: int = None,
-                 min_samples: int = None,
-                 config_path: str = None,
-                 auto_mode: bool = None,
-                 shared_embedder=None):
+                 confidence_threshold: float = None, # Soglia di confidenza
+                 min_cluster_size: int = None, # Dimensione minima del cluster
+                 min_samples: int = None, # Numero minimo di campioni
+                 config_path: str = None, # Percorso del file di configurazione     
+                 auto_mode: bool = None, # Modalità automatica
+                 shared_embedder=None): # Evita CUDA out of memory
         """
         Inizializza la pipeline
         
@@ -220,10 +222,9 @@ class EndToEndPipeline:
             print(f"🏥 [PIPELINE] Fallback completato: {self.tenant.tenant_name} ({self.tenant.tenant_id})")
         
         # Mantieni retrocompatibilità per codice esistente
-        self.tenant_id = self.tenant.tenant_id
+        self.tenant_id = self.tenant.tenant_id # UUID 
         self.tenant_slug = self.tenant.tenant_slug
         
-        # CAMBIO RADICALE: Non più inizializzazione globale di MongoClassificationReader
         # Ogni operazione creerà istanza tenant-specifica quando necessario
         self.mongo_reader = None  # Placeholder - istanze create dinamicamente
         
@@ -1455,9 +1456,15 @@ class EndToEndPipeline:
                         cluster_metadata['selection_reason'] = 'outlier_representative'
                         cluster_metadata['is_outlier'] = True
                     
+                    # 🧹 PULIZIA CRITICA: Applica pulizia caratteri speciali a suggested_label
+                    clean_suggested_label = clean_label_text(suggested_label)
+                    if clean_suggested_label != suggested_label:
+                        print(f"🧹 Suggested label pulita: '{suggested_label}' → '{clean_suggested_label}'")
+                        suggested_label = clean_suggested_label
+                    
                     # Prepara decision finale per rappresentanti
                     final_decision = {
-                        'predicted_label': suggested_label,
+                        'predicted_label': suggested_label,  # Ora è pulita
                         'confidence': 0.7,  # Confidenza media per clustering
                         'method': 'supervised_training_clustering',
                         'reasoning': f'Rappresentante del cluster {cluster_id} selezionato per review umana'
@@ -1649,8 +1656,14 @@ class EndToEndPipeline:
                     cluster_metadata['selection_reason'] = 'cluster_propagated'
                     cluster_metadata['is_outlier'] = True
                 
+                # 🧹 PULIZIA CRITICA: Applica pulizia caratteri speciali a suggested_label
+                clean_suggested_label = clean_label_text(suggested_label)
+                if clean_suggested_label != suggested_label:
+                    print(f"🧹 Propagated label pulita: '{suggested_label}' → '{clean_suggested_label}'")
+                    suggested_label = clean_suggested_label
+                
                 final_decision = {
-                    'predicted_label': suggested_label,
+                    'predicted_label': suggested_label,  # Ora è pulita
                     'confidence': 0.6,  # Confidenza più bassa per propagate
                     'method': 'supervised_training_propagated',
                     'reasoning': f'Sessione propagata dal cluster {cluster_id} durante training supervisionato'
@@ -1919,7 +1932,10 @@ class EndToEndPipeline:
             
             # Determina l'etichetta finale con priorità alle reviewed
             if cluster_id in reviewed_labels:
-                final_label = reviewed_labels[cluster_id]
+                raw_label = reviewed_labels[cluster_id]
+                final_label = clean_label_text(raw_label)
+                if final_label != raw_label:
+                    print(f"🧹 Label reviewed pulita: '{raw_label}' → '{final_label}'")
                 label_source = "reviewed"
             else:
                 # Fallback per sessioni senza cluster o cluster non reviewed
@@ -2334,11 +2350,11 @@ class EndToEndPipeline:
         
         try:
             debug_pipeline("classifica_e_salva_sessioni", "TENTATIVO - Chiamata _classifica_ottimizzata_cluster", {
-                "num_sessioni": len(sessioni),
-                "num_session_ids": len(session_ids),
-                "num_session_texts": len(session_texts),
-                "batch_size": batch_size,
-                "optimize_clusters": optimize_clusters,
+                "num_sessioni": len(sessioni), 
+                "num_session_ids": len(session_ids), # Controllo incrociato
+                "num_session_texts": len(session_texts), # Controllo incrociato
+                "batch_size": batch_size, # Parametro critico che serve per debug
+                "optimize_clusters": optimize_clusters, # FORZATO True rappresenta la logica unificata post-training 
                 "use_ensemble": use_ensemble
             }, "INFO")
             
@@ -2522,8 +2538,16 @@ class EndToEndPipeline:
                     confidence = prediction.get('ensemble_confidence', prediction['confidence'])
                     predicted_label = prediction['predicted_label']
                     
+                    # 🧹 PULIZIA CRITICA: Applica pulizia caratteri speciali SUBITO dopo estrazione
+                    clean_predicted_label = clean_label_text(predicted_label)
+                    if clean_predicted_label != predicted_label:
+                        print(f"🧹 Label pulita (ensemble): '{predicted_label}' → '{clean_predicted_label}'")
+                        predicted_label = clean_predicted_label
+                    
                     # 🆕 VALIDAZIONE "ALTRO" CON LLM + BERTopic + SIMILARITÀ
-                    if predicted_label == 'altro' and hasattr(self, 'interactive_trainer') and self.interactive_trainer.altro_validator:
+                    print (f"   🔍 Verifica necessità validazione 'altro' per sessione {i+1}...")
+                    if predicted_label == 'altro' and hasattr(self, 'interactive_trainer') and self.interactive_trainer.altro_validator: # Abilita validazione altro se predict altro e validator attivo 
+                        print (f"   🔍 Predicted label è 'altro', avvio validazione...")
                         try:
                             conversation_text = sessioni[session_id].get('testo_completo', '')
                             if conversation_text:
@@ -2535,12 +2559,17 @@ class EndToEndPipeline:
                                 
                                 # Usa il risultato della validazione se diverso da "altro"
                                 if validated_label != 'altro':
-                                    predicted_label = validated_label
+                                    # 🧹 PULIZIA CRITICA: Applica pulizia al validated_label (primo blocco)
+                                    clean_validated_label = clean_label_text(validated_label)
+                                    if clean_validated_label != validated_label:
+                                        print(f"🧹 Validated label pulita (ensemble): '{validated_label}' → '{clean_validated_label}'")
+                                    
+                                    predicted_label = clean_validated_label
                                     confidence = validated_confidence
                                     method = f"{method}_ALTRO_VAL"  # Marca che è stato validato
                                     
                                     if i < 10:  # Debug per le prime 10
-                                        print(f"🔍 Sessione {i+1}: ALTRO→'{validated_label}' (path: {validation_info.get('validation_path', 'unknown')})")
+                                        print(f"🔍 Sessione {i+1}: ALTRO→'{clean_validated_label}' (path: {validation_info.get('validation_path', 'unknown')})")
                         
                         except Exception as e:
                             print(f"⚠️ Errore validazione ALTRO per sessione {i+1}: {e}")
@@ -2567,6 +2596,12 @@ class EndToEndPipeline:
                     confidence = prediction['confidence']
                     predicted_label = prediction['predicted_label']
                     
+                    # 🧹 PULIZIA CRITICA: Applica pulizia caratteri speciali per ML_AUTO
+                    clean_predicted_label = clean_label_text(predicted_label)
+                    if clean_predicted_label != predicted_label:
+                        print(f"🧹 Label pulita (ML_AUTO): '{predicted_label}' → '{clean_predicted_label}'")
+                        predicted_label = clean_predicted_label
+                    
                     # 🆕 VALIDAZIONE "ALTRO" ANCHE PER ML_AUTO 
                     if predicted_label == 'altro' and hasattr(self, 'interactive_trainer') and self.interactive_trainer.altro_validator:
                         try:
@@ -2580,12 +2615,17 @@ class EndToEndPipeline:
                                 
                                 # Usa il risultato della validazione se diverso da "altro"
                                 if validated_label != 'altro':
-                                    predicted_label = validated_label
+                                    # 🧹 PULIZIA CRITICA: Applica pulizia al validated_label (secondo blocco)
+                                    clean_validated_label = clean_label_text(validated_label)
+                                    if clean_validated_label != validated_label:
+                                        print(f"🧹 Validated label pulita (ML_AUTO): '{validated_label}' → '{clean_validated_label}'")
+                                    
+                                    predicted_label = clean_validated_label
                                     confidence = validated_confidence
                                     method = f"{method}_ALTRO_VAL"  # Marca che è stato validato
                                     
                                     if i < 10:  # Debug per le prime 10
-                                        print(f"🔍 Sessione {i+1}: ALTRO→'{validated_label}' (path: {validation_info.get('validation_path', 'unknown')})")
+                                        print(f"🔍 Sessione {i+1}: ALTRO→'{clean_validated_label}' (path: {validation_info.get('validation_path', 'unknown')})")
                         
                         except Exception as e:
                             print(f"⚠️ Errore validazione ALTRO per sessione {i+1}: {e}")
@@ -2883,10 +2923,28 @@ class EndToEndPipeline:
         
         return stats
     
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     def esegui_pipeline_completa(self,
-                               giorni_indietro: int = 7,
-                               limit: Optional[int] = 200,
-                               batch_size: int = 32,
+                               giorni_indietro: int = 7, #mai utilizzato
+                               limit: Optional[int] = 200, 
+                               batch_size: int = 32, 
                                interactive_mode: bool = True,
                                use_ensemble: bool = True,
                                force_full_extraction: bool = False) -> Dict[str, Any]:
@@ -3266,97 +3324,6 @@ class EndToEndPipeline:
         }
         
         return results
-    
-    def ottimizza_normalizzazione_etichette(self) -> None:
-        """
-        Aggiorna la mappa di normalizzazione basata sui consolidamenti
-        """
-        print(f"🔧 Ottimizzazione mappa di normalizzazione...")
-        
-        # Aggiorna il metodo _normalize_label con le nuove regole
-        enhanced_normalization_map = {
-            # Accesso - tutte le varianti
-            'accesso portale': 'accesso_portale',
-            'accesso_portale': 'accesso_portale',
-            'accesso app personale': 'accesso_portale',
-            'accesso_app_personale': 'accesso_portale',
-            'accesso ospedale': 'accesso_portale',  # Consolidato
-            'accesso_ospedale': 'accesso_portale',  # Consolidato
-            'accesso sistema': 'accesso_portale',
-            'accesso_sistema': 'accesso_portale',
-            
-            # Fatturazione - tutte le varianti
-            'fatturazione': 'fatturazione_pagamenti',
-            'fatturazione_pagamenti': 'fatturazione_pagamenti',
-            'fatturazione pagamenti': 'fatturazione_pagamenti',
-            'pagamenti': 'fatturazione_pagamenti',
-            'pagamenti parcheggio': 'fatturazione_pagamenti',
-            'pagamenti_parcheggio': 'fatturazione_pagamenti',
-            
-            # Referti - tutte le varianti
-            'ritiro referti': 'ritiro_referti',
-            'ritiro_referti': 'ritiro_referti',
-            'ritiro referti istologici': 'ritiro_referti',
-            'ritiro_referti_istologici': 'ritiro_referti',
-            'ritiro esami': 'ritiro_referti',
-            'ritiro_esami': 'ritiro_referti',
-            'download referti': 'ritiro_referti',
-            'download_referti': 'ritiro_referti',
-            
-            # Prenotazioni - tutte le varianti
-            'prenotazione esami': 'prenotazione_esami',
-            'prenotazione_esami': 'prenotazione_esami',
-            'prenotazione privata': 'prenotazione_esami',
-            'prenotazione_privata': 'prenotazione_esami',
-            'prenotazione visite': 'prenotazione_esami',
-            'prenotazione_visite': 'prenotazione_esami',
-            
-            # Orari e contatti
-            'orari strutture': 'orari_contatti',
-            'orari_strutture': 'orari_contatti',
-            'contatti info': 'orari_contatti',
-            'contatti_info': 'orari_contatti',
-            'orari contatti': 'orari_contatti',
-            'orari_contatti': 'orari_contatti',
-            
-            # Servizi di supporto
-            'prenotazione trasporti': 'servizi_supporto',
-            'prenotazione_trasporti': 'servizi_supporto',
-            'alloggio accompagnatore': 'servizi_supporto',
-            'alloggio_accompagnatore': 'servizi_supporto',
-            'servizi accompagnamento': 'servizi_supporto',
-            'servizi_accompagnamento': 'servizi_supporto',
-            'servizi supporto': 'servizi_supporto',
-            'servizi_supporto': 'servizi_supporto',
-            
-            # Assistenza medica specializzata
-            'riabilitazione neurologica': 'assistenza_medica_specializzata',
-            'riabilitazione_neurologica': 'assistenza_medica_specializzata',
-            'trattamento cistite chronic': 'assistenza_medica_specializzata',
-            'trattamento_cistite_chronic': 'assistenza_medica_specializzata',
-            'medicamenti farmaci': 'assistenza_medica_specializzata',
-            'medicamenti_farmaci': 'assistenza_medica_specializzata',
-            'assistenza tecnica internazionali': 'assistenza_medica_specializzata',
-            'assistenza_tecnica_internazionali': 'assistenza_medica_specializzata',
-            'informazioni esami gravidanza aborti spontanei': 'assistenza_medica_specializzata',
-            'informazioni_esami_gravidanza_aborti_spontanei': 'assistenza_medica_specializzata',
-            'invito medico procedura chirurgica': 'assistenza_medica_specializzata',
-            'invito_medico_procedura_chirurgica': 'assistenza_medica_specializzata',
-            
-            # Preparazione esami
-            'preparazione esami': 'preparazione_esami',
-            'preparazione_esami': 'preparazione_esami',
-            
-            # Altri
-            'altro': 'altro',
-            'informazioni generali': 'altro',  # Troppo generico
-            'informazioni_generali': 'altro'   # Troppo generico
-        }
-        
-        # Sovrascrivi il metodo _normalize_label temporaneamente
-        # (In un vero refactor, questo andrebbe nel file di configurazione)
-        self._enhanced_normalization_map = enhanced_normalization_map
-        print(f"✅ Mappa di normalizzazione aggiornata con {len(enhanced_normalization_map)} regole")
 
     def test_consolidamento_etichette(self) -> None:
         """
@@ -4914,8 +4881,12 @@ class EndToEndPipeline:
                 
                 # 🆕 PROCESSA SOLO PROPAGATI (membri di cluster, NON rappresentanti)
                 if cluster_id in reviewed_labels:
-                    # Usa l'etichetta dal cluster
-                    final_label = reviewed_labels[cluster_id]
+                    # Usa l'etichetta dal cluster con pulizia caratteri speciali
+                    raw_label = reviewed_labels[cluster_id]
+                    final_label = clean_label_text(raw_label)
+                    if final_label != raw_label:
+                        print(f"🧹 Label cluster pulita: '{raw_label}' → '{final_label}'")
+                    
                     confidence = 0.85  # Alta confidenza per propagazione da cluster
                     method = 'CLUSTER_PROPAGATION'
                     notes = f"Propagata da cluster {cluster_id}"
@@ -4943,8 +4914,11 @@ class EndToEndPipeline:
                 
                 # Determina l'etichetta da assegnare
                 if cluster_id in reviewed_labels:
-                    # Usa l'etichetta dal cluster
-                    final_label = reviewed_labels[cluster_id]
+                    # Usa l'etichetta dal cluster con pulizia caratteri speciali
+                    raw_label = reviewed_labels[cluster_id]
+                    final_label = clean_label_text(raw_label)
+                    if final_label != raw_label:
+                        print(f"🧹 Label cluster pulita (propagation): '{raw_label}' → '{final_label}'")
                     confidence = 0.85  # Alta confidenza per propagazione da cluster
                     method = 'CLUSTER_PROPAGATION'
                     notes = f"Propagata da cluster {cluster_id}"

@@ -225,7 +225,7 @@ class InteractiveTrainer:
         
         try:
             print(f"\n" + "🔍" * 80)
-            print(f"🏷️  VALIDAZIONE CLASSIFICAZIONE 'ALTRO'")
+            print(f"🏷️  VALERIO - VALIDAZIONE CLASSIFICAZIONE 'ALTRO'")
             print("🔍" * 80)
             
             # Esegui validazione con LLM + BERTopic + Similarità

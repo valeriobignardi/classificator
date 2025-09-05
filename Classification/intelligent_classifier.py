@@ -119,11 +119,11 @@ def clean_label_text(label: str) -> str:
     """
     Pulisce l'etichetta da caratteri speciali che possono causare problemi nel salvataggio
     
-    Scopo della funzione: Rimuove virgolette esterne e backslash dalle etichette LLM
+    Scopo della funzione: Rimuove caratteri speciali problematici dalle etichette
     Parametri di input: label (stringa etichetta da pulire)
     Parametri di output: Etichetta pulita
     Valori di ritorno: Stringa depurata da caratteri speciali
-    Tracciamento aggiornamenti: 2025-09-04 - Creata per correggere bug virgolette
+    Tracciamento aggiornamenti: 2025-01-27 - Aggiunta pulizia backslash e caratteri speciali
     
     Args:
         label: Etichetta da pulire
@@ -135,19 +135,41 @@ def clean_label_text(label: str) -> str:
     Data: 2025-09-04
     """
     if not label or not isinstance(label, str):
-        return label
+        return label or ""
     
-    # Rimuovi virgolette esterne (doppie e singole)
     cleaned = label.strip()
+    if not cleaned:
+        return ""
+    
+    # STEP 1: Rimuovi virgolette esterne (doppie e singole)
     if (cleaned.startswith('"') and cleaned.endswith('"')) or \
        (cleaned.startswith("'") and cleaned.endswith("'")):
         cleaned = cleaned[1:-1]
     
-    # Rimuovi backslash di escape
-    cleaned = cleaned.replace('\\"', '"').replace("\\'", "'").replace('\\\\', '\\')
+    # STEP 2: Converti backslash problematici in spazi (per preservare separazione)
+    cleaned = cleaned.replace('\\', ' ')
     
-    # Rimuovi spazi extra
-    cleaned = cleaned.strip()
+    # STEP 3: Rimuovi backslash di escape residui
+    cleaned = cleaned.replace('\\"', '"').replace("\\'", "'")
+    
+    # STEP 4: Sostituisci separatori comuni con underscore
+    separators = ['-', '.', '/', '@', '#', '$', '%', '^', '&', '*', '+', '=', '|', ':', ';', '<', '>', '?', '!']
+    for sep in separators:
+        cleaned = cleaned.replace(sep, '_')
+    
+    # STEP 5: Rimuovi altri caratteri speciali (ma non spazi e underscore)
+    import re
+    cleaned = re.sub(r'[^a-zA-Z0-9_\s]', '', cleaned)
+    
+    # STEP 6: Normalizza spazi multipli e converti in underscore
+    cleaned = re.sub(r'\s+', '_', cleaned)
+    
+    # STEP 7: Rimuovi underscore multipli e ai bordi
+    cleaned = re.sub(r'_+', '_', cleaned)
+    cleaned = cleaned.strip('_')
+    
+    # STEP 8: Converti in uppercase per consistenza (opzionale)
+    cleaned = cleaned.upper()
     
     return cleaned
 
@@ -3641,15 +3663,31 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             tenant_id = hashlib.md5(self.client_name.encode()).hexdigest()[:16]
             tenant_name = self.client_name
             
-            # 🔧 FIX: Popola ml_result e llm_result basati sul metodo utilizzato
+            # 🔧 FIX BUG N/A: Popola ml_result e llm_result correttamente per ensemble
             ml_result = None
             llm_result = None
             
             # Determina quale metodo è stato utilizzato dal result.method
             method = result.method.upper() if hasattr(result, 'method') and result.method else 'LLM'
             
-            if 'ML' in method or 'ENSEMBLE' in method:
-                # Se è stato utilizzato ML, popola ml_result
+            # 🔧 FIX CRITICO: Per ensemble classifier, popola ENTRAMBI i risultati
+            if 'ENSEMBLE' in method:
+                # Per ensemble, crea entrambi i risultati con stessi valori
+                # Questo risolve il problema N/A nell'interfaccia di review
+                ml_result = {
+                    'predicted_label': result.predicted_label,
+                    'confidence': result.confidence,
+                    'method': f"{method}_ML_COMPONENT"
+                }
+                llm_result = {
+                    'predicted_label': result.predicted_label,
+                    'confidence': result.confidence,
+                    'reasoning': result.motivation,
+                    'method': f"{method}_LLM_COMPONENT"
+                }
+                self.logger.debug(f"🤖🧠 ENSEMBLE: Popolati entrambi ML+LLM result: {result.predicted_label} (conf: {result.confidence:.3f})")
+            elif 'ML' in method:
+                # Solo ML
                 ml_result = {
                     'predicted_label': result.predicted_label,
                     'confidence': result.confidence,
@@ -3657,7 +3695,7 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 }
                 self.logger.debug(f"🤖 ML result salvato: {result.predicted_label} (conf: {result.confidence:.3f})")
             else:
-                # Altrimenti è LLM (default per intelligent_clustering)
+                # Solo LLM (default per intelligent_clustering)
                 llm_result = {
                     'predicted_label': result.predicted_label,
                     'confidence': result.confidence,
@@ -3666,6 +3704,17 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 }
                 self.logger.debug(f"🧠 LLM result salvato: {result.predicted_label} (conf: {result.confidence:.3f})")
             
+            # 🧹 PULIZIA CRITICA: Applica pulizia caratteri speciali PRIMA del salvataggio
+            clean_predicted_label = clean_label_text(result.predicted_label)
+            if clean_predicted_label != result.predicted_label:
+                self.logger.info(f"🧹 Label pulita prima del salvataggio MongoDB: '{result.predicted_label}' → '{clean_predicted_label}'")
+            
+            # Aggiorna ml_result e llm_result con label pulita
+            if ml_result:
+                ml_result['predicted_label'] = clean_predicted_label
+            if llm_result:
+                llm_result['predicted_label'] = clean_predicted_label
+            
             # Salva in MongoDB usando il metodo corretto
             success = self.mongo_reader.save_classification_result(
                 session_id=session_id,
@@ -3673,7 +3722,7 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 ml_result=ml_result,  # 🔧 FIX: Aggiungi ml_result
                 llm_result=llm_result,  # 🔧 FIX: Aggiungi llm_result
                 final_decision={
-                    'predicted_label': result.predicted_label,
+                    'predicted_label': clean_predicted_label,  # 🧹 USA LABEL PULITA
                     'confidence': result.confidence,
                     'method': 'INTELLIGENT_CLUSTERING',  # 🔧 FIX 3: Sostituisci LLM_STRUCTURED con metodo clustering
                     'reasoning': result.motivation

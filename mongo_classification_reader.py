@@ -18,6 +18,14 @@ import os
 import sys
 import numpy as np  # 🆕 Per supporto embedding
 
+# Import trace_all per debugging
+try:
+    from Pipeline.end_to_end_pipeline import trace_all
+except ImportError:
+    # Fallback se trace_all non è disponibile
+    def trace_all(*args, **kwargs):
+        pass
+
 # Import della classe Tenant
 sys.path.append(os.path.join(os.path.dirname(__file__), 'Utils'))
 from tenant import Tenant
@@ -1276,6 +1284,14 @@ class MongoClassificationReader:
             
         Ultimo aggiornamento: 2025-09-02 - Aggiunto supporto embedding
         """
+        trace_all("save_classification_result", "ENTER",
+                 session_id=session_id,
+                 client_name=client_name,
+                 has_ml_result=ml_result is not None,
+                 has_llm_result=llm_result is not None,
+                 has_final_decision=final_decision is not None,
+                 needs_review=needs_review,
+                 classified_by=classified_by)
         # � DEBUG CLASSIFIED_BY: Traccia TUTTI i parametri ricevuti dalla funzione
         print(f"🚨 [MONGO-DEBUG] save_classification_result chiamata per session {session_id}:")
         print(f"   📋 client_name: '{client_name}'")
@@ -1593,9 +1609,16 @@ class MongoClassificationReader:
                 upsert=True
             )
             
-            return result.upserted_id is not None or result.modified_count > 0
+            success = result.upserted_id is not None or result.modified_count > 0
+            trace_all("save_classification_result", "EXIT", 
+                     return_value=success,
+                     upserted=result.upserted_id is not None,
+                     modified=result.modified_count > 0)
+            return success
             
         except Exception as e:
+            trace_all("save_classification_result", "ERROR", 
+                     error=str(e), error_type=type(e).__name__)
             print(f"Errore nel salvataggio risultato classificazione: {e}")
             return False
 
@@ -1815,6 +1838,10 @@ class MongoClassificationReader:
         except Exception as e:
             print(f"Errore nel recupero Review Queue: {e}")
             return []
+
+
+
+
 
     def get_tenant_classifications_with_clustering(self, 
                                                  tenant_slug: str,

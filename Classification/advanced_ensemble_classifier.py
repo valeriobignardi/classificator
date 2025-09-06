@@ -29,6 +29,14 @@ import joblib
 from Utils.numpy_serialization import convert_numpy_types
 
 # Import per debugging ML
+
+# Import della funzione di tracing
+try:
+    from Pipeline.end_to_end_pipeline import trace_all
+except ImportError:
+    # Fallback se il modulo non è disponibile
+    def trace_all(function_name: str, action: str = "ENTER", called_from: str = None, **kwargs):
+        pass
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Debug'))
 try:
     from ml_ensemble_debugger import MLEnsembleDebugger
@@ -470,6 +478,12 @@ class AdvancedEnsembleClassifier:
         Data creazione: 2025-09-06
         Ultima modifica: 2025-09-06 - Aggiunta ottimizzazione BERTopic pre-calcolato
         """
+        trace_all("predict_with_ensemble", "ENTER", 
+                 text_length=len(text),
+                 return_details=return_details,
+                 has_embedder=embedder is not None,
+                 has_ml_features_precalculated=ml_features_precalculated is not None)
+        
         results = {
             'text_preview': text[:100] + '...' if len(text) > 100 else text,
             'timestamp': datetime.now().isoformat()
@@ -745,7 +759,7 @@ class AdvancedEnsembleClassifier:
             # 🧹 PULIZIA CRITICA: Applica pulizia anche al tag ALTRO
             clean_altro_tag = clean_label_text(disagreement_config['low_confidence_tag'])
             
-            return {
+            result_low_conf = {
                 'predicted_label': convert_numpy_types(clean_altro_tag),
                 'ensemble_confidence': convert_numpy_types(max_confidence * 0.6),  # Penalità maggiore
                 'agreement': False,
@@ -755,6 +769,14 @@ class AdvancedEnsembleClassifier:
                 'ml_weight_used': 0.0,
                 'decision_reason': f'Confidence massima {max_confidence:.2f} < soglia {disagreement_config["low_confidence_threshold"]}'
             }
+            
+            trace_all("predict_with_ensemble", "EXIT", 
+                     predicted_label=result_low_conf.get('predicted_label', 'N/A'),
+                     ensemble_confidence=result_low_conf.get('ensemble_confidence', 0.0),
+                     agreement=result_low_conf.get('agreement', False),
+                     combination_method='LOW_CONFIDENCE_ALTRO')
+            
+            return result_low_conf
         
         # STEP 2: Accordo → usa confidenza ponderata
         if llm_label == ml_label:
@@ -778,7 +800,7 @@ class AdvancedEnsembleClassifier:
             # 🧹 PULIZIA CRITICA: Applica pulizia alla label di accordo
             clean_agreement_label = clean_label_text(llm_label)
             
-            return {
+            result_agreement = {
                 'predicted_label': convert_numpy_types(clean_agreement_label),
                 'ensemble_confidence': convert_numpy_types(final_confidence),
                 'agreement': True,
@@ -788,6 +810,14 @@ class AdvancedEnsembleClassifier:
                 'ml_weight_used': convert_numpy_types(ml_weight),
                 'decision_reason': 'LLM e ML concordano'
             }
+            
+            trace_all("predict_with_ensemble", "EXIT", 
+                     predicted_label=result_agreement.get('predicted_label', 'N/A'),
+                     ensemble_confidence=result_agreement.get('ensemble_confidence', 0.0),
+                     agreement=result_agreement.get('agreement', False),
+                     combination_method='AGREEMENT_WEIGHTED')
+            
+            return result_agreement
         
         # STEP 3: Disaccordo → Strategia intelligente
         agreement = False
@@ -869,6 +899,12 @@ class AdvancedEnsembleClassifier:
                 final_result=voting_result,
                 processing_time=0.001
             )
+        
+        trace_all("predict_with_ensemble", "EXIT", 
+                 predicted_label=voting_result.get('predicted_label', 'N/A'),
+                 ensemble_confidence=voting_result.get('ensemble_confidence', 0.0),
+                 agreement=voting_result.get('agreement', False),
+                 combination_method=voting_result.get('combination_method', 'N/A'))
         
         return voting_result
     

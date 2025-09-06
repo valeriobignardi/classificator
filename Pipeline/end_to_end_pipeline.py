@@ -76,6 +76,129 @@ except Exception as _e:
     print(f"⚠️ BERTopic non disponibile: {_e}")
 
 
+def trace_all(function_name: str, action: str = "ENTER", called_from: str = None, **kwargs):
+    """
+    Sistema di tracing completo per tracciare il flusso della pipeline
+    
+    Scopo della funzione: Tracciare ingresso, uscita ed errori di tutte le funzioni
+    Parametri di input: function_name, action, called_from, **kwargs (parametri da tracciare)
+    Parametri di output: None (scrive su file)
+    Valori di ritorno: None
+    Tracciamento aggiornamenti: 2025-09-06 - Valerio Bignardi - Sistema tracing pipeline
+    
+    Args:
+        function_name (str): Nome della funzione da tracciare
+        action (str): "ENTER", "EXIT", "ERROR"
+        called_from (str): Nome della funzione chiamante (per tracciare chiamate annidate)
+        **kwargs: Parametri da tracciare (input, return_value, exception, etc.)
+        
+    Autore: Valerio Bignardi
+    Data: 2025-09-06
+    """
+    import yaml
+    import os
+    from datetime import datetime
+    import json
+    
+    try:
+        # Carica configurazione tracing dal config.yaml
+        config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
+        if not os.path.exists(config_path):
+            return  # Tracing disabilitato se config non esiste
+            
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+            
+        tracing_config = config.get('tracing', {})
+        if not tracing_config.get('enabled', False):
+            return  # Tracing disabilitato
+            
+        # Configurazioni tracing
+        log_file = tracing_config.get('log_file', 'tracing.log')
+        include_parameters = tracing_config.get('include_parameters', True)
+        include_return_values = tracing_config.get('include_return_values', True)
+        include_exceptions = tracing_config.get('include_exceptions', True)
+        max_file_size_mb = tracing_config.get('max_file_size_mb', 100)
+        
+        # Path assoluto per il file di log
+        log_path = os.path.join(os.path.dirname(__file__), '..', log_file)
+        
+        # Rotazione file se troppo grande
+        if os.path.exists(log_path):
+            file_size_mb = os.path.getsize(log_path) / (1024 * 1024)
+            if file_size_mb > max_file_size_mb:
+                backup_path = f"{log_path}.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                os.rename(log_path, backup_path)
+        
+        # Timestamp formattato
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        
+        # Costruisci messaggio di tracing con called_from
+        if called_from:
+            message_parts = [f"[{timestamp}]", f"{action:>5}", "->", f"{called_from}::{function_name}"]
+        else:
+            message_parts = [f"[{timestamp}]", f"{action:>5}", "->", function_name]
+        
+        # Aggiungi parametri se richiesto
+        if action == "ENTER" and include_parameters and kwargs:
+            params_str = []
+            for key, value in kwargs.items():
+                try:
+                    # Converti i parametri in stringa gestendo oggetti complessi
+                    if isinstance(value, (dict, list)):
+                        if len(str(value)) > 200:
+                            value_str = f"{type(value).__name__}(size={len(value)})"
+                        else:
+                            value_str = json.dumps(value, default=str, ensure_ascii=False)[:200]
+                    elif hasattr(value, '__len__') and len(str(value)) > 200:
+                        value_str = f"{type(value).__name__}(len={len(value)})"
+                    else:
+                        value_str = str(value)[:200]
+                    params_str.append(f"{key}={value_str}")
+                except Exception:
+                    params_str.append(f"{key}=<{type(value).__name__}>")
+            
+            if params_str:
+                message_parts.append(f"({', '.join(params_str)})")
+        
+        # Aggiungi valore di ritorno se richiesto
+        elif action == "EXIT" and include_return_values and 'return_value' in kwargs:
+            try:
+                return_val = kwargs['return_value']
+                if isinstance(return_val, (dict, list)):
+                    if len(str(return_val)) > 300:
+                        return_str = f"{type(return_val).__name__}(size={len(return_val)})"
+                    else:
+                        return_str = json.dumps(return_val, default=str, ensure_ascii=False)[:300]
+                elif hasattr(return_val, '__len__') and len(str(return_val)) > 300:
+                    return_str = f"{type(return_val).__name__}(len={len(return_val)})"
+                else:
+                    return_str = str(return_val)[:300]
+                message_parts.append(f"RETURN: {return_str}")
+            except Exception:
+                message_parts.append(f"RETURN: <{type(kwargs['return_value']).__name__}>")
+        
+        # Aggiungi eccezione se richiesto
+        elif action == "ERROR" and include_exceptions and 'exception' in kwargs:
+            try:
+                exc = kwargs['exception']
+                exc_str = f"{type(exc).__name__}: {str(exc)}"[:500]
+                message_parts.append(f"EXCEPTION: {exc_str}")
+            except Exception:
+                message_parts.append(f"EXCEPTION: <{type(kwargs['exception']).__name__}>")
+        
+        # Scrivi nel file di log
+        log_message = " ".join(message_parts) + "\n"
+        
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(log_message)
+            
+    except Exception as e:
+        # Fallback silenzioso se il tracing fallisce
+        # Non vogliamo che errori di tracing interrompano la pipeline
+        pass
+
+
 def get_supervised_training_params_from_db(tenant_id: str) -> Dict[str, Any]:
     """
     Recupera i parametri di training supervisionato dalla tabella MySQL 'soglie'
@@ -91,6 +214,8 @@ def get_supervised_training_params_from_db(tenant_id: str) -> Dict[str, Any]:
     Tracciamento aggiornamenti:
         - 28/01/2025: Creazione funzione per leggere parametri training supervisionato
     """
+    trace_all("get_supervised_training_params_from_db", "ENTER", tenant_id=tenant_id)
+    
     import mysql.connector
     from mysql.connector import Error
     
@@ -142,7 +267,7 @@ def get_supervised_training_params_from_db(tenant_id: str) -> Dict[str, Any]:
             
             if result:
                 print(f"✅ [TRAINING DB] Parametri trovati per tenant {tenant_id}")
-                return {
+                result_params = {
                     'confidence_threshold_priority': float(result['confidence_threshold_priority']),
                     'max_representatives_per_cluster': result['max_representatives_per_cluster'],
                     'max_total_sessions': result['max_total_sessions'],
@@ -151,17 +276,24 @@ def get_supervised_training_params_from_db(tenant_id: str) -> Dict[str, Any]:
                     'representatives_per_cluster': result['representatives_per_cluster'],
                     'selection_strategy': result['selection_strategy']
                 }
+                trace_all("get_supervised_training_params_from_db", "EXIT", return_value=result_params)
+                return result_params
             else:
                 print(f"⚠️ [TRAINING DB] Nessun record trovato per tenant {tenant_id}, uso valori default")
+                trace_all("get_supervised_training_params_from_db", "EXIT", return_value=default_params)
                 return default_params
                 
     except Error as e:
         print(f"❌ [TRAINING DB] Errore MySQL per tenant {tenant_id}: {e}")
         print(f"📋 [TRAINING DB] Uso valori default")
+        trace_all("get_supervised_training_params_from_db", "ERROR", exception=e)
+        trace_all("get_supervised_training_params_from_db", "EXIT", return_value=default_params)
         return default_params
     except Exception as e:
         print(f"❌ [TRAINING DB] Errore generico: {e}")
         print(f"📋 [TRAINING DB] Uso valori default")
+        trace_all("get_supervised_training_params_from_db", "ERROR", exception=e)
+        trace_all("get_supervised_training_params_from_db", "EXIT", return_value=default_params)
         return default_params
     finally:
         if 'connection' in locals() and connection.is_connected():
@@ -197,6 +329,11 @@ class EndToEndPipeline:
             auto_mode: Se True, modalità automatica (None = legge da config)
             shared_embedder: Embedder condiviso per evitare CUDA out of memory
         """
+        trace_all("__init__", "ENTER", 
+                 tenant=tenant, tenant_slug=tenant_slug, 
+                 confidence_threshold=confidence_threshold,
+                 min_cluster_size=min_cluster_size, min_samples=min_samples,
+                 config_path=config_path, auto_mode=auto_mode)
         
         # 🎯 NUOVO SISTEMA: Crea oggetto Tenant UNA VOLTA con TUTTE le info
         from Utils.tenant import Tenant
@@ -537,6 +674,8 @@ class EndToEndPipeline:
         initialization_time = time.time() - start_time
         print(f"✅ [FASE 1: INIZIALIZZAZIONE] Completata in {initialization_time:.2f}s")
         print(f"🎯 [FASE 1: INIZIALIZZAZIONE] Pipeline pronta per l'uso!")
+        
+        trace_all("__init__", "EXIT", initialization_time=initialization_time)
     
     @property
     def intelligent_classifier(self):
@@ -567,6 +706,11 @@ class EndToEndPipeline:
         Returns:
             Dizionario con le sessioni estratte
         """
+        trace_all("estrai_sessioni", "ENTER",
+                 giorni_indietro=giorni_indietro,
+                 limit=limit,
+                 force_full_extraction=force_full_extraction)
+        
         start_time = time.time()
         print(f"\n� [FASE 2: ESTRAZIONE] Avvio estrazione sessioni...")
         print(f"🏥 [FASE 2: ESTRAZIONE] Tenant: {self.tenant_slug}")
@@ -626,6 +770,7 @@ class EndToEndPipeline:
             print(f"📊 [FASE 2: ESTRAZIONE] Dataset limitato: {len(sessioni_filtrate)} sessioni")
             print(f"🗑️ [FASE 2: ESTRAZIONE] Filtrate: {filtered_out} sessioni vuote/irrilevanti")
             
+        trace_all("estrai_sessioni", "EXIT", return_value_count=len(sessioni_filtrate))
         return sessioni_filtrate
     
     def _generate_cluster_info_from_labels(self, cluster_labels: np.ndarray, session_texts: List[str]) -> Dict[int, Dict[str, Any]]:
@@ -833,7 +978,16 @@ class EndToEndPipeline:
             
         Returns:
             BERTopicFeatureProvider addestrato o None se non abilitato/disponibile
+            
+        Autore: Valerio Bignardi
+        Data creazione: 2025-09-06
+        Ultima modifica: 2025-09-06 - Aggiunta del tracing completo
         """
+        trace_all("_addestra_bertopic_anticipato", "ENTER", 
+                 sessioni_count=len(sessioni),
+                 embeddings_shape=str(embeddings.shape),
+                 bertopic_enabled=self.bertopic_config.get('enabled', False))
+        
         print(f"🤖 DEBUG: INIZIO TRAINING BERTOPIC ANTICIPATO")
         print(f"   📊 Sessioni ricevute: {len(sessioni)}")
         print(f"   📊 Embeddings shape: {embeddings.shape}")
@@ -842,11 +996,15 @@ class EndToEndPipeline:
         
         if not self.bertopic_config.get('enabled', False):
             print("❌ BERTopic non abilitato nella configurazione, salto training anticipato")
+            trace_all("_addestra_bertopic_anticipato", "EXIT", 
+                     return_value=None, reason="BERTopic non abilitato")
             return None
             
         if not _BERTopic_AVAILABLE:
             print("❌ BERTopic SALTATO: Dipendenze non installate")
             print("   💡 Installare: pip install bertopic umap hdbscan")
+            trace_all("_addestra_bertopic_anticipato", "EXIT", 
+                     return_value=None, reason="BERTopic dipendenze non disponibili")
             return None
             
         n_samples = len(sessioni)
@@ -916,11 +1074,19 @@ class EndToEndPipeline:
             print(f"   📊 One-hot shape: {one_hot.shape if one_hot is not None else 'None'}")
             print(f"   ✅ BERTopic provider addestrato con successo su {len(testi)} sessioni")
             
+            trace_all("_addestra_bertopic_anticipato", "EXIT", 
+                     return_value="BERTopicProvider", success=True,
+                     processed_texts=len(testi))
+            
             return bertopic_provider
             
         except Exception as e:
             print(f"❌ ERRORE Training BERTopic anticipato: {e}")
             print(f"   🔍 Traceback: {traceback.format_exc()}")
+            
+            trace_all("_addestra_bertopic_anticipato", "ERROR", 
+                     error_message=str(e), return_value=None)
+            
             return None
 
     def esegui_clustering(self, sessioni: Dict[str, Dict], force_reprocess: bool = False) -> tuple:
@@ -943,6 +1109,9 @@ class EndToEndPipeline:
         Returns:
             Tuple (embeddings, cluster_labels, representatives, suggested_labels)
         """
+        trace_all("esegui_clustering", "ENTER", 
+                 num_sessioni=len(sessioni), force_reprocess=force_reprocess)
+        
         start_time = time.time()
         print(f"\n🚀 [FASE 4: CLUSTERING] Avvio clustering intelligente...")
         print(f"📊 [FASE 4: CLUSTERING] Dataset: {len(sessioni)} sessioni")
@@ -1023,6 +1192,7 @@ class EndToEndPipeline:
             print(f"   🎯 Solo {n_clusters} cluster trovato")
             print(f"   💡 Diversità limitata per training ML")
         
+        trace_all("esegui_clustering", "EXIT", return_value=result)
         return result
     
     def _esegui_clustering_completo(self, sessioni: Dict[str, Dict]) -> tuple:
@@ -1039,6 +1209,7 @@ class EndToEndPipeline:
         Returns:
             Tuple (embeddings, cluster_labels, representatives, suggested_labels)
         """
+        trace_all("_esegui_clustering_completo", "ENTER", sessioni_count=len(sessioni))
         
         # FASE 3: GENERAZIONE EMBEDDINGS
         start_time = time.time()
@@ -1387,14 +1558,18 @@ class EndToEndPipeline:
         model_path = f"models/hdbscan_{self.tenant_id}.pkl"
         if hasattr(self.clusterer, 'save_model_for_incremental_prediction'):
             saved = self.clusterer.save_model_for_incremental_prediction(model_path, self.tenant_id)
-            if saved:
-                print(f"💾 Modello HDBSCAN salvato per predizioni incrementali: {model_path}")
-            else:
-                print(f"⚠️ Impossibile salvare modello HDBSCAN")
+        if saved:
+            print(f"💾 Modello HDBSCAN salvato per predizioni incrementali: {model_path}")
+        else:
+            print(f"⚠️ Impossibile salvare modello HDBSCAN")
         
-        return embeddings, cluster_labels, representatives, suggested_labels
-    
-    # ❌ METODO NON UTILIZZATO - COMMENTATO 2025-09-06
+        result = (embeddings, cluster_labels, representatives, suggested_labels)
+        trace_all("_esegui_clustering_completo", "EXIT", 
+                 embeddings_shape=embeddings.shape if hasattr(embeddings, 'shape') else len(embeddings),
+                 cluster_labels_count=len(cluster_labels),
+                 representatives_clusters=len(representatives),
+                 suggested_labels_count=len(suggested_labels))
+        return result    # ❌ METODO NON UTILIZZATO - COMMENTATO 2025-09-06
     # Questo metodo è stato sostituito da _classify_and_save_representatives_post_training()
     # che viene chiamato DOPO il training ML per salvare rappresentanti con predizioni complete
     # Il vecchio metodo salvava solo etichette dal clustering PRIMA del training ML
@@ -1785,6 +1960,13 @@ class EndToEndPipeline:
         Returns:
             Metriche di training
         """
+        trace_all("allena_classificatore", "ENTER", 
+                 sessioni_count=len(sessioni), 
+                 cluster_labels_count=len(cluster_labels),
+                 representatives_count=len(representatives),
+                 suggested_labels_count=len(suggested_labels),
+                 interactive_mode=interactive_mode)
+        
         print(f"🚨🚨🚨 [DEBUG CRITICO] DENTRO allena_classificatore()!!!")
         print(f"🚨🚨🚨 [DEBUG CRITICO] allena_classificatore() È STATA CHIAMATA!")
         print(f"🚨🚨🚨 [DEBUG CRITICO] Parametri ricevuti:")
@@ -2267,6 +2449,8 @@ class EndToEndPipeline:
             })
 
         print(f"✅ Classificatore allenato e salvato come '{model_name}'")
+        
+        trace_all("allena_classificatore", "EXIT", return_value=metrics)
         return metrics
     
     def _classify_and_save_representatives_post_training(self,
@@ -2298,6 +2482,13 @@ class EndToEndPipeline:
         Autore: Valerio Bignardi
         Data: 2025-09-06
         """
+        trace_all("_classify_and_save_representatives_post_training", "ENTER",
+                 sessioni_count=len(sessioni),
+                 representatives_clusters=len(representatives),
+                 suggested_labels_count=len(suggested_labels),
+                 cluster_labels_count=len(cluster_labels),
+                 reviewed_labels_count=len(reviewed_labels))
+        
         start_time = time.time()
         print(f"🎯 [CLASSIFICAZIONE RAPPRESENTANTI] Avvio classificazione completa...")
         
@@ -2408,13 +2599,18 @@ class EndToEndPipeline:
             print(f"   ❌ Errori: {failed_count}")
             print(f"   🎯 Review queue popolata con predizioni ML+LLM complete")
             
-            return saved_count > 0
+            result = saved_count > 0
+            trace_all("_classify_and_save_representatives_post_training", "EXIT", 
+                     return_value=result, saved_count=saved_count, total_to_classify=total_to_classify)
+            return result
             
         except Exception as e:
             elapsed_time = time.time() - start_time
             print(f"❌ [CLASSIFICAZIONE RAPPRESENTANTI] ERRORE dopo {elapsed_time:.2f}s: {e}")
             import traceback
             traceback.print_exc()
+            trace_all("_classify_and_save_representatives_post_training", "ERROR", 
+                     error=str(e), error_type=type(e).__name__)
             return False
     
     # RIMOSSA: _allena_classificatore_fallback() 
@@ -2433,8 +2629,12 @@ class EndToEndPipeline:
             
         Autore: Valerio Bignardi
         Data creazione: 2025-09-06
-        Ultima modifica: 2025-09-06 - Ottimizzazione BERTopic
+        Ultima modifica: 2025-09-06 - Ottimizzazione BERTopic + tracing
         """
+        trace_all("_create_ml_features_cache", "ENTER", 
+                 session_count=len(session_ids),
+                 ml_features_shape=str(ml_features.shape))
+        
         try:
             # Pulisci cache precedente
             self._ml_features_cache.clear()
@@ -2453,9 +2653,16 @@ class EndToEndPipeline:
             print(f"   🔧 Feature shape: {next(iter(self._ml_features_cache.values())).shape}")
             print(f"   ⏰ Timestamp: {self._cache_valid_timestamp}")
             
+            trace_all("_create_ml_features_cache", "EXIT", 
+                     cached_sessions=len(self._ml_features_cache),
+                     success=True)
+            
         except Exception as e:
             print(f"⚠️ Errore creazione cache ML features: {e}")
             self._ml_features_cache.clear()
+            
+            trace_all("_create_ml_features_cache", "ERROR", 
+                     error_message=str(e), success=False)
     
     def _get_cached_ml_features(self, session_id: str) -> Optional[np.ndarray]:
         """
@@ -2502,6 +2709,13 @@ class EndToEndPipeline:
         Autore: Valerio Bignardi
         Data: 2025-08-29
         """
+        trace_all("classifica_e_salva_sessioni", "ENTER",
+                 sessioni_count=len(sessioni),
+                 batch_size=batch_size,
+                 use_ensemble=use_ensemble, 
+                 optimize_clusters=optimize_clusters,
+                 force_review=force_review)
+        
         # 🔍 DEBUG: Import e trace della funzione
         from Pipeline.debug_pipeline import debug_pipeline, debug_flow
         
@@ -3240,6 +3454,7 @@ class EndToEndPipeline:
             import traceback
             traceback.print_exc()
         
+        trace_all("classifica_e_salva_sessioni", "EXIT", return_value=stats)
         return stats
     
 
@@ -3281,6 +3496,14 @@ class EndToEndPipeline:
         Returns:
             Risultati completi della pipeline
         """
+        trace_all("esegui_pipeline_completa", "ENTER",
+                 giorni_indietro=giorni_indietro,
+                 limit=limit,
+                 batch_size=batch_size,
+                 interactive_mode=interactive_mode,
+                 use_ensemble=use_ensemble,
+                 force_full_extraction=force_full_extraction)
+        
         # 🔍 DEBUG: Import utility debug
         from Pipeline.debug_pipeline import debug_pipeline, debug_flow
         
@@ -3387,6 +3610,7 @@ class EndToEndPipeline:
                 ens = classification_stats['ensemble_stats']
                 print(f"🔗 Predizioni ensemble: {ens['llm_predictions']} LLM + {ens['ml_predictions']} ML")
             
+            trace_all("esegui_pipeline_completa", "EXIT", return_value=results)
             return results
             
         except Exception as e:
@@ -3472,7 +3696,13 @@ class EndToEndPipeline:
             
         Returns:
             Risultati dell'analisi e consolidamento
+            
+        Autore: Valerio Bignardi
+        Data creazione: 2025-09-06
+        Ultima modifica: 2025-09-06 - Aggiunta del tracing completo
         """
+        trace_all("analizza_e_consolida_etichette", "ENTER", dry_run=dry_run)
+        
         print(f"🔍 Analisi etichette esistenti per consolidamento...")
         
         # 1. Recupera tutte le etichette esistenti
@@ -3642,6 +3872,12 @@ class EndToEndPipeline:
             'applied_consolidations': applied_consolidations if not dry_run else 0
         }
         
+        trace_all("analizza_e_consolida_etichette", "EXIT", 
+                 total_labels_analyzed=len(etichette_list),
+                 total_consolidations_possible=total_consolidations,
+                 applied=not dry_run,
+                 applied_consolidations=applied_consolidations if not dry_run else 0)
+        
         return results
 
     def test_consolidamento_etichette(self) -> None:
@@ -3695,6 +3931,12 @@ class EndToEndPipeline:
         Returns:
             Risultati del training interattivo con statistiche complete
         """
+        trace_all("esegui_training_interattivo", "ENTER", 
+                 giorni_indietro=giorni_indietro, limit=limit,
+                 max_human_review_sessions=max_human_review_sessions,
+                 confidence_threshold=confidence_threshold,
+                 force_review=force_review, disagreement_threshold=disagreement_threshold)
+        
         start_time = datetime.now()
         
         # 🔍 DEBUG: Setup logging dettagliato
@@ -3931,6 +4173,7 @@ class EndToEndPipeline:
                 print(f"✅ Etichette approvate dall'umano: {feedback.get('approved_labels', 0)}")
                 print(f"📝 Nuove etichette create dall'umano: {feedback.get('new_labels', 0)}")
             
+            trace_all("esegui_training_interattivo", "EXIT", return_value=results)
             return results
             
         except Exception as e:
@@ -4217,12 +4460,25 @@ class EndToEndPipeline:
         
         Returns:
             Statistiche dell'ensemble classifier
+            
+        Autore: Valerio Bignardi
+        Data creazione: 2025-09-06
+        Ultima modifica: 2025-09-06 - Aggiunta del tracing completo
         """
+        trace_all("get_ensemble_statistics", "ENTER", 
+                 ensemble_available=self.ensemble_classifier is not None)
+        
         if not self.ensemble_classifier:
-            return {'error': 'Ensemble classifier non inizializzato'}
+            result = {'error': 'Ensemble classifier non inizializzato'}
+            trace_all("get_ensemble_statistics", "EXIT", 
+                     return_value=result, success=False)
+            return result
         
         # Usa il metodo integrato dell'advanced ensemble classifier
-        return self.ensemble_classifier.get_ensemble_statistics()
+        result = self.ensemble_classifier.get_ensemble_statistics()
+        trace_all("get_ensemble_statistics", "EXIT", 
+                 return_value=result, success=True)
+        return result
     
     def adjust_ensemble_weights(self, llm_weight: float, ml_weight: float) -> None:
         """
@@ -4231,9 +4487,19 @@ class EndToEndPipeline:
         Args:
             llm_weight: Nuovo peso per LLM (0.0 - 1.0)
             ml_weight: Nuovo peso per ML (0.0 - 1.0)
+            
+        Autore: Valerio Bignardi
+        Data creazione: 2025-09-06
+        Ultima modifica: 2025-09-06 - Aggiunta del tracing completo
         """
+        trace_all("adjust_ensemble_weights", "ENTER", 
+                 llm_weight=llm_weight, ml_weight=ml_weight,
+                 ensemble_available=self.ensemble_classifier is not None)
+        
         if not self.ensemble_classifier:
             print("❌ Ensemble classifier non disponibile")
+            trace_all("adjust_ensemble_weights", "EXIT", 
+                     success=False, reason="Ensemble classifier non disponibile")
             return
         
         # Normalizza i pesi
@@ -4247,6 +4513,9 @@ class EndToEndPipeline:
         self.ensemble_classifier.weights['ml_ensemble'] = ml_weight
         
         print(f"✅ Pesi ensemble aggiornati: LLM={llm_weight:.3f}, ML={ml_weight:.3f}")
+        
+        trace_all("adjust_ensemble_weights", "EXIT", 
+                 success=True, final_llm_weight=llm_weight, final_ml_weight=ml_weight)
     
     def set_auto_retrain(self, enable: bool) -> None:
         """
@@ -4588,6 +4857,12 @@ class EndToEndPipeline:
         Returns:
             Lista predizioni per tutte le sessioni (stesso ordine di session_ids)
         """
+        trace_all("_classifica_ottimizzata_cluster", "ENTER",
+                 sessioni_count=len(sessioni),
+                 session_ids_count=len(session_ids),
+                 session_texts_count=len(session_texts),
+                 batch_size=batch_size)
+        
         # 🔍 DEBUG: Trace dell'ingresso nel metodo ottimizzato
         from Pipeline.debug_pipeline import debug_pipeline, debug_flow, debug_exception
         
@@ -5023,6 +5298,12 @@ class EndToEndPipeline:
             print(f"   🚀 Efficienza: {representative_count + outlier_count}/{len(sessioni)} classificazioni ML+LLM effettive")
             print(f"      (risparmio: {len(sessioni) - (representative_count + outlier_count)} classificazioni)")
             
+            trace_all("_classifica_ottimizzata_cluster", "EXIT", 
+                     return_value_count=len(all_predictions),
+                     representative_count=representative_count,
+                     propagated_count=propagated_count, 
+                     outlier_count=outlier_count,
+                     method="SUCCESS")
             return all_predictions
             
         except Exception as e:
@@ -5072,6 +5353,8 @@ class EndToEndPipeline:
                 "all_missing_cluster_metadata": True
             }, "WARNING")
             
+            trace_all("_classifica_ottimizzata_cluster", "EXIT", 
+                     return_value_count=len(predictions), method="FALLBACK")
             return predictions
 
     def _generate_cluster_info_from_labels(self, cluster_labels: np.ndarray, session_texts: List[str]) -> Dict[int, Dict]:

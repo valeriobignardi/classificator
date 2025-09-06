@@ -1113,9 +1113,9 @@ class EndToEndPipeline:
                  num_sessioni=len(sessioni), force_reprocess=force_reprocess)
         
         start_time = time.time()
-        print(f"\n🚀 [FASE 4: CLUSTERING] Avvio clustering intelligente...")
-        print(f"📊 [FASE 4: CLUSTERING] Dataset: {len(sessioni)} sessioni")
-        print(f"🎯 [FASE 4: CLUSTERING] Modalità: {'COMPLETO' if force_reprocess else 'INTELLIGENTE'}")
+        print(f"\n🚀 Avvio clustering intelligente...")
+        print(f"📊 Dataset: {len(sessioni)} sessioni")
+        print(f"🎯 Modalità: {'COMPLETO' if force_reprocess else 'INTELLIGENTE'}")
         
         # Assicurati che la directory dei modelli esista
         import os
@@ -1175,8 +1175,8 @@ class EndToEndPipeline:
                 print(f"   ✅ BUONO: {outlier_percentage:.1f}% outliers - clustering accettabile")
         
         elapsed_time = time.time() - start_time
-        print(f"✅ [FASE 4: CLUSTERING] Completata in {elapsed_time:.2f}s")
-        print(f"📈 [FASE 4: CLUSTERING] Risultati finali:")
+        print(f"✅ Clustering completato in {elapsed_time:.2f}s")
+        print(f"📈 Risultati finali del clustering:")
         print(f"   🎯 Cluster trovati: {n_clusters}")
         print(f"   🔍 Outliers: {n_outliers}")
         print(f"   👥 Rappresentanti: {n_representatives}")
@@ -1184,11 +1184,11 @@ class EndToEndPipeline:
         
         # 🚨 EARLY WARNING se clustering sembra fragile
         if n_clusters == 0:
-            print(f"\n❌ [FASE 4: WARNING] CLUSTERING POTENZIALMENTE FALLITO!")
+            print(f"\n❌ [WARNING] CLUSTERING POTENZIALMENTE FALLITO!")
             print(f"   🔍 Tutti i {total_sessions} punti sono outlier")
             print(f"   💡 Il training supervisionato verrà interrotto")
         elif n_clusters < 2:
-            print(f"\n⚠️ [FASE 4: WARNING] CLUSTERING DEBOLE!")
+            print(f"\n⚠️ [WARNING] CLUSTERING DEBOLE!")
             print(f"   🎯 Solo {n_clusters} cluster trovato")
             print(f"   💡 Diversità limitata per training ML")
         
@@ -1260,7 +1260,7 @@ class EndToEndPipeline:
             raise e
         
         # 🆕 NUOVO: Training BERTopic anticipato su dataset completo
-        print(f"\n📊 FASE 2A: TRAINING BERTOPIC ANTICIPATO")
+        print(f"\n📊 [FASE 2.2: TRAINING BERTOPIC (FEATURE AUGMENTATION)]")
         print(f"🔍 DEBUG: Avvio training BERTopic anticipato...")
         print(f"   📊 Sessioni per training: {len(sessioni)}")
         print(f"   📊 Embeddings shape: {embeddings.shape}")
@@ -1284,7 +1284,7 @@ class EndToEndPipeline:
             print(f"   ❌ BERTopic provider NON CREATO!")
             print(f"   ⚠️ BERTopic provider non disponibile, proseguo con sole embeddings")
         
-        print(f"\n📊 FASE 2B: CLUSTERING HDBSCAN")
+        print(f"\n📊 [FASE 2.3: ESECUZIONE CLUSTERING (HDBSCAN/INTELLIGENT)]")
         
         # Carica configurazione clustering
         with open(self.clusterer.config_path, 'r', encoding='utf-8') as file:
@@ -2765,7 +2765,22 @@ class EndToEndPipeline:
         use_ensemble = True
         optimize_clusters = True
         
-        print(f"🎯 MODALITÀ UNIFICATA: Ensemble LLM+ML + Clustering Ottimizzato")
+        # 🔍 CONTROLLO STATO ML ENSEMBLE (definizione anticipata per evitare UnboundLocalError)
+        ml_ensemble_trained = (
+            hasattr(self.ensemble_classifier, 'ml_ensemble') and 
+            self.ensemble_classifier.ml_ensemble is not None and
+            hasattr(self.ensemble_classifier.ml_ensemble, 'classes_')
+        )
+        
+        print(f"🎯 MODALITÀ UNIFICATA: {'Ensemble LLM+ML' if ml_ensemble_trained else 'LLM-only'} + Clustering Ottimizzato")
+        
+        # 🆕 GESTIONE PRIMO AVVIO: Se ML non è allenato, non dovrebbe arrivare qui
+        # La logica LLM-only dovrebbe essere gestita nel training supervisionato
+        if not ml_ensemble_trained:
+            print(f"⚠️ AVVERTIMENTO: Classificazione chiamata senza ML allenato")
+            print(f"🎯 Suggerimento: Eseguire prima training supervisionato con review umana")
+            # Continua comunque con solo LLM per compatibilità
+            print(f"🚀 Fallback: Classificazione LLM-only")
         
         # 🚨 DEBUG PARAMETRI: Verifica configurazione pre-classificazione
         print(f"")
@@ -2791,68 +2806,24 @@ class EndToEndPipeline:
         # 🆕 CONTROLLO E TRAINING ML ENSEMBLE SE NECESSARIO
         print(f"\n🔍 VERIFICA STATO ML ENSEMBLE...")
         
-        # Verifica se ML ensemble è già allenato
-        ml_ensemble_trained = (
-            hasattr(self.ensemble_classifier, 'ml_ensemble') and 
-            self.ensemble_classifier.ml_ensemble is not None and
-            hasattr(self.ensemble_classifier.ml_ensemble, 'classes_')
-        )
-        
         print(f"📊 ML Ensemble già allenato: {ml_ensemble_trained}")
         
         if not ml_ensemble_trained:
-            print(f"🚨 ML ENSEMBLE NON ALLENATO - Avvio training automatico...")
-            print(f"📋 Sessioni disponibili per training: {len(sessioni)}")
+            print(f"🚨 ML ENSEMBLE NON ALLENATO - Modalità LLM-only con preparazione training")
+            print(f"📋 Sessioni disponibili: {len(sessioni)}")
             
-            if len(sessioni) < 10:
-                print(f"⚠️ Dataset piccolo per training ML ({len(sessioni)} < 10)")
-                print(f"⚠️ Training ML potrebbe non essere stabile")
+            # 🎯 NUOVA SEQUENZA CORRETTA: 
+            # 1. Classifica PRIMA con LLM-only (senza training ML)
+            # 2. Salva i dati per training futuro
+            # 3. Training ML DOPO review umana
             
-            try:
-                # Estrae cluster_labels se non disponibili (necessari per training)
-                if not hasattr(self, '_last_cluster_labels') or self._last_cluster_labels is None:
-                    print(f"🔄 Cluster labels non disponibili - eseguo clustering rapido...")
-                    embeddings, cluster_labels, representatives, suggested_labels = self.esegui_clustering(sessioni)
-                    print(f"✅ Clustering completato: {len(set(cluster_labels))} cluster")
-                else:
-                    cluster_labels = self._last_cluster_labels
-                    representatives = getattr(self, '_last_representatives', {})
-                    suggested_labels = getattr(self, '_last_suggested_labels', {})
-                    print(f"✅ Riutilizzo cluster labels esistenti")
-                
-                # Allena il classificatore ML
-                print(f"🎓 Avvio training ML ensemble...")
-                training_metrics = self.allena_classificatore(
-                    sessioni, 
-                    cluster_labels, 
-                    representatives, 
-                    suggested_labels,
-                    interactive_mode=False  # Non interattivo per post-training
-                )
-                
-                print(f"✅ Training ML ensemble completato!")
-                print(f"📊 Metriche training: {training_metrics.get('ml_ensemble', {})}")
-                
-                # Verifica che il training sia andato a buon fine
-                ml_ensemble_trained_after = (
-                    hasattr(self.ensemble_classifier, 'ml_ensemble') and 
-                    self.ensemble_classifier.ml_ensemble is not None and
-                    hasattr(self.ensemble_classifier.ml_ensemble, 'classes_')
-                )
-                
-                if ml_ensemble_trained_after:
-                    print(f"✅ TRAINING VERIFICATO - ML ensemble ora disponibile")
-                else:
-                    print(f"❌ TRAINING FALLITO - ML ensemble ancora non disponibile")
-                    print(f"⚠️ Procedo con solo LLM...")
-                
-            except Exception as e:
-                print(f"❌ ERRORE nel training automatico ML ensemble: {e}")
-                print(f"📊 Tipo errore: {type(e).__name__}")
-                import traceback
-                print(f"📊 Traceback completo:")
-                traceback.print_exc()
-                print(f"⚠️ Procedo con classificazione solo LLM...")
+            print(f"🔄 PRIMO AVVIO - Sequenza corretta:")
+            print(f"   1️⃣ Classificazione LLM-only dei rappresentanti")
+            print(f"   2️⃣ Salvataggio dati per training futuro")
+            print(f"   3️⃣ Training ML dopo review umana")
+            
+            # IMPORTANTE: NON fare training automatico qui
+            # Il training ML avverrà quando ci saranno dati rivisti dall'umano
         else:
             print(f"✅ ML Ensemble già allenato - procedo con classificazione completa")
             
@@ -3546,11 +3517,45 @@ class EndToEndPipeline:
             # 2. Clustering
             embeddings, cluster_labels, representatives, suggested_labels = self.esegui_clustering(sessioni)
             
-            # 3. Training classificatore con review interattivo
-            training_metrics = self.allena_classificatore(
-                sessioni, cluster_labels, representatives, suggested_labels, 
-                interactive_mode=interactive_mode
+            # 3. Verifica se ML è già allenato per decidere il flusso
+            ml_ensemble_trained = (
+                hasattr(self.ensemble_classifier, 'ml_ensemble') and 
+                self.ensemble_classifier.ml_ensemble is not None and
+                hasattr(self.ensemble_classifier.ml_ensemble, 'classes_')
             )
+            
+            print(f"📊 ML Ensemble già allenato: {ml_ensemble_trained}")
+            
+            if not ml_ensemble_trained:
+                # PRIMO AVVIO: Classificazione LLM-only + preparazione training
+                print(f"🚀 PRIMO AVVIO: Classificazione LLM-only con preparazione training")
+                llm_classification_result = self._classifica_llm_only_e_prepara_training(
+                    sessioni, cluster_labels, representatives, suggested_labels
+                )
+                
+                print(f"✅ Classificazione LLM-only completata")
+                print(f"👤 Prossimo step: Review umana → Training ML")
+                print(f"📋 Sessioni in review queue: {llm_classification_result.get('saved_for_review', 0)}")
+                
+                # Prepara risultato per PRIMO AVVIO (senza training ML ancora)
+                return {
+                    'phase': 'llm_only_primo_avvio',
+                    'classification_result': llm_classification_result,
+                    'ml_training_needed': True,
+                    'human_review_needed': True,
+                    'total_sessions': len(sessioni),
+                    'clusters_found': len(representatives),
+                    'representatives_classified': llm_classification_result.get('representatives_classified', 0),
+                    'outliers_classified': llm_classification_result.get('outliers_classified', 0),
+                    'next_action': 'human_review_then_ml_training'
+                }
+            else:
+                # AVVII SUCCESSIVI: Training normale con ensemble ML+LLM
+                print(f"🔄 AVVIO NORMALE: ML già allenato, procedendo con training ensemble")
+                training_metrics = self.allena_classificatore(
+                    sessioni, cluster_labels, representatives, suggested_labels, 
+                    interactive_mode=interactive_mode
+                )
             
             # 4. Classificazione usando ensemble o ML singolo
             if use_ensemble:
@@ -6006,5 +6011,261 @@ class EndToEndPipeline:
             import traceback
             print(f"Stack trace: {traceback.format_exc()}")
             return False
+
+    def _classifica_llm_only_e_prepara_training(self, 
+                                              sessioni: Dict[str, Dict],
+                                              cluster_labels: np.ndarray,
+                                              representatives: Dict[int, List[Dict]],
+                                              suggested_labels: Dict[int, str]) -> Dict[str, Any]:
+        """
+        Classifica usando SOLO LLM quando ML non è allenato e prepara dati per training futuro.
+        
+        RICEVE I DATI DEL CLUSTERING GIÀ FATTI - NON RICALCOLA
+        
+        Sequenza corretta per PRIMO AVVIO:
+        1. Classificazione LLM-only dei rappresentanti (GIÀ identificati dal clustering)
+        2. Classificazione LLM-only degli outlier (GIÀ identificati dal clustering)  
+        3. Salvataggio immediato per training futuro e review umana
+        
+        Scopo della funzione: Gestire primo avvio quando ML ensemble non è disponibile
+        Parametri di input: sessioni, cluster_labels, representatives, suggested_labels (GIÀ CALCOLATI)
+        Parametri di output: risultati classificazione con dati preparati per training
+        Valori di ritorno: Dict con statistiche e dati preparati
+        Tracciamento aggiornamenti: 2025-09-06 - Valerio Bignardi - Corretto per non ricalcolare clustering
+        
+        Args:
+            sessioni: Dizionario con le sessioni da classificare
+            cluster_labels: Array con etichette cluster (GIÀ CALCOLATE)
+            representatives: Dict con rappresentanti per cluster (GIÀ SELEZIONATI)  
+            suggested_labels: Dict con etichette suggerite per cluster (GIÀ CALCOLATE)
+            
+        Returns:
+            Dict con risultati classificazione e dati preparati per training
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-06
+        """
+        trace_all("_classifica_llm_only_e_prepara_training", "ENTER", 
+                 sessioni_count=len(sessioni),
+                 cluster_labels_count=len(cluster_labels),
+                 representatives_count=len(representatives),
+                 suggested_labels_count=len(suggested_labels))
+        
+        start_time = time.time()
+        print(f"\n🚀 [LLM-ONLY PRIMO AVVIO] Avvio classificazione preparatoria...")
+        print(f"📊 [LLM-ONLY PRIMO AVVIO] Sessioni da processare: {len(sessioni)}")
+        print(f"📊 [LLM-ONLY PRIMO AVVIO] Rappresentanti ricevuti: {sum(len(reps) for reps in representatives.values())}")
+        print(f"📊 [LLM-ONLY PRIMO AVVIO] Cluster trovati: {len(representatives)}")
+        print(f"🎯 [LLM-ONLY PRIMO AVVIO] Modalità: Classificazione + Preparazione Training")
+        
+        try:
+            # Verifica che LLM sia disponibile
+            if not self.ensemble_classifier.llm_classifier or not self.ensemble_classifier.llm_classifier.is_available():
+                raise RuntimeError("LLM classifier non disponibile per classificazione primo avvio")
+            
+            n_outliers = list(cluster_labels).count(-1)
+            total_representatives = sum(len(reps) for reps in representatives.values())
+            
+            print(f"   ✅ Dati clustering ricevuti:")
+            print(f"   📊 Cluster: {len(representatives)}")
+            print(f"   🔍 Outliers nel dataset: {n_outliers}")
+            print(f"   👥 Rappresentanti totali: {total_representatives}")
+            
+            # 1. CLASSIFICAZIONE LLM-ONLY DEI RAPPRESENTANTI
+            print(f"\n� FASE 1: CLASSIFICAZIONE LLM-ONLY RAPPRESENTANTI")
+            training_data_list = []
+            saved_count = 0
+            
+            # Istanza MongoClassificationReader per salvataggio
+            mongo_reader = self._get_mongo_reader()
+            
+            for cluster_id, cluster_reps in representatives.items():
+                print(f"   📋 Cluster {cluster_id}: {len(cluster_reps)} rappresentanti")
+                
+                for rep in cluster_reps:
+                    session_id = rep['session_id']
+                    conversation_text = rep['testo_completo']
+                    
+                    # Classificazione LLM-only
+                    llm_result = self.ensemble_classifier.predict_with_llm_only(
+                        conversation_text, 
+                        return_details=True
+                    )
+                    
+                    # Prepara dati per training futuro
+                    embeddings = self._get_embedder().encode([conversation_text])[0]
+                    
+                    training_data = {
+                        'session_id': session_id,
+                        'text': conversation_text,
+                        'embeddings': embeddings,
+                        'llm_label': llm_result['predicted_label'],
+                        'llm_confidence': llm_result['confidence'],
+                        'cluster_id': cluster_id,
+                        'is_representative': True,
+                        'human_reviewed': False,  # Sarà aggiornato dopo review
+                        'final_label': llm_result['predicted_label'],  # Inizialmente = LLM
+                        'training_ready': True,
+                        'source': 'llm_only_primo_avvio'
+                    }
+                    
+                    training_data_list.append(training_data)
+                    
+                    # Salva in MongoDB per review
+                    success = mongo_reader.save_classification_result(
+                        session_id=session_id,
+                        client_name=self.tenant.tenant_slug,
+                        final_decision={
+                            'predicted_label': llm_result['predicted_label'],
+                            'confidence': llm_result['confidence'],
+                            'method': 'llm_only_primo_avvio_rappresentante'
+                        },
+                        conversation_text=conversation_text,
+                        needs_review=True,  # Tutti i rappresentanti necessitano review
+                        review_reason='primo_avvio_rappresentante',
+                        classified_by='pipeline_llm_only',
+                        cluster_metadata={
+                            'cluster_id': cluster_id,
+                            'is_representative': True,
+                            'training_ready': True
+                        }
+                    )
+                    
+                    if success:
+                        saved_count += 1
+            
+            # 2. CLASSIFICAZIONE LLM-ONLY DEGLI OUTLIER
+            print(f"\n� FASE 2: CLASSIFICAZIONE LLM-ONLY OUTLIERS")
+            outlier_sessions = []
+            
+            # Trova sessioni outlier dai cluster_labels
+            session_ids = list(sessioni.keys())
+            for i, session_id in enumerate(session_ids):
+                if i < len(cluster_labels) and cluster_labels[i] == -1:
+                    outlier_sessions.append(session_id)
+            
+            print(f"   📊 Outliers da classificare: {len(outlier_sessions)}")
+            
+            for session_id in outlier_sessions:
+                conversation_text = sessioni[session_id]['testo_completo']
+                
+                # Classificazione LLM-only
+                llm_result = self.ensemble_classifier.predict_with_llm_only(
+                    conversation_text,
+                    return_details=True
+                )
+                
+                # Prepara dati per training futuro
+                embeddings = self._get_embedder().encode([conversation_text])[0]
+                
+                training_data = {
+                    'session_id': session_id,
+                    'text': conversation_text,
+                    'embeddings': embeddings,
+                    'llm_label': llm_result['predicted_label'],
+                    'llm_confidence': llm_result['confidence'],
+                    'cluster_id': -1,
+                    'is_representative': False,
+                    'human_reviewed': False,
+                    'final_label': llm_result['predicted_label'],
+                    'training_ready': True,
+                    'source': 'llm_only_primo_avvio'
+                }
+                
+                training_data_list.append(training_data)
+                
+                # Salva in MongoDB per review
+                success = mongo_reader.save_classification_result(
+                    session_id=session_id,
+                    client_name=self.tenant.tenant_slug,
+                    final_decision={
+                        'predicted_label': llm_result['predicted_label'],
+                        'confidence': llm_result['confidence'],
+                        'method': 'llm_only_primo_avvio_outlier'
+                    },
+                    conversation_text=conversation_text,
+                    needs_review=True,  # Tutti gli outlier necessitano review
+                    review_reason='primo_avvio_outlier',
+                    classified_by='pipeline_llm_only',
+                    cluster_metadata={
+                        'cluster_id': -1,
+                        'is_representative': False,
+                        'training_ready': True
+                    }
+                )
+                
+                if success:
+                    saved_count += 1
+            
+            elapsed_time = time.time() - start_time
+            
+            # Salva dati per training futuro come attributi della classe
+            self._llm_training_data = training_data_list
+            self._last_cluster_labels = cluster_labels
+            self._last_representatives = representatives
+            self._last_suggested_labels = suggested_labels
+            
+            # Prepara risultato finale
+            result = {
+                'status': 'llm_only_success',
+                'total_sessions': len(sessioni),
+                'representatives_classified': total_representatives,
+                'outliers_classified': len(outlier_sessions),
+                'total_classified': len(training_data_list),
+                'saved_for_training': len(training_data_list),
+                'saved_for_review': saved_count,
+                'training_data_ready': True,
+                'needs_human_review': True,
+                'next_step': 'human_review_then_ml_training',
+                'processing_time': elapsed_time
+            }
+            
+            print(f"✅ [LLM-ONLY PRIMO AVVIO] Completata in {elapsed_time:.2f}s")
+            print(f"📊 [LLM-ONLY PRIMO AVVIO] Risultati:")
+            print(f"   🎯 Classificazioni totali: {result['total_classified']}")
+            print(f"   👥 Rappresentanti: {result['representatives_classified']}")
+            print(f"   🔍 Outlier: {result['outliers_classified']}")
+            print(f"   💾 Dati training preparati: {result['saved_for_training']}")
+            print(f"   📋 Salvati per review: {result['saved_for_review']}")
+            print(f"   👤 Necessitano review umana: SÌ")
+            print(f"   🎯 Prossimo step: Review umana → Training ML")
+            
+            trace_all("_classifica_llm_only_e_prepara_training", "EXIT", return_value=result)
+            return result
+            
+        except Exception as e:
+            elapsed_time = time.time() - start_time
+            print(f"❌ [LLM-ONLY PRIMO AVVIO] ERRORE dopo {elapsed_time:.2f}s: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            trace_all("_classifica_llm_only_e_prepara_training", "ERROR", error=str(e))
+            
+            # Ritorna errore strutturato
+            return {
+                'status': 'error',
+                'error': str(e),
+                'training_data_ready': False,
+                'processing_time': elapsed_time
+            }
+
+    def _get_mongo_reader(self):
+        """
+        Ottiene istanza MongoClassificationReader per salvataggio classificazioni.
+        
+        Scopo della funzione: Creare istanza MongoDB reader tenant-aware
+        Parametri di input: None (usa self.tenant)
+        Parametri di output: MongoClassificationReader configurato
+        Valori di ritorno: Istanza MongoClassificationReader
+        Tracciamento aggiornamenti: 2025-09-06 - Valerio Bignardi - Helper per MongoDB
+        
+        Returns:
+            MongoClassificationReader: Istanza configurata per il tenant
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-06
+        """
+        from mongo_classification_reader import MongoClassificationReader
+        return MongoClassificationReader(tenant=self.tenant)
 
 

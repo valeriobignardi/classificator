@@ -114,6 +114,14 @@ except ImportError:
     BERTopicFeatureProvider = None
     BERTOPIC_AVAILABLE = False
 
+# 🔍 Import tracing con fallback per evitare crash
+try:
+    from Pipeline.end_to_end_pipeline import trace_all
+except ImportError:
+    def trace_all(function_name: str, action: str = "ENTER", called_from: str = None, **kwargs):
+        """Fallback tracing function se il modulo principale non è disponibile"""
+        pass
+
 
 def clean_label_text(label: str) -> str:
     """
@@ -821,13 +829,45 @@ class IntelligentClassifier:
         """
         Verifica se il servizio Ollama è disponibile
         
+        Scopo della funzione:
+        - Verificare la disponibilità del servizio Ollama
+        - Validare che il modello specifico sia disponibile
+        - Implementare cache per ottimizzare le verifiche ripetute
+        
+        Parametri di input e output:
+        - self: istanza corrente del classificatore
+        
+        Valori di ritorno:
+        - bool: True se Ollama e il modello sono disponibili, False altrimenti
+        
+        Tracciamento aggiornamenti:
+        - 2025-09-06: Aggiunto tracing completo ENTER/EXIT/ERROR
+        
         Returns:
             True se il servizio è disponibile, False altrimenti
         """
+        
+        # 🔍 TRACING ENTER
+        trace_all("is_available", "ENTER", 
+                 called_from="external_api_check",
+                 ollama_url=self.ollama_url,
+                 model_name=self.model_name,
+                 has_cache=bool(self._last_availability_check),
+                 cache_duration=self._availability_cache_duration)
+        
         # Cache del controllo di disponibilità
         now = datetime.now()
         if (self._last_availability_check and 
             (now - self._last_availability_check).total_seconds() < self._availability_cache_duration):
+            
+            # 🔍 TRACING EXIT - Cache Hit
+            trace_all("is_available", "EXIT", 
+                     called_from="external_api_check",
+                     result=self._is_available,
+                     source="CACHE",
+                     seconds_since_last_check=(now - self._last_availability_check).total_seconds(),
+                     exit_reason="CACHE_HIT")
+            
             return self._is_available
         
         try:
@@ -856,13 +896,45 @@ class IntelligentClassifier:
                     self.logger.warning(f"Modello {self.model_name} non trovato. Disponibili: {available_models}")
                 else:
                     self.logger.debug(f"Servizio Ollama disponibile con modello {self.model_name}")
+                    
+                # 🔍 TRACING EXIT - Success
+                trace_all("is_available", "EXIT", 
+                         called_from="external_api_check",
+                         result=self._is_available,
+                         source="OLLAMA_API",
+                         status_code=response.status_code,
+                         available_models_count=len(available_models),
+                         model_found=self._is_available,
+                         exit_reason="SUCCESS")
+                
             else:
                 self._is_available = False
                 self.logger.warning(f"Ollama non disponibile - Status: {response.status_code}")
+                
+                # 🔍 TRACING EXIT - Bad Status
+                trace_all("is_available", "EXIT", 
+                         called_from="external_api_check",
+                         result=False,
+                         source="OLLAMA_API",
+                         status_code=response.status_code,
+                         exit_reason="BAD_STATUS_CODE")
         
         except Exception as e:
             self._is_available = False
             self.logger.warning(f"Errore nella verifica disponibilità Ollama: {e}")
+            
+            # 🔍 TRACING ERROR
+            trace_all("is_available", "ERROR", 
+                     called_from="external_api_check",
+                     error_type=type(e).__name__,
+                     error_message=str(e))
+            
+            # 🔍 TRACING EXIT - Error
+            trace_all("is_available", "EXIT", 
+                     called_from="external_api_check",
+                     result=False,
+                     source="ERROR",
+                     exit_reason="EXCEPTION")
         
         self._last_availability_check = now
         return self._is_available
@@ -972,9 +1044,30 @@ class IntelligentClassifier:
         """
         Recupera le etichette disponibili dal database TAG o usa quelle hardcoded come fallback
         
+        Scopo della funzione:
+        - Recuperare tutte le etichette disponibili per il tenant dal database TAG
+        - Fallback a etichette hardcoded se database non disponibile
+        
+        Parametri di input e output:
+        - self: istanza corrente del classificatore
+        
+        Valori di ritorno:
+        - str: String formattata con etichette separate da " | "
+        
+        Tracciamento aggiornamenti:
+        - 2025-09-06: Aggiunto tracing completo ENTER/EXIT/ERROR
+        
         Returns:
             String formattata con le etichette disponibili per il system message
         """
+        
+        # 🔍 TRACING ENTER
+        trace_all("_get_available_labels", "ENTER", 
+                 called_from="classify_with_motivation",
+                 tenant_id=str(self.tenant_id),
+                 has_tenant_object=bool(self.tenant),
+                 hardcoded_labels_count=len(self.domain_labels) if self.domain_labels else 0)
+        
         try:
             # Tenta di caricare le etichette dal database TAG
             from TagDatabase.tag_database_connector import TagDatabaseConnector
@@ -996,16 +1089,40 @@ class IntelligentClassifier:
                     
                     self.logger.info(f"Etichette caricate dal database TAG: {len(db_labels)} etichette trovate")
                     tag_db.disconnetti()
+                    
+                    # 🔍 TRACING EXIT - Database Success
+                    trace_all("_get_available_labels", "EXIT", 
+                             called_from="classify_with_motivation",
+                             source="DATABASE_TAG",
+                             labels_count=len(db_labels),
+                             labels_preview=labels_string[:100] + "..." if len(labels_string) > 100 else labels_string,
+                             exit_reason="DATABASE_SUCCESS")
+                    
                     return labels_string
                 
                 tag_db.disconnetti()
         
         except Exception as e:
             self.logger.warning(f"Errore nel caricamento etichette dal database TAG: {e}")
+            
+            # 🔍 TRACING ERROR
+            trace_all("_get_available_labels", "ERROR", 
+                     called_from="classify_with_motivation",
+                     error_type=type(e).__name__,
+                     error_message=str(e))
         
         # Fallback alle etichette hardcoded se il database non è disponibile
         hardcoded_labels = " | ".join(self.domain_labels)
         self.logger.info("Utilizzando etichette hardcoded come fallback")
+        
+        # 🔍 TRACING EXIT - Fallback
+        trace_all("_get_available_labels", "EXIT", 
+                 called_from="classify_with_motivation",
+                 source="HARDCODED_FALLBACK",
+                 labels_count=len(self.domain_labels) if self.domain_labels else 0,
+                 labels_preview=hardcoded_labels[:100] + "..." if len(hardcoded_labels) > 100 else hardcoded_labels,
+                 exit_reason="FALLBACK")
+        
         return hardcoded_labels
 
     def _get_priority_labels_hint(self) -> str:
@@ -1297,6 +1414,20 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         - v2.0: Esempi hardcoded + esempi reali da session_classifications (DEPRECATO)
         - v3.0 (CORRENTE): Esempi curati da TAG.esempi + esempi hardcoded fallback
         
+        Scopo della funzione:
+        - Selezionare esempi più rilevanti per guidare la classificazione LLM
+        - Prioritizzare esempi dal database TAG per il tenant specifico
+        
+        Parametri di input e output:
+        - conversation_text: str - Testo da classificare per selezione contestuale
+        - max_examples: int - Numero massimo di esempi da restituire
+        
+        Valori di ritorno:
+        - List[Dict]: Lista di esempi selezionati con chiavi text, label, motivation
+        
+        Tracciamento aggiornamenti:
+        - 2025-09-06: Aggiunto tracing completo ENTER/EXIT
+        
         Args:
             conversation_text: Testo da classificare
             max_examples: Numero massimo di esempi da includere
@@ -1304,7 +1435,23 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         Returns:
             Lista di esempi selezionati ottimizzati
         """
+        
+        # 🔍 TRACING ENTER
+        trace_all("_get_dynamic_examples", "ENTER", 
+                 called_from="classify_with_motivation",
+                 conversation_length=len(conversation_text) if conversation_text else 0,
+                 max_examples=max_examples,
+                 has_embedder=self.embedder is not None,
+                 enable_embeddings=self.enable_embeddings)
+        
         if not conversation_text:
+            # 🔍 TRACING EXIT - Empty Text Fallback
+            trace_all("_get_dynamic_examples", "EXIT", 
+                     called_from="classify_with_motivation",
+                     source="CURATED_FALLBACK_EMPTY_TEXT",
+                     examples_count=len(self.curated_examples[:max_examples]),
+                     exit_reason="EMPTY_CONVERSATION_TEXT")
+            
             return self.curated_examples[:max_examples]
         
         # STRATEGIA DINAMICA: Prima prova esempi database, poi fallback curati
@@ -1314,20 +1461,54 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         
         if database_examples:
             self.logger.debug(f"✅ Caricati {len(database_examples)} esempi dal database TAG per tenant {self.tenant_id}")
+            
+            # 🔍 TRACING EXIT - Database Success
+            trace_all("_get_dynamic_examples", "EXIT", 
+                     called_from="classify_with_motivation",
+                     source="DATABASE_TAG",
+                     examples_count=len(database_examples),
+                     tenant_id=str(self.tenant_id),
+                     exit_reason="DATABASE_SUCCESS")
+            
             return database_examples
         
         # FASE 2: Fallback - Esempi curati hardcoded con selezione intelligente
         if self.enable_embeddings and self.embedder is not None:
             selected_examples = self._get_semantic_dynamic_examples(conversation_text, max_examples=max_examples)
+            selection_method = "SEMANTIC_EMBEDDINGS"
         else:
             selected_examples = self._get_word_overlap_examples(conversation_text, max_examples=max_examples)
+            selection_method = "WORD_OVERLAP"
         
         self.logger.debug(f"⚠️ Usando esempi curati hardcoded - {len(selected_examples)} esempi per tenant {self.tenant_id}")
+        
+        # 🔍 TRACING EXIT - Hardcoded Fallback
+        trace_all("_get_dynamic_examples", "EXIT", 
+                 called_from="classify_with_motivation",
+                 source="HARDCODED_CURATED",
+                 selection_method=selection_method,
+                 examples_count=len(selected_examples),
+                 tenant_id=str(self.tenant_id),
+                 exit_reason="HARDCODED_FALLBACK")
+        
         return selected_examples
 
     def _get_examples_from_database_tag(self, max_examples: int = 4) -> List[Dict]:
         """
         Carica esempi per il tenant corrente dal database TAG.esempi
+        
+        Scopo della funzione:
+        - Caricare esempi curati dal database TAG per il tenant specifico
+        - Convertire esempi dal formato database al formato prompt
+        
+        Parametri di input e output:
+        - max_examples: int - Numero massimo di esempi da caricare
+        
+        Valori di ritorno:
+        - List[Dict]: Lista di esempi con raw_content e esempio_name
+        
+        Tracciamento aggiornamenti:
+        - 2025-09-06: Aggiunto tracing completo ENTER/EXIT/ERROR
         
         Args:
             max_examples: Numero massimo di esempi da caricare
@@ -1335,15 +1516,38 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         Returns:
             Lista di esempi dal database o lista vuota se non trovati
         """
+        
+        # 🔍 TRACING ENTER
+        trace_all("_get_examples_from_database_tag", "ENTER", 
+                 called_from="_get_dynamic_examples",
+                 max_examples=max_examples,
+                 has_prompt_manager=hasattr(self, 'prompt_manager') and self.prompt_manager is not None,
+                 has_tenant=bool(self.tenant),
+                 tenant_id=str(self.tenant_id) if hasattr(self, 'tenant_id') else 'unknown')
+        
         try:
             # Usa il prompt_manager per caricare esempi dal database
             if not hasattr(self, 'prompt_manager') or self.prompt_manager is None:
                 self.logger.debug("⚠️ PromptManager non disponibile per caricamento esempi")
+                
+                # 🔍 TRACING EXIT - No PromptManager
+                trace_all("_get_examples_from_database_tag", "EXIT", 
+                         called_from="_get_dynamic_examples",
+                         examples_count=0,
+                         exit_reason="NO_PROMPT_MANAGER")
+                
                 return []
             
             # 🎯 USA TENANT CENTRALIZZATO - passa l'oggetto tenant completo
             if not self.tenant:
                 self.logger.error("❌ Oggetto tenant non disponibile per caricamento esempi")
+                
+                # 🔍 TRACING EXIT - No Tenant
+                trace_all("_get_examples_from_database_tag", "EXIT", 
+                         called_from="_get_dynamic_examples",
+                         examples_count=0,
+                         exit_reason="NO_TENANT_OBJECT")
+                
                 return []
             
             # Carica esempi dal database TAG usando il prompt_manager
@@ -1355,6 +1559,14 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             
             if not esempi_list:
                 self.logger.debug(f"⚠️ Nessun esempio trovato nel database TAG per tenant {self.tenant.tenant_id}")
+                
+                # 🔍 TRACING EXIT - No Examples Found
+                trace_all("_get_examples_from_database_tag", "EXIT", 
+                         called_from="_get_dynamic_examples",
+                         examples_count=0,
+                         tenant_id=str(self.tenant.tenant_id),
+                         exit_reason="NO_EXAMPLES_FOUND")
+                
                 return []
             
             # Converte gli esempi dal formato database al formato richiesto per il prompt
@@ -1379,16 +1591,74 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             if converted_examples:
                 self.logger.info(f"✅ Caricati {len(converted_examples)} esempi dal database TAG per tenant {self.tenant.tenant_id}")
             
+            # 🔍 TRACING EXIT - Success
+            trace_all("_get_examples_from_database_tag", "EXIT", 
+                     called_from="_get_dynamic_examples",
+                     examples_count=len(converted_examples),
+                     tenant_id=str(self.tenant.tenant_id),
+                     esempi_list_count=len(esempi_list) if esempi_list else 0,
+                     exit_reason="SUCCESS")
+            
             return converted_examples
             
         except Exception as e:
             self.logger.debug(f"⚠️ Errore caricamento esempi dal database TAG: {e}")
+            
+            # 🔍 TRACING ERROR
+            trace_all("_get_examples_from_database_tag", "ERROR", 
+                     called_from="_get_dynamic_examples",
+                     error_type=type(e).__name__,
+                     error_message=str(e))
+            
+            # 🔍 TRACING EXIT - Error
+            trace_all("_get_examples_from_database_tag", "EXIT", 
+                     called_from="_get_dynamic_examples",
+                     examples_count=0,
+                     exit_reason="ERROR")
+            
             return []
     
     def _get_example_full_content(self, tenant_id: str, esempio_name: str) -> str:
-        """Recupera il contenuto completo di un esempio dal database"""
+        """
+        Recupera il contenuto completo di un esempio dal database
+        
+        Scopo della funzione:
+        - Recuperare il contenuto grezzo completo di un esempio dal database
+        - Gestire connessione database e query SQL sicura
+        
+        Parametri di input e output:
+        - tenant_id: str - ID del tenant per query sicura
+        - esempio_name: str - Nome dell'esempio da recuperare
+        
+        Valori di ritorno:
+        - str: Contenuto completo dell'esempio o stringa vuota se non trovato
+        
+        Tracciamento aggiornamenti:
+        - 2025-09-06: Aggiunto tracing completo ENTER/EXIT/ERROR
+        
+        Args:
+            tenant_id: ID del tenant
+            esempio_name: Nome dell'esempio
+            
+        Returns:
+            Contenuto dell'esempio o stringa vuota
+        """
+        
+        # 🔍 TRACING ENTER
+        trace_all("_get_example_full_content", "ENTER", 
+                 called_from="_get_examples_from_database_tag",
+                 tenant_id=tenant_id,
+                 esempio_name=esempio_name,
+                 has_prompt_manager=bool(self.prompt_manager))
+        
         try:
             if not self.prompt_manager.connect():
+                # 🔍 TRACING EXIT - Connection Failed
+                trace_all("_get_example_full_content", "EXIT", 
+                         called_from="_get_examples_from_database_tag",
+                         content_length=0,
+                         exit_reason="CONNECTION_FAILED")
+                
                 return ""
             
             cursor = self.prompt_manager.connection.cursor()
@@ -1402,8 +1672,30 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             result = cursor.fetchone()
             cursor.close()
             
-            return result[0] if result else ""
-        except Exception:
+            content = result[0] if result else ""
+            
+            # 🔍 TRACING EXIT - Success
+            trace_all("_get_example_full_content", "EXIT", 
+                     called_from="_get_examples_from_database_tag",
+                     content_length=len(content) if content else 0,
+                     found=bool(result),
+                     exit_reason="SUCCESS")
+            
+            return content
+            
+        except Exception as e:
+            # 🔍 TRACING ERROR
+            trace_all("_get_example_full_content", "ERROR", 
+                     called_from="_get_examples_from_database_tag",
+                     error_type=type(e).__name__,
+                     error_message=str(e))
+            
+            # 🔍 TRACING EXIT - Error
+            trace_all("_get_example_full_content", "EXIT", 
+                     called_from="_get_examples_from_database_tag",
+                     content_length=0,
+                     exit_reason="ERROR")
+            
             return ""
     
     def _extract_conversation_from_example(self, example_content: str) -> str:
@@ -2081,15 +2373,37 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         Returns:
             Tuple (predicted_label, confidence, motivation)
         """
-        self.logger.debug(f"Parsing risposta LLM: {response_text[:200]}...")
+        trace_all(
+            'ENTER', 
+            '_parse_llm_response', 
+            {
+                'response_length': len(response_text),
+                'conversation_length': len(conversation_text),
+                'response_preview': response_text[:100]
+            }
+        )
         
         try:
+            self.logger.debug(f"Parsing risposta LLM: {response_text[:200]}...")
+            
             # Auto-validazione e correzione
             is_valid, corrected_json = self._validate_and_fix_json(response_text)
             
             if not is_valid:
                 self.logger.warning("JSON non valido anche dopo correzione automatica")
-                return self._fallback_parse_response(response_text)
+                fallback_result = self._fallback_parse_response(response_text)
+                trace_all(
+                    'EXIT', 
+                    '_parse_llm_response', 
+                    {
+                        'predicted_label': fallback_result[0],
+                        'confidence': fallback_result[1],
+                        'motivation_length': len(fallback_result[2]),
+                        'method': 'FALLBACK_PARSE',
+                        'json_valid': False
+                    }
+                )
+                return fallback_result
             
             # Parsing del JSON corretto
             result = json.loads(corrected_json)
@@ -2141,11 +2455,36 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 final_confidence = max(0.1, confidence - 0.2)  # Penalizza fallback
             
             self.logger.debug(f"Risoluzione semantica: '{predicted_label}' → '{resolved_label}' via {resolution_method} (conf: {final_confidence:.3f})")
+            
+            trace_all(
+                'EXIT', 
+                '_parse_llm_response', 
+                {
+                    'resolved_label': resolved_label,
+                    'final_confidence': final_confidence,
+                    'motivation_length': len(motivation),
+                    'original_label': predicted_label,
+                    'resolution_method': resolution_method,
+                    'json_valid': True
+                }
+            )
             return resolved_label, final_confidence, motivation, predicted_label  # Include etichetta originale
             
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
+            fallback_result = self._fallback_parse_response(response_text)
+            trace_all(
+                'ERROR', 
+                '_parse_llm_response', 
+                {
+                    'error': str(e),
+                    'error_type': type(e).__name__,
+                    'response_length': len(response_text),
+                    'fallback_label': fallback_result[0],
+                    'fallback_confidence': fallback_result[1]
+                }
+            )
             self.logger.warning(f"Errore parsing/validazione: {e}")
-            return self._fallback_parse_response(response_text)
+            return fallback_result
     
     def _fallback_parse_response(self, response_text: str) -> Tuple[str, float, str, str]:
         """
@@ -2155,46 +2494,108 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         Returns:
             Tuple (predicted_label, confidence, motivation, original_llm_label)
         """
-        self.logger.debug("Parsing fallback per risposta LLM malformata - nessun pattern rigido")
+        trace_all(
+            'ENTER', 
+            '_fallback_parse_response', 
+            {
+                'response_length': len(response_text),
+                'domain_labels_count': len(self.domain_labels),
+                'response_preview': response_text[:100]
+            }
+        )
         
-        response_lower = response_text.lower()
-        
-        # Cerca se il LLM ha menzionato almeno una delle etichette note
-        # ma SENZA usare pattern predefiniti per la classificazione
-        mentioned_labels = []
-        for label in self.domain_labels:
-            if label in response_lower or label.replace('_', ' ') in response_lower:
-                mentioned_labels.append(label)
-        
-        # Se il LLM ha menzionato esattamente una etichetta, probabilmente è quella giusta
-        if len(mentioned_labels) == 1:
-            raw_predicted_label = mentioned_labels[0]
-            predicted_label = clean_label_text(raw_predicted_label)  # 🧹 PULIZIA ETICHETTA
+        try:
+            self.logger.debug("Parsing fallback per risposta LLM malformata - nessun pattern rigido")
             
-            # 🐛 DEBUG: Log pulizia etichetta se necessaria
-            if raw_predicted_label != predicted_label:
-                self.logger.info(f"🧹 Etichetta pulita (fallback): '{raw_predicted_label}' → '{predicted_label}'")
+            response_lower = response_text.lower()
             
-            # Cerca confidence nel testo in modo generico
-            confidence_match = re.search(r'(\d+\.?\d*)%?', response_text)
-            if confidence_match:
-                confidence = float(confidence_match.group(1))
-                if confidence > 1.0:  # Se è percentuale
-                    confidence = confidence / 100.0
-                confidence = max(0.0, min(1.0, confidence))  # Clamp 0-1
-            else:
-                confidence = 0.4  # Confidence moderata per parsing imperfetto
+            # Cerca se il LLM ha menzionato almeno una delle etichette note
+            # ma SENZA usare pattern predefiniti per la classificazione
+            mentioned_labels = []
+            for label in self.domain_labels:
+                if label in response_lower or label.replace('_', ' ') in response_lower:
+                    mentioned_labels.append(label)
             
-            motivation = f"Etichetta estratta da risposta LLM non strutturata: {predicted_label}"
-            return predicted_label, confidence, motivation, predicted_label
-        
-        # Se il LLM ha menzionato multiple etichette, è ambiguo
-        elif len(mentioned_labels) > 1:
-            motivation = f"Risposta ambigua, multiple etichette menzionate: {mentioned_labels}"
-            return "altro", 0.2, motivation, response_text[:50]  # Usa parte della risposta originale
-        
-        # Nessuna etichetta riconosciuta - fallback completo
-        return "altro", 0.1, "Risposta LLM non interpretabile senza pattern rigidi", response_text[:50]  # Usa parte della risposta originale
+            # Se il LLM ha menzionato esattamente una etichetta, probabilmente è quella giusta
+            if len(mentioned_labels) == 1:
+                raw_predicted_label = mentioned_labels[0]
+                predicted_label = clean_label_text(raw_predicted_label)  # 🧹 PULIZIA ETICHETTA
+                
+                # 🐛 DEBUG: Log pulizia etichetta se necessaria
+                if raw_predicted_label != predicted_label:
+                    self.logger.info(f"🧹 Etichetta pulita (fallback): '{raw_predicted_label}' → '{predicted_label}'")
+                
+                # Cerca confidence nel testo in modo generico
+                confidence_match = re.search(r'(\d+\.?\d*)%?', response_text)
+                if confidence_match:
+                    confidence = float(confidence_match.group(1))
+                    if confidence > 1.0:  # Se è percentuale
+                        confidence = confidence / 100.0
+                    confidence = max(0.0, min(1.0, confidence))  # Clamp 0-1
+                else:
+                    confidence = 0.4  # Confidence moderata per parsing imperfetto
+                
+                motivation = f"Etichetta estratta da risposta LLM non strutturata: {predicted_label}"
+                
+                trace_all(
+                    'EXIT', 
+                    '_fallback_parse_response', 
+                    {
+                        'predicted_label': predicted_label,
+                        'confidence': confidence,
+                        'mentioned_labels_count': len(mentioned_labels),
+                        'extraction_method': 'SINGLE_LABEL_MENTION'
+                    }
+                )
+                return predicted_label, confidence, motivation, predicted_label
+            
+            # Se il LLM ha menzionato multiple etichette, è ambiguo
+            elif len(mentioned_labels) > 1:
+                motivation = f"Risposta ambigua, multiple etichette menzionate: {mentioned_labels}"
+                result = ("altro", 0.2, motivation, response_text[:50])
+                
+                trace_all(
+                    'EXIT', 
+                    '_fallback_parse_response', 
+                    {
+                        'predicted_label': result[0],
+                        'confidence': result[1],
+                        'mentioned_labels_count': len(mentioned_labels),
+                        'mentioned_labels': mentioned_labels,
+                        'extraction_method': 'AMBIGUOUS_MULTIPLE'
+                    }
+                )
+                return result
+            
+            # Nessuna etichetta riconosciuta - fallback completo
+            result = ("altro", 0.1, "Risposta LLM non interpretabile senza pattern rigidi", response_text[:50])
+            
+            trace_all(
+                'EXIT', 
+                '_fallback_parse_response', 
+                {
+                    'predicted_label': result[0],
+                    'confidence': result[1],
+                    'mentioned_labels_count': len(mentioned_labels),
+                    'extraction_method': 'NO_LABELS_FOUND'
+                }
+            )
+            return result
+            
+        except Exception as e:
+            error_result = ("altro", 0.05, f"Errore fallback parsing: {str(e)[:50]}", response_text[:50])
+            
+            trace_all(
+                'ERROR', 
+                '_fallback_parse_response', 
+                {
+                    'error': str(e),
+                    'error_type': type(e).__name__,
+                    'response_length': len(response_text),
+                    'fallback_label': error_result[0]
+                }
+            )
+            return error_result
     
     def _normalize_label(self, label: str) -> str:
         """
@@ -2334,84 +2735,107 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         Aggiornamenti:
             2025-08-31: Aggiunto supporto raw mode per Mistral 7B v0.3 con function calling
         """
+        trace_all(
+            'ENTER', 
+            '_call_ollama_api_structured', 
+            {
+                'conversation_length': len(conversation_text),
+                'tenant_id': self.tenant_id,
+                'model_name': self.model_name,
+                'prompt_manager_available': self.prompt_manager is not None,
+                'tool_manager_available': self.tool_manager is not None,
+                'domain_labels_count': len(self.domain_labels)
+            }
+        )
+        
         # Recupero dei function tools dal database tramite PromptManager e ToolManager
         classification_tools = []
         
         if self.prompt_manager and self.tool_manager:
-            try:
-                # 1. Recupera gli ID dei tool dal prompt "intelligent_classifier_system"
-                resolved_tenant_id = self.prompt_manager._resolve_tenant_id(self.tenant_id)
-                tool_ids = self.prompt_manager.get_prompt_tools(
-                    tenant_id=resolved_tenant_id,
-                    prompt_name="intelligent_classifier_system",
-                    engine="LLM"
-                )
-                
-                if self.enable_logging:
-                    print(f"🔍 Tool IDs recuperati dal prompt: {tool_ids}")
-                
-                # 2. Per ogni tool ID, recupera il tool completo dal database
-                for tool_id in tool_ids:
-                    try:
-                        # tool_id deve essere un numero intero
-                        if not isinstance(tool_id, int):
-                            if isinstance(tool_id, str) and tool_id.isdigit():
-                                tool_id = int(tool_id)
-                            else:
-                                if self.enable_logging:
-                                    print(f"⚠️ Tool ID non valido (deve essere numerico): {tool_id}")
-                                continue
-                        
-                        db_tool = self.tool_manager.get_tool_by_id(tool_id)
-                        
-                        if db_tool:
-                            # 🔧 CORREZIONE CRITICAL: Estrai i parametri corretti dal function_schema
-                            function_schema = db_tool['function_schema']
+                try:
+                    # 1. Recupera gli ID dei tool dal prompt "intelligent_classifier_system"
+                    resolved_tenant_id = self.prompt_manager._resolve_tenant_id(self.tenant_id)
+                    tool_ids = self.prompt_manager.get_prompt_tools(
+                        tenant_id=resolved_tenant_id,
+                        prompt_name="intelligent_classifier_system",
+                        engine="LLM"
+                    )
+                    
+                    if self.enable_logging:
+                        print(f"🔍 Tool IDs recuperati dal prompt: {tool_ids}")
+                    
+                    # 2. Per ogni tool ID, recupera il tool completo dal database
+                    for tool_id in tool_ids:
+                        try:
+                            # tool_id deve essere un numero intero
+                            if not isinstance(tool_id, int):
+                                if isinstance(tool_id, str) and tool_id.isdigit():
+                                    tool_id = int(tool_id)
+                                else:
+                                    if self.enable_logging:
+                                        print(f"⚠️ Tool ID non valido (deve essere numerico): {tool_id}")
+                                    continue
                             
-                            # Se il function_schema ha la struttura annidata, estraiamo solo i parametri
-                            if isinstance(function_schema, dict) and 'function' in function_schema:
-                                # Schema del database ha struttura errata con doppia nidificazione
-                                parameters = function_schema['function']['parameters']
-                                if self.enable_logging:
-                                    print(f"⚠️ Schema corretto: estratti parametri da struttura annidata")
-                            else:
-                                # Schema già nella forma corretta
-                                parameters = function_schema
+                            db_tool = self.tool_manager.get_tool_by_id(tool_id)
                             
-                            # Costruisce il tool per Ollama usando la struttura corretta secondo documentazione ufficiale
-                            classification_tool = {
-                                "type": "function", 
-                                "function": {
-                                    "name": db_tool['tool_name'],
-                                    "description": db_tool['description'],
-                                    "parameters": parameters  # 🔑 SOLO i parametri, senza doppia nidificazione
-                                }
-                            }
-                            
-                            # Aggiorna l'enum dei domain_labels nel tool dal database
-                            if (self.domain_labels and 
-                                'properties' in classification_tool['function']['parameters'] and
-                                'predicted_label' in classification_tool['function']['parameters']['properties']):
-                                classification_tool['function']['parameters']['properties']['predicted_label']['enum'] = list(self.domain_labels)
-                            
-                            classification_tools.append(classification_tool)
-                            
-                            if self.enable_logging:
-                                print(f"✅ Tool recuperato dal database: {db_tool['tool_name']} (ID: {tool_id}) per tenant {db_tool['tenant_id']}")
-                        else:
-                            if self.enable_logging:
-                                print(f"⚠️ Tool ID {tool_id} non trovato o non attivo nel database")
+                            if db_tool:
+                                # 🔧 CORREZIONE CRITICAL: Estrai i parametri corretti dal function_schema
+                                function_schema = db_tool['function_schema']
                                 
-                    except Exception as e:
-                        if self.enable_logging:
-                            print(f"⚠️ Errore recupero tool ID {tool_id}: {e}")
+                                # Se il function_schema ha la struttura annidata, estraiamo solo i parametri
+                                if isinstance(function_schema, dict) and 'function' in function_schema:
+                                    # Schema del database ha struttura errata con doppia nidificazione
+                                    parameters = function_schema['function']['parameters']
+                                    if self.enable_logging:
+                                        print(f"⚠️ Schema corretto: estratti parametri da struttura annidata")
+                                else:
+                                    # Schema già nella forma corretta
+                                    parameters = function_schema
+                                
+                                # Costruisce il tool per Ollama usando la struttura corretta secondo documentazione ufficiale
+                                classification_tool = {
+                                    "type": "function", 
+                                    "function": {
+                                        "name": db_tool['tool_name'],
+                                        "description": db_tool['description'],
+                                        "parameters": parameters  # 🔑 SOLO i parametri, senza doppia nidificazione
+                                    }
+                                }
+                                
+                                # Aggiorna l'enum dei domain_labels nel tool dal database
+                                if (self.domain_labels and 
+                                    'properties' in classification_tool['function']['parameters'] and
+                                    'predicted_label' in classification_tool['function']['parameters']['properties']):
+                                    classification_tool['function']['parameters']['properties']['predicted_label']['enum'] = list(self.domain_labels)
+                                
+                                classification_tools.append(classification_tool)
+                                
+                                if self.enable_logging:
+                                    print(f"✅ Tool recuperato dal database: {db_tool['tool_name']} (ID: {tool_id}) per tenant {db_tool['tenant_id']}")
+                            else:
+                                if self.enable_logging:
+                                    print(f"⚠️ Tool ID {tool_id} non trovato o non attivo nel database")
+                                    
+                        except Exception as e:
+                            if self.enable_logging:
+                                print(f"⚠️ Errore recupero tool ID {tool_id}: {e}")
                         
-            except Exception as e:
-                if self.enable_logging:
-                    print(f"⚠️ Errore nel recupero dei tool dal prompt: {e}")
+                except Exception as e:
+                    if self.enable_logging:
+                        print(f"⚠️ Errore nel recupero dei tool dal prompt: {e}")
         
         # Verifica che ci sia almeno un tool disponibile
         if not classification_tools:
+            trace_all(
+                'ERROR', 
+                '_call_ollama_api_structured', 
+                {
+                    'error': 'No classification tools available',
+                    'tools_found': len(classification_tools),
+                    'prompt_manager_available': self.prompt_manager is not None,
+                    'tool_manager_available': self.tool_manager is not None
+                }
+            )
             raise ValueError(
                 "❌ ERRORE CRITICO: Nessun tool di classificazione disponibile dal database. "
                 "Verificare che il prompt 'intelligent_classifier_system' abbia tool associati e che siano attivi."
@@ -2419,10 +2843,8 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         
         # Messaggio di sistema ottimizzato per function calling
         system_message = f"""
-        Sei un classificatore esperto di conversazioni mediche per l'ospedale Humanitas.
-        
-        Le categorie disponibili sono:
-        {', '.join(self.domain_labels) if self.domain_labels else 'altro'}
+        Sei un classificatore esperto di conversazioni mediche per l'ospedale Humanitas.            Le categorie disponibili sono:
+            {', '.join(self.domain_labels) if self.domain_labels else 'altro'}
         
         Analizza la conversazione fornita e usa una delle function tools disponibili per restituire:
         - predicted_label: ESATTAMENTE una delle categorie elencate sopra
@@ -2579,6 +3001,18 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                         if self.enable_logging:
                             print(f"🔥 DEBUG PARSING - SUCCESSO! Tutti i campi presenti: {arguments}")
                         self.logger.info(f"✅ Function call classificazione ricevuta: {arguments}")
+                        trace_all(
+                            'EXIT', 
+                            '_call_ollama_api_structured', 
+                            {
+                                'predicted_label': arguments['predicted_label'],
+                                'confidence': arguments['confidence'],
+                                'motivation_length': len(arguments['motivation']),
+                                'parsing_method': 'FUNCTION_CALL',
+                                'tools_used': len(classification_tools),
+                                'response_format': 'STRUCTURED'
+                            }
+                        )
                         return arguments
                     else:
                         missing_keys = [key for key in ['predicted_label', 'confidence', 'motivation'] if key not in arguments]
@@ -2819,6 +3253,18 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                         if self.enable_logging:
                             print(f"🔥 DEBUG PARSING - YAML-like SUCCESSO!")
                         self.logger.info(f"✅ Parsing YAML-like riuscito: {parsed_result['predicted_label']} (conf: {parsed_result['confidence']})")
+                        trace_all(
+                            'EXIT', 
+                            '_call_ollama_api_structured', 
+                            {
+                                'predicted_label': parsed_result['predicted_label'],
+                                'confidence': parsed_result['confidence'],
+                                'motivation_length': len(parsed_result['motivation']),
+                                'parsing_method': 'YAML_LIKE',
+                                'tools_used': len(classification_tools),
+                                'response_format': 'FALLBACK'
+                            }
+                        )
                         return parsed_result
                     else:
                         missing_yaml = [key for key in ['predicted_label', 'confidence', 'motivation'] if key not in parsed_result]
@@ -2834,24 +3280,59 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 # Fallback estremo
                 if self.enable_logging:
                     print(f"🔥 DEBUG PARSING - FALLBACK ESTREMO attivato")
-                return {
+                fallback_result = {
                     "predicted_label": "altro",
                     "confidence": 0.2,
                     "motivation": f"Risposta non strutturata: {content[:100]}"
                 }
+                trace_all(
+                    'EXIT', 
+                    '_call_ollama_api_structured', 
+                    {
+                        'predicted_label': fallback_result['predicted_label'],
+                        'confidence': fallback_result['confidence'],
+                        'motivation_length': len(fallback_result['motivation']),
+                        'parsing_method': 'EXTREME_FALLBACK',
+                        'tools_used': len(classification_tools),
+                        'response_format': 'UNSTRUCTURED'
+                    }
+                )
+                return fallback_result
             else:
                 if self.enable_logging:
                     print(f"🔥 DEBUG PARSING - ERRORE: Nessun tool_calls né content nella risposta!")
-                raise ValueError("Risposta senza tool_calls né content")
+                error_msg = "Risposta senza tool_calls né content"
+                trace_all(
+                    'ERROR', 
+                    '_call_ollama_api_structured', 
+                    {
+                        'error': error_msg,
+                        'response_keys': list(result.keys()) if 'result' in locals() else [],
+                        'message_keys': list(message.keys()) if 'message' in locals() else [],
+                        'tools_used': len(classification_tools)
+                    }
+                )
+                raise ValueError(error_msg)
                 
         except (requests.RequestException, json.JSONDecodeError, KeyError, ValueError) as e:
-            self.logger.error(f"❌ Errore Ollama Function Tools API: {e}")
-            # Fallback per errori di connessione/parsing
-            return {
+            error_result = {
                 "predicted_label": "altro",
                 "confidence": 0.1,
                 "motivation": f"Errore API: {str(e)[:100]}"
             }
+            trace_all(
+                'ERROR', 
+                '_call_ollama_api_structured', 
+                {
+                    'error': str(e),
+                    'error_type': type(e).__name__,
+                    'conversation_length': len(conversation_text),
+                    'tools_used': len(classification_tools) if 'classification_tools' in locals() else 0,
+                    'fallback_result': error_result
+                }
+            )
+            self.logger.error(f"❌ Errore Ollama Function Tools API: {e}")
+            return error_result
 
     def _call_ollama_api_raw_mode(self, conversation_text: str, tools: List[Dict], system_message: str) -> Dict[str, Any]:
         """
@@ -3309,22 +3790,69 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         """
         Classifica una conversazione (interfaccia compatibile)
         
+        Scopo della funzione:
+        - Wrapper per classify_with_motivation che mantiene compatibilità API
+        - Conversione da ClassificationResult a Dict per retrocompatibilità
+        
+        Parametri di input e output:
+        - conversation_text: str - Testo della conversazione da classificare
+        
+        Valori di ritorno:
+        - Dict[str, Any]: Risultato classificazione in formato compatibile
+        
+        Tracciamento aggiornamenti:
+        - 2025-09-06: Aggiunto tracing completo ENTER/EXIT/ERROR
+        
         Args:
             conversation_text: Testo della conversazione
             
         Returns:
             Dict con risultato della classificazione
         """
-        result = self.classify_with_motivation(conversation_text)
         
-        # Formato compatibile con l'interfaccia esistente
-        return {
-            'predicted_label': result.predicted_label,
-            'confidence': result.confidence,
-            'motivation': result.motivation,
-            'method': result.method,
-            'processing_time': result.processing_time
-        }
+        # 🔍 TRACING ENTER
+        trace_all("classify_conversation", "ENTER", 
+                 called_from="external_api_call",
+                 conversation_length=len(conversation_text) if conversation_text else 0,
+                 interface_type="COMPATIBILITY_WRAPPER")
+        
+        try:
+            result = self.classify_with_motivation(conversation_text)
+            
+            # Formato compatibile con l'interfaccia esistente
+            response_dict = {
+                'predicted_label': result.predicted_label,
+                'confidence': result.confidence,
+                'motivation': result.motivation,
+                'method': result.method,
+                'processing_time': result.processing_time
+            }
+            
+            # 🔍 TRACING EXIT - Success
+            trace_all("classify_conversation", "EXIT", 
+                     called_from="external_api_call",
+                     predicted_label=result.predicted_label,
+                     confidence=result.confidence,
+                     method=result.method,
+                     processing_time=result.processing_time,
+                     exit_reason="SUCCESS")
+            
+            return response_dict
+            
+        except Exception as e:
+            # 🔍 TRACING ERROR
+            trace_all("classify_conversation", "ERROR", 
+                     called_from="external_api_call",
+                     error_type=type(e).__name__,
+                     error_message=str(e))
+            
+            # 🔍 TRACING EXIT - Error
+            trace_all("classify_conversation", "EXIT", 
+                     called_from="external_api_call",
+                     exit_reason="ERROR")
+            
+            # Rilancia l'errore per gestione upstream
+            raise e
     
     def classify_batch(self, 
                       conversations: List[str],
@@ -4219,64 +4747,157 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         Returns:
             (final_label, resolution_method, confidence_score)
         """
-        original_label = proposed_label.strip().lower().replace(' ', '_')
+        trace_all(
+            'ENTER', 
+            '_semantic_label_resolution', 
+            {
+                'proposed_label': proposed_label,
+                'conversation_length': len(conversation_text),
+                'initial_confidence': initial_confidence,
+                'domain_labels_count': len(self.domain_labels),
+                'llm_confidence_threshold': self.llm_confidence_threshold,
+                'auto_tag_creation': self.auto_tag_creation
+            }
+        )
         
-        self.logger.debug(f"🎯 Inizio risoluzione semantica: '{proposed_label}' (confidence: {initial_confidence:.3f})")
-        
-        # FASE 1: Verifica diretta (se è già nel dominio)
-        if original_label in self.domain_labels:
-            return original_label, "DIRECT_MATCH", 1.0
-        
-        # FASE 2: AUTO-CREAZIONE TAG (NUOVA LOGICA SEMPLIFICATA)
-        # Se il tag non esiste e l'LLM è molto sicuro, crea automaticamente il tag
-        if initial_confidence >= self.llm_confidence_threshold:
-            self.logger.info(f"🎯 LLM confidence {initial_confidence:.3f} >= {self.llm_confidence_threshold:.3f} → Tentativo auto-creazione tag '{original_label}'")
+        try:
+            original_label = proposed_label.strip().lower().replace(' ', '_')
             
-            if self.auto_tag_creation:
-                # Prova a creare il nuovo tag automaticamente
-                success = self.add_new_label_to_database(original_label)
-                if success:
-                    # Ricarica le etichette dal database per includere il nuovo tag
-                    self._load_domain_labels_from_database()
-                    self.logger.info(f"✅ Nuovo tag creato automaticamente: '{original_label}' (confidence: {initial_confidence:.3f})")
-                    return original_label, "AUTO_CREATED", initial_confidence
+            self.logger.debug(f"🎯 Inizio risoluzione semantica: '{proposed_label}' (confidence: {initial_confidence:.3f})")
+            
+            # FASE 1: Verifica diretta (se è già nel dominio)
+            if original_label in self.domain_labels:
+                trace_all(
+                    'EXIT', 
+                    '_semantic_label_resolution', 
+                    {
+                        'result_label': original_label,
+                        'resolution_method': 'DIRECT_MATCH',
+                        'confidence': 1.0,
+                        'phase': 'DIRECT_MATCH'
+                    }
+                )
+                return original_label, "DIRECT_MATCH", 1.0
+            
+            # FASE 2: AUTO-CREAZIONE TAG (NUOVA LOGICA SEMPLIFICATA)
+            # Se il tag non esiste e l'LLM è molto sicuro, crea automaticamente il tag
+            if initial_confidence >= self.llm_confidence_threshold:
+                self.logger.info(f"🎯 LLM confidence {initial_confidence:.3f} >= {self.llm_confidence_threshold:.3f} → Tentativo auto-creazione tag '{original_label}'")
+                
+                if self.auto_tag_creation:
+                    # Prova a creare il nuovo tag automaticamente
+                    success = self.add_new_label_to_database(original_label)
+                    if success:
+                        # Ricarica le etichette dal database per includere il nuovo tag
+                        self._load_domain_labels_from_database()
+                        self.logger.info(f"✅ Nuovo tag creato automaticamente: '{original_label}' (confidence: {initial_confidence:.3f})")
+                        trace_all(
+                            'EXIT', 
+                            '_semantic_label_resolution', 
+                            {
+                                'result_label': original_label,
+                                'resolution_method': 'AUTO_CREATED',
+                                'confidence': initial_confidence,
+                                'phase': 'AUTO_CREATION',
+                                'database_labels_reloaded': True
+                            }
+                        )
+                        return original_label, "AUTO_CREATED", initial_confidence
+                    else:
+                        self.logger.warning(f"⚠️ Fallimento creazione automatica tag: '{original_label}'")
                 else:
-                    self.logger.warning(f"⚠️ Fallimento creazione automatica tag: '{original_label}'")
-            else:
-                self.logger.info(f"📝 Auto-creazione disabilitata, ma LLM suggerirebbe: '{original_label}'")
+                    self.logger.info(f"📝 Auto-creazione disabilitata, ma LLM suggerirebbe: '{original_label}'")
 
-        # FASE 3: Risoluzione semantica con embeddings
-        if self.embedder is not None:
-            semantic_result = self._resolve_label_semantically(
-                original_label, conversation_text
-            )
-            if semantic_result['found_match']:
-                return (
-                    semantic_result['matched_label'], 
-                    "SEMANTIC_MATCH", 
-                    semantic_result['confidence']
+            # FASE 3: Risoluzione semantica con embeddings
+            if self.embedder is not None:
+                semantic_result = self._resolve_label_semantically(
+                    original_label, conversation_text
                 )
-        
-        # FASE 3: Validazione con BERTopic per nuova categoria
-        if hasattr(self, 'bertopic_provider') and self.bertopic_provider:
-            bertopic_result = self._evaluate_new_category_with_bertopic(
-                original_label, conversation_text
-            )
-            if bertopic_result['is_valid_new_category']:
-                return (
-                    bertopic_result['refined_label'],
-                    "BERTOPIC_NEW_CATEGORY",
-                    bertopic_result['confidence']
+                if semantic_result['found_match']:
+                    trace_all(
+                        'EXIT', 
+                        '_semantic_label_resolution', 
+                        {
+                            'result_label': semantic_result['matched_label'],
+                            'resolution_method': 'SEMANTIC_MATCH',
+                            'confidence': semantic_result['confidence'],
+                            'phase': 'SEMANTIC_RESOLUTION'
+                        }
+                    )
+                    return (
+                        semantic_result['matched_label'], 
+                        "SEMANTIC_MATCH", 
+                        semantic_result['confidence']
+                    )
+            
+            # FASE 3: Validazione con BERTopic per nuova categoria
+            if hasattr(self, 'bertopic_provider') and self.bertopic_provider:
+                bertopic_result = self._evaluate_new_category_with_bertopic(
+                    original_label, conversation_text
                 )
-        
-        # FASE 4: Fallback intelligente
-        return self._intelligent_fallback(original_label, conversation_text)
+                if bertopic_result['is_valid_new_category']:
+                    trace_all(
+                        'EXIT', 
+                        '_semantic_label_resolution', 
+                        {
+                            'result_label': bertopic_result['refined_label'],
+                            'resolution_method': 'BERTOPIC_NEW_CATEGORY',
+                            'confidence': bertopic_result['confidence'],
+                            'phase': 'BERTOPIC_VALIDATION'
+                        }
+                    )
+                    return (
+                        bertopic_result['refined_label'],
+                        "BERTOPIC_NEW_CATEGORY",
+                        bertopic_result['confidence']
+                    )
+            
+            # FASE 4: Fallback intelligente
+            fallback_result = self._intelligent_fallback(original_label, conversation_text)
+            trace_all(
+                'EXIT', 
+                '_semantic_label_resolution', 
+                {
+                    'result_label': fallback_result[0],
+                    'resolution_method': fallback_result[1],
+                    'confidence': fallback_result[2],
+                    'phase': 'INTELLIGENT_FALLBACK'
+                }
+            )
+            return fallback_result
+            
+        except Exception as e:
+            trace_all(
+                'ERROR', 
+                '_semantic_label_resolution', 
+                {
+                    'error': str(e),
+                    'proposed_label': proposed_label,
+                    'conversation_length': len(conversation_text),
+                    'initial_confidence': initial_confidence
+                }
+            )
+            self.logger.error(f"❌ Errore in _semantic_label_resolution: {e}")
+            # Fallback sicuro in caso di errore
+            return 'altro', 'ERROR_FALLBACK', 0.0
 
     def _resolve_label_semantically(self, proposed_label: str, 
                                    conversation_text: str) -> Dict[str, Any]:
         """
         Risolve l'etichetta usando embedding similarity potenziata con descrizioni
         """
+        trace_all(
+            'ENTER', 
+            '_resolve_label_semantically', 
+            {
+                'proposed_label': proposed_label,
+                'conversation_length': len(conversation_text),
+                'domain_labels_count': len(self.domain_labels),
+                'embedder_available': self.embedder is not None,
+                'label_descriptions_count': len(self.label_descriptions) if hasattr(self, 'label_descriptions') else 0
+            }
+        )
+        
         try:
             # Embedding dell'etichetta proposta
             label_text = proposed_label.replace('_', ' ')
@@ -4288,12 +4909,15 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             best_match = None
             best_score = 0.0
             best_method = None
+            matches_analyzed = 0
             
             # APPROCCIO POTENZIATO: Similarità con etichette + descrizioni esistenti
             for existing_label in self.domain_labels:
                 if existing_label == 'altro':
                     continue
                     
+                matches_analyzed += 1
+                
                 # Embedding dell'etichetta esistente
                 existing_text = existing_label.replace('_', ' ')
                 existing_embedding = self.embedder.encode_single(existing_text)
@@ -4306,7 +4930,7 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 
                 # NUOVO: Similarità con descrizione se disponibile
                 description_similarity = 0.0
-                if existing_label in self.label_descriptions and self.label_descriptions[existing_label]:
+                if hasattr(self, 'label_descriptions') and existing_label in self.label_descriptions and self.label_descriptions[existing_label]:
                     description_text = self.label_descriptions[existing_label]
                     description_embedding = self.embedder.encode_single(description_text)
                     
@@ -4347,6 +4971,19 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             # Soglia di confidenza per accettare il match (più alta per descrizioni)
             confidence_threshold = 0.65
             if best_score >= confidence_threshold:
+                trace_all(
+                    'EXIT', 
+                    '_resolve_label_semantically', 
+                    {
+                        'found_match': True,
+                        'matched_label': best_match,
+                        'confidence': best_score,
+                        'method': best_method,
+                        'matches_analyzed': matches_analyzed,
+                        'confidence_threshold': confidence_threshold,
+                        'original_label': proposed_label
+                    }
+                )
                 return {
                     'found_match': True,
                     'matched_label': best_match,
@@ -4355,6 +4992,18 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                     'original_label': proposed_label
                 }
             else:
+                trace_all(
+                    'EXIT', 
+                    '_resolve_label_semantically', 
+                    {
+                        'found_match': False,
+                        'best_candidate': best_match,
+                        'best_score': best_score,
+                        'method': best_method,
+                        'matches_analyzed': matches_analyzed,
+                        'confidence_threshold': confidence_threshold
+                    }
+                )
                 return {
                     'found_match': False,
                     'best_candidate': best_match,
@@ -4363,6 +5012,16 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 }
                 
         except Exception as e:
+            trace_all(
+                'ERROR', 
+                '_resolve_label_semantically', 
+                {
+                    'error': str(e),
+                    'proposed_label': proposed_label,
+                    'conversation_length': len(conversation_text),
+                    'embedder_available': self.embedder is not None
+                }
+            )
             self.logger.warning(f"Errore risoluzione semantica: {e}")
             return {'found_match': False, 'error': str(e)}
 

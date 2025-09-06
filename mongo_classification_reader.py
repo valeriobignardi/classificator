@@ -1670,8 +1670,13 @@ class MongoClassificationReader:
                                   show_outliers: bool = True) -> List[Dict[str, Any]]:
         """
         Scopo: Recupera sessioni per Review Queue a 3 livelli (Rappresentanti/Propagate/Outliers)
-        🔧 OPZIONE 1: Mostra solo casi con review_status = "pending" (non auto_classified)
-        🆕 NUOVO: Usa metadati booleani strutturati per filtri precisi
+        OTTIMIZZAZIONE PERFORMANCE: Usa singola query + filtri in-memory invece di complessi $or
+        
+        Strategia ottimizzata:
+        1. Singola query MongoDB semplice: {"review_status": "pending"}
+        2. Filtri booleani applicati in-memory durante l'iterazione
+        3. Early termination quando raggiunto il limite
+        4. Logging minimale per evitare overhead I/O
         
         Parametri input:
             - client_name: Nome del cliente
@@ -1684,105 +1689,97 @@ class MongoClassificationReader:
         Output:
             - Lista di sessioni filtrate per Review Queue (solo status "pending")
             
-        Ultimo aggiornamento: 2025-09-04 - Valerio Bignardi - Metadati booleani strutturati
+        Ultimo aggiornamento: 2025-09-06 - Valerio Bignardi - Ottimizzazione performance con single-query + in-memory filtering
         """
         try:
             if not self.ensure_connection():
+                return []
+            
+            # 🚀 EARLY EXIT: Se tutti i filtri sono disattivati, restituisci subito array vuoto
+            if not show_representatives and not show_propagated and not show_outliers:
+                print(f"🚫 [PERFORMANCE] Tutti i filtri disattivati - Return immediato")
                 return []
                 
             # Usa la collection appropriata per il tenant
             collection = self.db[self.get_collection_name()]
             
-            # 🆕 NUOVA LOGICA CON METADATI BOOLEANI
-            or_conditions = []
-            
-            # 1. RAPPRESENTANTI: metadata.representative = true
-            if show_representatives:
-                or_conditions.append({
-                    "metadata.representative": True
-                })
-            
-            # 2. PROPAGATE: metadata.propagated = true
-            if show_propagated:
-                or_conditions.append({
-                    "metadata.propagated": True
-                })
-            
-            # 3. OUTLIERS: metadata.outlier = true
-            if show_outliers:
-                or_conditions.append({
-                    "metadata.outlier": True
-                })
-            
-            # Query base per tenant con review_status filtering
+            # 🚀 QUERY SEMPLIFICATA: Solo review_status + label_filter (se presente)
             base_query = {
                 "review_status": "pending"  # Solo casi realmente da rivedere
             }
-            
-            # 🔧 FIX CRITICO: Se nessun filtro è attivo, restituisci 0 risultati invece di tutti
-            if or_conditions:
-                # Aggiungi i filtri di classificazione con OR
-                base_query["$or"] = or_conditions
-            else:
-                # NESSUN FILTRO ATTIVO: Restituisci 0 risultati con query impossibile
-                # Invece di restituire tutto, rendi la query impossibile da soddisfare
-                base_query["$and"] = [
-                    {"classification_type": "IMPOSSIBILE_FILTER_1"},
-                    {"classification_type": "IMPOSSIBILE_FILTER_2"}  # Condizione impossibile
-                ]
-                print(f"🚫 [DEBUG] TUTTI I FILTRI DISATTIVATI - Query impossibile applicata")
-            
-            print(f"🔍 [DEBUG] MongoDB Query: {base_query}")
-            print(f"🔍 [DEBUG] Filtri attivi: representatives={show_representatives}, propagated={show_propagated}, outliers={show_outliers}")
             
             # Aggiungi filtro etichetta se specificato
             if label_filter and label_filter != "Tutte le etichette":
                 base_query["classification"] = label_filter
             
-            # Proiezione esclude embedding
+            print(f"� [PERFORMANCE] MongoDB Query semplificata: {base_query}")
+            print(f"🔍 [PERFORMANCE] Filtri in-memory: representatives={show_representatives}, propagated={show_propagated}, outliers={show_outliers}")
+            
+            # Proiezione esclude embedding per ridurre traffico rete
             projection = {"embedding": 0}
             
-            cursor = collection.find(base_query, projection).sort([("timestamp", -1)])
+            # 🚀 STREAMING CURSOR: Non usiamo sort() per evitare overhead, processiamo in streaming
+            cursor = collection.find(base_query, projection)
             
-            if limit:
-                cursor = cursor.limit(limit)
-            
+            # 🚀 IN-MEMORY FILTERING con early termination
             sessions = []
+            processed_count = 0
+            filtered_count = 0
+            
             for doc in cursor:
-                doc['_id'] = str(doc['_id'])
+                processed_count += 1
                 
-                print(f"🐛 DEBUG get_review_queue_sessions - DOC LETTO: session_id={doc.get('session_id', 'N/A')}")
-                print(f"🐛 DEBUG get_review_queue_sessions - classification_type: {doc.get('classification_type', 'N/A')}")
-                print(f"🐛 DEBUG get_review_queue_sessions - metadata: {doc.get('metadata', {})}")
+                # � EARLY TERMINATION: Se abbiamo già abbastanza risultati, stoppa l'iterazione
+                if len(sessions) >= limit:
+                    print(f"🏁 [PERFORMANCE] Limite {limit} raggiunto - Stop iterazione dopo {processed_count} documenti processati")
+                    break
                 
-                # 🆕 DETERMINA IL TIPO DI SESSIONE CON METADATI BOOLEANI
-                session_type = "unknown"
+                # 🚀 IN-MEMORY BOOLEAN FILTERING: Applica filtri sui metadati senza $or MongoDB
                 metadata = doc.get('metadata', {})
                 
-                # Usa i nuovi metadati booleani per determinazione precisa
-                if metadata.get('representative', False):
+                # Determina tipo sessione con logica booleana ottimizzata
+                is_representative = metadata.get('representative', False)
+                is_propagated = metadata.get('propagated', False)
+                is_outlier = metadata.get('outlier', False)
+                
+                # Fallback per compatibilità con dati legacy (solo se metadati booleani non presenti)
+                if not (is_representative or is_propagated or is_outlier):
+                    if metadata.get('is_representative', False):
+                        is_representative = True
+                    elif metadata.get('propagated_from'):
+                        is_propagated = True
+                    elif metadata.get('cluster_id') in [-1, "-1"] or not metadata.get('cluster_id'):
+                        is_outlier = True
+                
+                # 🚀 FAST BOOLEAN CHECK: Verifica se il documento soddisfa i filtri
+                include_document = (
+                    (show_representatives and is_representative) or
+                    (show_propagated and is_propagated) or 
+                    (show_outliers and is_outlier)
+                )
+                
+                if not include_document:
+                    filtered_count += 1
+                    continue
+                
+                # 🚀 MINIMAL OBJECT CREATION: Costruisci solo gli oggetti che passano i filtri
+                doc['_id'] = str(doc['_id'])
+                
+                # Determina session_type per compatibilità
+                if is_representative:
                     session_type = "representative"
-                elif metadata.get('propagated', False):
+                elif is_propagated:
                     session_type = "propagated"
-                elif metadata.get('outlier', False):
+                elif is_outlier:
                     session_type = "outlier"
                 else:
-                    # Fallback alla logica precedente per compatibilità con dati vecchi
-                    if metadata.get('is_representative', False):
-                        session_type = "representative"
-                    elif metadata.get('propagated_from'):
-                        session_type = "propagated"
-                    elif metadata.get('cluster_id') in [-1, "-1"] or not metadata.get('cluster_id'):
-                        session_type = "outlier"
+                    session_type = "unknown"
                 
-                print(f"🏷️ TIPO SESSIONE DETERMINATO: {session_type} (representative={metadata.get('representative', False)}, propagated={metadata.get('propagated', False)}, outlier={metadata.get('outlier', False)})")
-                
-                # 🔧 FIX REVIEW QUEUE: Mappping intelligente per casi propagati
+                # 🔧 FIX REVIEW QUEUE: Mapping intelligente per casi propagati (manteniamo la logica esistente)
                 final_classification = doc.get('classification', doc.get('classificazione', ''))
                 final_confidence = doc.get('confidence', 0.0)
                 
                 # Per casi propagati, usa classificazione finale come fallback per display ML/LLM
-                # Questo risolve il problema "N/A" nel frontend mantenendo la tracciabilità
                 if session_type == 'propagated':
                     ml_prediction = doc.get('ml_prediction', '') or final_classification  
                     llm_prediction = doc.get('llm_prediction', '') or final_classification
@@ -1813,7 +1810,7 @@ class MongoClassificationReader:
                     # 🆕 METADATI REVIEW QUEUE
                     'session_type': session_type,  # representative/propagated/outlier
                     'cluster_id': metadata.get('cluster_id'),
-                    'is_representative': metadata.get('is_representative', False),
+                    'is_representative': is_representative,  # Usa il valore booleano calcolato
                     'propagated_from': metadata.get('propagated_from'),
                     'propagation_confidence': metadata.get('propagation_confidence'),
                     
@@ -1832,11 +1829,17 @@ class MongoClassificationReader:
                 
                 sessions.append(session)
             
-            print(f"🔍 Review Queue recuperate {len(sessions)} sessioni (representatives: {show_representatives}, propagated: {show_propagated}, outliers: {show_outliers})")
+            # 🚀 PERFORMANCE SUMMARY: Log delle statistiche di ottimizzazione
+            print(f"✅ [PERFORMANCE] Review Queue completata:")
+            print(f"   📊 Risultati: {len(sessions)} sessioni recuperate")
+            print(f"   🔍 Processati: {processed_count} documenti totali")
+            print(f"   🚫 Filtrati: {filtered_count} documenti esclusi")
+            print(f"   ⚡ Efficienza: {len(sessions)}/{processed_count} = {(len(sessions)/max(processed_count,1)*100):.1f}% match rate")
+            
             return sessions
             
         except Exception as e:
-            print(f"Errore nel recupero Review Queue: {e}")
+            print(f"❌ [PERFORMANCE] Errore nel recupero Review Queue ottimizzato: {e}")
             return []
 
 

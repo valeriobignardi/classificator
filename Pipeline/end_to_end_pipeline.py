@@ -465,6 +465,11 @@ class EndToEndPipeline:
         # Inizializza attributi per BERTopic pre-addestrato
         self._bertopic_provider_trained = None
         
+        # 🚀 OTTIMIZZAZIONE: Cache per features ML pre-calcolate (evita ricalcolo BERTopic)
+        self._ml_features_cache = {}  # session_id -> ml_features numpy array
+        self._cache_valid_timestamp = None  # Timestamp validità cache
+        print("🏗️ Cache features ML inizializzata per ottimizzazione BERTopic")
+        
         # Inizializza l'ensemble classifier avanzato PRIMA (questo creerà il suo LLM internamente)
         print("🔗 Inizializzazione ensemble classifier avanzato...")
         self.ensemble_classifier = AdvancedEnsembleClassifier(
@@ -1389,128 +1394,133 @@ class EndToEndPipeline:
         
         return embeddings, cluster_labels, representatives, suggested_labels
     
-    def _save_representatives_for_review(self, 
-                                       sessioni: Dict[str, Dict], 
-                                       representatives: Dict[int, List[Dict]], 
-                                       suggested_labels: Dict[int, str],
-                                       cluster_labels: np.ndarray) -> bool:
-        """
-        Salva i rappresentanti in MongoDB come "pending review" PRIMA della review umana
-        
-        Scopo della funzione: Popolare la review queue con rappresentanti, outlier e propagati
-        Parametri di input: sessioni, representatives, suggested_labels, cluster_labels
-        Parametri di output: success flag
-        Valori di ritorno: True se salvato con successo
-        Tracciamento aggiornamenti: 2025-08-28 - Fix review queue mancante
-        
-        Args:
-            sessioni: Tutte le sessioni del dataset
-            representatives: Dict {cluster_id: [rappresentanti]}
-            suggested_labels: Dict {cluster_id: etichetta_suggerita}
-            cluster_labels: Array delle etichette cluster per tutte le sessioni
-            
-        Returns:
-            bool: True se salvato con successo
-            
-        Autore: Valerio Bignardi
-        Data: 2025-08-28
-        """
-        start_time = time.time()
-        print(f"\n� [FASE 7: SALVATAGGIO] Avvio salvataggio rappresentanti...")
-        
-        try:
-            # 🆕 Crea istanza MongoClassificationReader per salvataggio
-            from mongo_classification_reader import MongoClassificationReader
-            mongo_reader = MongoClassificationReader(tenant=self.tenant)
-            print("✅ [FASE 7: SALVATAGGIO] MongoDB reader creato per tenant")
-            
-            saved_count = 0
-            failed_count = 0
-            total_to_save = sum(len(reps) for reps in representatives.values())
-            
-            print(f"📊 [FASE 7: SALVATAGGIO] Target: {total_to_save} rappresentanti")
-            print(f"🏷️ [FASE 7: SALVATAGGIO] Cluster: {list(representatives.keys())}")
-            
-            # Salva rappresentanti per ogni cluster
-            for cluster_id, cluster_reps in representatives.items():
-                suggested_label = suggested_labels.get(cluster_id, f"Cluster {cluster_id}")
-                
-                print(f"📋 [FASE 7: SALVATAGGIO] Cluster {cluster_id}: {len(cluster_reps)} rappresentanti")
-                print(f"   🏷️ Etichetta: '{suggested_label}'")
-                
-                for rep_data in cluster_reps:
-                    session_id = rep_data.get('session_id')
-                    conversation_text = rep_data.get('testo_completo', '')
-                    
-                    # Prepara metadati cluster per distinguere tipi di sessioni
-                    cluster_metadata = {
-                        'cluster_id': cluster_id,
-                        'is_representative': True,  # ✅ È un rappresentante
-                        'cluster_size': len([1 for label in cluster_labels if label == cluster_id]),
-                        'suggested_label': suggested_label,
-                        'selection_reason': 'cluster_representative'
-                    }
-                    
-                    # Metadati speciali per outlier
-                    if cluster_id == -1:
-                        cluster_metadata['selection_reason'] = 'outlier_representative'
-                        cluster_metadata['is_outlier'] = True
-                    
-                    # 🧹 PULIZIA CRITICA: Applica pulizia caratteri speciali a suggested_label
-                    clean_suggested_label = clean_label_text(suggested_label)
-                    if clean_suggested_label != suggested_label:
-                        print(f"🧹 Suggested label pulita: '{suggested_label}' → '{clean_suggested_label}'")
-                        suggested_label = clean_suggested_label
-                    
-                    # Prepara decision finale per rappresentanti
-                    final_decision = {
-                        'predicted_label': suggested_label,  # Ora è pulita
-                        'confidence': 0.7,  # Confidenza media per clustering
-                        'method': 'supervised_training_clustering',
-                        'reasoning': f'Rappresentante del cluster {cluster_id} selezionato per review umana'
-                    }
-                    
-                    # Salva in MongoDB come "pending review"
-                    success = mongo_reader.save_classification_result(
-                        session_id=session_id,
-                        client_name=self.tenant.tenant_slug,  # 🔧 FIX: usa tenant_slug non tenant_id
-                        final_decision=final_decision,
-                        conversation_text=conversation_text,
-                        needs_review=True,  # ✅ FONDAMENTALE: marca per review
-                        review_reason='supervised_training_representative',
-                        classified_by='supervised_training_pipeline',
-                        notes=f'Rappresentante cluster {cluster_id} per training supervisionato',
-                        cluster_metadata=cluster_metadata
-                    )
-                    
-                    if success:
-                        saved_count += 1
-                    else:
-                        failed_count += 1
-                        print(f"   ❌ ERRORE salvando {session_id}")
-            
-            # 🆕 SALVA ANCHE LE SESSIONI PROPAGATE (non rappresentanti)
-            print(f"📋 [FASE 7: SALVATAGGIO] Salvataggio sessioni propagate...")
-            propagated_count = self._save_propagated_sessions_metadata(
-                sessioni, representatives, cluster_labels, suggested_labels
-            )
-            
-            elapsed_time = time.time() - start_time
-            print(f"✅ [FASE 7: SALVATAGGIO] Completata in {elapsed_time:.2f}s")
-            print(f"� [FASE 7: SALVATAGGIO] Risultati:")
-            print(f"   ✅ Rappresentanti salvati: {saved_count}/{total_to_save}")
-            print(f"   📋 Sessioni propagate: {propagated_count}")
-            print(f"   ❌ Errori: {failed_count}")
-            print(f"   🎯 Review queue popolata: {saved_count + propagated_count} sessioni totali")
-            
-            return saved_count > 0
-            
-        except Exception as e:
-            elapsed_time = time.time() - start_time
-            print(f"❌ [FASE 7: SALVATAGGIO] ERRORE dopo {elapsed_time:.2f}s: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+    # ❌ METODO NON UTILIZZATO - COMMENTATO 2025-09-06
+    # Questo metodo è stato sostituito da _classify_and_save_representatives_post_training()
+    # che viene chiamato DOPO il training ML per salvare rappresentanti con predizioni complete
+    # Il vecchio metodo salvava solo etichette dal clustering PRIMA del training ML
+    # causando il problema di rappresentanti con ml_prediction/llm_prediction = N/A
+    # def _save_representatives_for_review(self, 
+    #                                    sessioni: Dict[str, Dict], 
+    #                                    representatives: Dict[int, List[Dict]], 
+    #                                    suggested_labels: Dict[int, str],
+    #                                    cluster_labels: np.ndarray) -> bool:
+    #     """
+    #     Salva i rappresentanti in MongoDB come "pending review" PRIMA della review umana
+    #     
+    #     Scopo della funzione: Popolare la review queue con rappresentanti, outlier e propagati
+    #     Parametri di input: sessioni, representatives, suggested_labels, cluster_labels
+    #     Parametri di output: success flag
+    #     Valori di ritorno: True se salvato con successo
+    #     Tracciamento aggiornamenti: 2025-08-28 - Fix review queue mancante
+    #     
+    #     Args:
+    #         sessioni: Tutte le sessioni del dataset
+    #         representatives: Dict {cluster_id: [rappresentanti]}
+    #         suggested_labels: Dict {cluster_id: etichetta_suggerita}
+    #         cluster_labels: Array delle etichette cluster per tutte le sessioni
+    #         
+    #     Returns:
+    #         bool: True se salvato con successo
+    #         
+    #     Autore: Valerio Bignardi
+    #     Data: 2025-08-28
+    #     """
+    #     start_time = time.time()
+    #     print(f"\n� [FASE 7: SALVATAGGIO] Avvio salvataggio rappresentanti...")
+    #     
+    #     try:
+    #         # 🆕 Crea istanza MongoClassificationReader per salvataggio
+    #         from mongo_classification_reader import MongoClassificationReader
+    #         mongo_reader = MongoClassificationReader(tenant=self.tenant)
+    #         print("✅ [FASE 7: SALVATAGGIO] MongoDB reader creato per tenant")
+    #         
+    #         saved_count = 0
+    #         failed_count = 0
+    #         total_to_save = sum(len(reps) for reps in representatives.values())
+    #         
+    #         print(f"📊 [FASE 7: SALVATAGGIO] Target: {total_to_save} rappresentanti")
+    #         print(f"🏷️ [FASE 7: SALVATAGGIO] Cluster: {list(representatives.keys())}")
+    #         
+    #         # Salva rappresentanti per ogni cluster
+    #         for cluster_id, cluster_reps in representatives.items():
+    #             suggested_label = suggested_labels.get(cluster_id, f"Cluster {cluster_id}")
+    #             
+    #             print(f"📋 [FASE 7: SALVATAGGIO] Cluster {cluster_id}: {len(cluster_reps)} rappresentanti")
+    #             print(f"   🏷️ Etichetta: '{suggested_label}'")
+    #             
+    #             for rep_data in cluster_reps:
+    #                 session_id = rep_data.get('session_id')
+    #                 conversation_text = rep_data.get('testo_completo', '')
+    #                 
+    #                 # Prepara metadati cluster per distinguere tipi di sessioni
+    #                 cluster_metadata = {
+    #                     'cluster_id': cluster_id,
+    #                     'is_representative': True,  # ✅ È un rappresentante
+    #                     'cluster_size': len([1 for label in cluster_labels if label == cluster_id]),
+    #                     'suggested_label': suggested_label,
+    #                     'selection_reason': 'cluster_representative'
+    #                 }
+    #                 
+    #                 # Metadati speciali per outlier
+    #                 if cluster_id == -1:
+    #                     cluster_metadata['selection_reason'] = 'outlier_representative'
+    #                     cluster_metadata['is_outlier'] = True
+    #                 
+    #                 # 🧹 PULIZIA CRITICA: Applica pulizia caratteri speciali a suggested_label
+    #                 clean_suggested_label = clean_label_text(suggested_label)
+    #                 if clean_suggested_label != suggested_label:
+    #                     print(f"🧹 Suggested label pulita: '{suggested_label}' → '{clean_suggested_label}'")
+    #                     suggested_label = clean_suggested_label
+    #                 
+    #                 # Prepara decision finale per rappresentanti
+    #                 final_decision = {
+    #                     'predicted_label': suggested_label,  # Ora è pulita
+    #                     'confidence': 0.7,  # Confidenza media per clustering
+    #                     'method': 'supervised_training_clustering',
+    #                     'reasoning': f'Rappresentante del cluster {cluster_id} selezionato per review umana'
+    #                 }
+    #                 
+    #                 # Salva in MongoDB come "pending review"
+    #                 success = mongo_reader.save_classification_result(
+    #                     session_id=session_id,
+    #                     client_name=self.tenant.tenant_slug,  # 🔧 FIX: usa tenant_slug non tenant_id
+    #                     final_decision=final_decision,
+    #                     conversation_text=conversation_text,
+    #                     needs_review=True,  # ✅ FONDAMENTALE: marca per review
+    #                     review_reason='supervised_training_representative',
+    #                     classified_by='supervised_training_pipeline',
+    #                     notes=f'Rappresentante cluster {cluster_id} per training supervisionato',
+    #                     cluster_metadata=cluster_metadata
+    #                 )
+    #                 
+    #                 if success:
+    #                     saved_count += 1
+    #                 else:
+    #                     failed_count += 1
+    #                     print(f"   ❌ ERRORE salvando {session_id}")
+    #         
+    #         # 🆕 SALVA ANCHE LE SESSIONI PROPAGATE (non rappresentanti)
+    #         print(f"📋 [FASE 7: SALVATAGGIO] Salvataggio sessioni propagate...")
+    #         propagated_count = self._save_propagated_sessions_metadata(
+    #             sessioni, representatives, cluster_labels, suggested_labels
+    #         )
+    #         
+    #         elapsed_time = time.time() - start_time
+    #         print(f"✅ [FASE 7: SALVATAGGIO] Completata in {elapsed_time:.2f}s")
+    #         print(f"� [FASE 7: SALVATAGGIO] Risultati:")
+    #         print(f"   ✅ Rappresentanti salvati: {saved_count}/{total_to_save}")
+    #         print(f"   📋 Sessioni propagate: {propagated_count}")
+    #         print(f"   ❌ Errori: {failed_count}")
+    #         print(f"   🎯 Review queue popolata: {saved_count + propagated_count} sessioni totali")
+    #         
+    #         return saved_count > 0
+    #         
+    #     except Exception as e:
+    #         elapsed_time = time.time() - start_time
+    #         print(f"❌ [FASE 7: SALVATAGGIO] ERRORE dopo {elapsed_time:.2f}s: {e}")
+    #         import traceback
+    #         traceback.print_exc()
+    #         return False
     
     def _determine_propagated_status(self, 
                                    cluster_representatives: List[Dict],
@@ -1590,7 +1600,8 @@ class EndToEndPipeline:
                 'propagated_label': most_voted_label,
                 'reason': f'auto_classified_despite_disagreement_{int(consensus_ratio*100)}%'
             }
-            
+    
+
     def _save_propagated_sessions_metadata(self, 
                                          sessioni: Dict[str, Dict],
                                          representatives: Dict[int, List[Dict]], 
@@ -2057,6 +2068,11 @@ class EndToEndPipeline:
                 )
                 print(f"   ✅ BERTopic provider iniettato nell'ensemble classifier")
                 
+                # 🚀 OTTIMIZZAZIONE: Crea cache features ML per evitare ricalcoli
+                print(f"🏗️ Creazione cache features ML per {len(session_texts)} sessioni...")
+                self._create_ml_features_cache(session_ids, session_texts, ml_features)
+                print(f"✅ Cache features ML creata - pronta per predizioni ottimizzate")
+                
             except Exception as e:
                 print(f"⚠️ Errore nell'utilizzo BERTopic pre-addestrato: {e}")
                 print(f"   🔄 Proseguo con sole embeddings LaBSE")
@@ -2231,12 +2247,231 @@ class EndToEndPipeline:
         else:
             metrics['interactive_review'] = False
         
+        # 🆕 CLASSIFICAZIONE E SALVATAGGIO RAPPRESENTANTI POST-TRAINING
+        print(f"\n🎯 CLASSIFICAZIONE RAPPRESENTANTI POST-TRAINING")
+        representatives_saved = self._classify_and_save_representatives_post_training(
+            sessioni, representatives, suggested_labels, cluster_labels, reviewed_labels
+        )
+        
+        if representatives_saved:
+            print(f"✅ Rappresentanti classificati e salvati con predizioni ML+LLM complete")
+            metrics.update({
+                'representatives_classified_post_training': True,
+                'representatives_with_ml_llm_predictions': True
+            })
+        else:
+            print(f"⚠️ Errore nella classificazione rappresentanti post-training")
+            metrics.update({
+                'representatives_classified_post_training': False,
+                'representatives_with_ml_llm_predictions': False
+            })
+
         print(f"✅ Classificatore allenato e salvato come '{model_name}'")
         return metrics
+    
+    def _classify_and_save_representatives_post_training(self,
+                                                       sessioni: Dict[str, Dict],
+                                                       representatives: Dict[int, List[Dict]],
+                                                       suggested_labels: Dict[int, str],
+                                                       cluster_labels: np.ndarray,
+                                                       reviewed_labels: Dict[int, str]) -> bool:
+        """
+        Classifica e salva i rappresentanti dei cluster DOPO il training ML
+        con predizioni complete ML+LLM invece di sole etichette suggerite
+        
+        Scopo della funzione: Popolare review queue con rappresentanti classificati
+        Parametri di input: sessioni, representatives, suggested_labels, cluster_labels, reviewed_labels
+        Parametri di output: success flag
+        Valori di ritorno: True se classificato e salvato con successo
+        Tracciamento aggiornamenti: 2025-09-06 - Valerio Bignardi - Fix N/A predictions
+        
+        Args:
+            sessioni: Tutte le sessioni del dataset
+            representatives: Dict {cluster_id: [rappresentanti]}
+            suggested_labels: Dict {cluster_id: etichetta_suggerita}
+            cluster_labels: Array delle etichette cluster per tutte le sessioni
+            reviewed_labels: Dict {cluster_id: etichetta_finale_da_review_umano}
+            
+        Returns:
+            bool: True se classificato e salvato con successo
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-06
+        """
+        start_time = time.time()
+        print(f"🎯 [CLASSIFICAZIONE RAPPRESENTANTI] Avvio classificazione completa...")
+        
+        try:
+            # Crea istanza MongoClassificationReader per salvataggio
+            from mongo_classification_reader import MongoClassificationReader
+            mongo_reader = MongoClassificationReader(tenant=self.tenant)
+            print("✅ [CLASSIFICAZIONE RAPPRESENTANTI] MongoDB reader creato per tenant")
+            
+            saved_count = 0
+            failed_count = 0
+            total_to_classify = sum(len(reps) for reps in representatives.values())
+            
+            print(f"📊 [CLASSIFICAZIONE RAPPRESENTANTI] Target: {total_to_classify} rappresentanti")
+            print(f"🏷️ [CLASSIFICAZIONE RAPPRESENTANTI] Cluster: {list(representatives.keys())}")
+            
+            # Classifica e salva rappresentanti per ogni cluster
+            for cluster_id, cluster_reps in representatives.items():
+                # Determina etichetta finale (reviewed ha priorità su suggested)
+                if cluster_id in reviewed_labels:
+                    final_label = reviewed_labels[cluster_id]
+                    label_source = "human_reviewed"
+                else:
+                    final_label = suggested_labels.get(cluster_id, 'altro')
+                    label_source = "clustering_suggested"
+                
+                print(f"🎯 [CLUSTER {cluster_id}] Classificazione {len(cluster_reps)} rappresentanti")
+                print(f"   🏷️ Etichetta finale: '{final_label}' (fonte: {label_source})")
+                
+                for rep_data in cluster_reps:
+                    session_id = rep_data.get('session_id')
+                    conversation_text = rep_data.get('testo_completo', '')
+                    
+                    try:
+                        # 🎯 CLASSIFICAZIONE COMPLETA CON ENSEMBLE ML+LLM
+                        print(f"   🧠 Classificando rappresentante {session_id}...")
+                        
+                        # Usa cache ML features se disponibili
+                        cached_ml_features = self._get_cached_ml_features(session_id)
+                        
+                        # Classificazione ensemble con features pre-calcolate
+                        prediction_result = self.ensemble_classifier.predict_with_ensemble(
+                            conversation_text,
+                            return_details=True,
+                            embedder=self._get_embedder(),
+                            ml_features_precalculated=cached_ml_features
+                        )
+                        
+                        # Estrai predizioni ML e LLM separate
+                        ml_result = prediction_result.get('ml_prediction', {})
+                        llm_result = prediction_result.get('llm_prediction', {})
+                        
+                        # Crea final_decision con etichetta reviewed/suggested
+                        final_decision = {
+                            'predicted_label': final_label,
+                            'confidence': 0.8,  # Confidenza alta per post-training
+                            'method': f'supervised_training_post_training_{label_source}',
+                            'reasoning': f'Rappresentante del cluster {cluster_id} classificato dopo training supervisionato'
+                        }
+                        
+                        # Prepara metadati cluster
+                        cluster_metadata = {
+                            'cluster_id': cluster_id,
+                            'is_representative': True,
+                            'cluster_size': len([1 for label in cluster_labels if label == cluster_id]),
+                            'suggested_label': suggested_labels.get(cluster_id, 'altro'),
+                            'final_label': final_label,
+                            'label_source': label_source,
+                            'selection_reason': 'cluster_representative_post_training'
+                        }
+                        
+                        # Metadati speciali per outlier
+                        if cluster_id == -1:
+                            cluster_metadata['selection_reason'] = 'outlier_representative_post_training'
+                            cluster_metadata['is_outlier'] = True
+                        
+                        # 🎯 SALVATAGGIO COMPLETO CON ML+LLM PREDICTIONS
+                        success = mongo_reader.save_classification_result(
+                            session_id=session_id,
+                            client_name=self.tenant.tenant_slug,
+                            ml_result=ml_result,  # ✅ INCLUSO: Predizione ML
+                            llm_result=llm_result,  # ✅ INCLUSO: Predizione LLM
+                            final_decision=final_decision,
+                            conversation_text=conversation_text,
+                            needs_review=True,  # ✅ FONDAMENTALE: marca per review
+                            review_reason='supervised_training_representative_post_training',
+                            classified_by='supervised_training_pipeline_post_training',
+                            notes=f'Rappresentante cluster {cluster_id} classificato DOPO training supervisionato',
+                            cluster_metadata=cluster_metadata
+                        )
+                        
+                        if success:
+                            saved_count += 1
+                            print(f"   ✅ {session_id}: ML={ml_result.get('predicted_label', 'N/A')} LLM={llm_result.get('predicted_label', 'N/A')} Final={final_label}")
+                        else:
+                            failed_count += 1
+                            print(f"   ❌ ERRORE salvando {session_id}")
+                            
+                    except Exception as rep_error:
+                        failed_count += 1
+                        print(f"   ❌ ERRORE classificando {session_id}: {rep_error}")
+                        continue
+            
+            elapsed_time = time.time() - start_time
+            print(f"✅ [CLASSIFICAZIONE RAPPRESENTANTI] Completata in {elapsed_time:.2f}s")
+            print(f"📊 [CLASSIFICAZIONE RAPPRESENTANTI] Risultati:")
+            print(f"   ✅ Rappresentanti classificati e salvati: {saved_count}/{total_to_classify}")
+            print(f"   ❌ Errori: {failed_count}")
+            print(f"   🎯 Review queue popolata con predizioni ML+LLM complete")
+            
+            return saved_count > 0
+            
+        except Exception as e:
+            elapsed_time = time.time() - start_time
+            print(f"❌ [CLASSIFICAZIONE RAPPRESENTANTI] ERRORE dopo {elapsed_time:.2f}s: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
     
     # RIMOSSA: _allena_classificatore_fallback() 
     # Il training supervisionato ora richiede clustering riuscito per funzionare.
     # In caso di clustering fallito, il processo si interrompe con errore esplicativo.
+    
+    def _create_ml_features_cache(self, session_ids: List[str], session_texts: List[str], 
+                                ml_features: np.ndarray) -> None:
+        """
+        Crea cache delle features ML per evitare ricalcolo BERTopic durante le predizioni
+        
+        Args:
+            session_ids: Lista degli ID delle sessioni
+            session_texts: Lista dei testi delle sessioni  
+            ml_features: Features ML già calcolate (embeddings + BERTopic)
+            
+        Autore: Valerio Bignardi
+        Data creazione: 2025-09-06
+        Ultima modifica: 2025-09-06 - Ottimizzazione BERTopic
+        """
+        try:
+            # Pulisci cache precedente
+            self._ml_features_cache.clear()
+            
+            # Popola cache con nuove features
+            for i, session_id in enumerate(session_ids):
+                if i < len(ml_features):
+                    self._ml_features_cache[session_id] = ml_features[i:i+1]  # Mantieni 2D
+                    
+            # Aggiorna timestamp validità
+            from datetime import datetime
+            self._cache_valid_timestamp = datetime.now()
+            
+            print(f"🏗️ Cache ML features aggiornata:")
+            print(f"   📊 {len(self._ml_features_cache)} sessioni cached")
+            print(f"   🔧 Feature shape: {next(iter(self._ml_features_cache.values())).shape}")
+            print(f"   ⏰ Timestamp: {self._cache_valid_timestamp}")
+            
+        except Exception as e:
+            print(f"⚠️ Errore creazione cache ML features: {e}")
+            self._ml_features_cache.clear()
+    
+    def _get_cached_ml_features(self, session_id: str) -> Optional[np.ndarray]:
+        """
+        Recupera features ML cached per una sessione
+        
+        Args:
+            session_id: ID della sessione
+            
+        Returns:
+            Features ML cached o None se non disponibili
+            
+        Autore: Valerio Bignardi
+        Data creazione: 2025-09-06
+        Ultima modifica: 2025-09-06 - Ottimizzazione BERTopic
+        """
+        return self._ml_features_cache.get(session_id)
     
     def classifica_e_salva_sessioni(self,
                                    sessioni: Dict[str, Dict],
@@ -2338,6 +2573,76 @@ class EndToEndPipeline:
             self.tag_db.connetti()
         except Exception as e:
             print(f"⚠️ Errore connessione TAG DB (ignorabile): {e}")
+        
+        # 🆕 CONTROLLO E TRAINING ML ENSEMBLE SE NECESSARIO
+        print(f"\n🔍 VERIFICA STATO ML ENSEMBLE...")
+        
+        # Verifica se ML ensemble è già allenato
+        ml_ensemble_trained = (
+            hasattr(self.ensemble_classifier, 'ml_ensemble') and 
+            self.ensemble_classifier.ml_ensemble is not None and
+            hasattr(self.ensemble_classifier.ml_ensemble, 'classes_')
+        )
+        
+        print(f"📊 ML Ensemble già allenato: {ml_ensemble_trained}")
+        
+        if not ml_ensemble_trained:
+            print(f"🚨 ML ENSEMBLE NON ALLENATO - Avvio training automatico...")
+            print(f"📋 Sessioni disponibili per training: {len(sessioni)}")
+            
+            if len(sessioni) < 10:
+                print(f"⚠️ Dataset piccolo per training ML ({len(sessioni)} < 10)")
+                print(f"⚠️ Training ML potrebbe non essere stabile")
+            
+            try:
+                # Estrae cluster_labels se non disponibili (necessari per training)
+                if not hasattr(self, '_last_cluster_labels') or self._last_cluster_labels is None:
+                    print(f"🔄 Cluster labels non disponibili - eseguo clustering rapido...")
+                    embeddings, cluster_labels, representatives, suggested_labels = self.esegui_clustering(sessioni)
+                    print(f"✅ Clustering completato: {len(set(cluster_labels))} cluster")
+                else:
+                    cluster_labels = self._last_cluster_labels
+                    representatives = getattr(self, '_last_representatives', {})
+                    suggested_labels = getattr(self, '_last_suggested_labels', {})
+                    print(f"✅ Riutilizzo cluster labels esistenti")
+                
+                # Allena il classificatore ML
+                print(f"🎓 Avvio training ML ensemble...")
+                training_metrics = self.allena_classificatore(
+                    sessioni, 
+                    cluster_labels, 
+                    representatives, 
+                    suggested_labels,
+                    interactive_mode=False  # Non interattivo per post-training
+                )
+                
+                print(f"✅ Training ML ensemble completato!")
+                print(f"📊 Metriche training: {training_metrics.get('ml_ensemble', {})}")
+                
+                # Verifica che il training sia andato a buon fine
+                ml_ensemble_trained_after = (
+                    hasattr(self.ensemble_classifier, 'ml_ensemble') and 
+                    self.ensemble_classifier.ml_ensemble is not None and
+                    hasattr(self.ensemble_classifier.ml_ensemble, 'classes_')
+                )
+                
+                if ml_ensemble_trained_after:
+                    print(f"✅ TRAINING VERIFICATO - ML ensemble ora disponibile")
+                else:
+                    print(f"❌ TRAINING FALLITO - ML ensemble ancora non disponibile")
+                    print(f"⚠️ Procedo con solo LLM...")
+                
+            except Exception as e:
+                print(f"❌ ERRORE nel training automatico ML ensemble: {e}")
+                print(f"📊 Tipo errore: {type(e).__name__}")
+                import traceback
+                print(f"📊 Traceback completo:")
+                traceback.print_exc()
+                print(f"⚠️ Procedo con classificazione solo LLM...")
+        else:
+            print(f"✅ ML Ensemble già allenato - procedo con classificazione completa")
+            
+        print(f"🔍 [/VERIFICA ML ENSEMBLE]\n")
         
         # Prepara dati per classificazione
         session_ids = list(sessioni.keys())
@@ -2543,6 +2848,8 @@ class EndToEndPipeline:
                     if clean_predicted_label != predicted_label:
                         print(f"🧹 Label pulita (ensemble): '{predicted_label}' → '{clean_predicted_label}'")
                         predicted_label = clean_predicted_label
+                        # 🔧 FIX CRITICO: Aggiorna anche il dizionario prediction
+                        prediction['predicted_label'] = clean_predicted_label
                     
                     # 🆕 VALIDAZIONE "ALTRO" CON LLM + BERTopic + SIMILARITÀ
                     print (f"   🔍 Verifica necessità validazione 'altro' per sessione {i+1}...")
@@ -2567,6 +2874,11 @@ class EndToEndPipeline:
                                     predicted_label = clean_validated_label
                                     confidence = validated_confidence
                                     method = f"{method}_ALTRO_VAL"  # Marca che è stato validato
+                                    
+                                    # 🔧 FIX CRITICO: Aggiorna anche il dizionario prediction
+                                    prediction['predicted_label'] = clean_validated_label
+                                    prediction['confidence'] = validated_confidence
+                                    # Non aggiornare method nel prediction per mantenere coerenza
                                     
                                     if i < 10:  # Debug per le prime 10
                                         print(f"🔍 Sessione {i+1}: ALTRO→'{clean_validated_label}' (path: {validation_info.get('validation_path', 'unknown')})")
@@ -2601,6 +2913,8 @@ class EndToEndPipeline:
                     if clean_predicted_label != predicted_label:
                         print(f"🧹 Label pulita (ML_AUTO): '{predicted_label}' → '{clean_predicted_label}'")
                         predicted_label = clean_predicted_label
+                        # 🔧 FIX CRITICO: Aggiorna anche il dizionario prediction
+                        prediction['predicted_label'] = clean_predicted_label
                     
                     # 🆕 VALIDAZIONE "ALTRO" ANCHE PER ML_AUTO 
                     if predicted_label == 'altro' and hasattr(self, 'interactive_trainer') and self.interactive_trainer.altro_validator:
@@ -2623,6 +2937,11 @@ class EndToEndPipeline:
                                     predicted_label = clean_validated_label
                                     confidence = validated_confidence
                                     method = f"{method}_ALTRO_VAL"  # Marca che è stato validato
+                                    
+                                    # 🔧 FIX CRITICO: Aggiorna anche il dizionario prediction
+                                    prediction['predicted_label'] = clean_validated_label
+                                    prediction['confidence'] = validated_confidence
+                                    # Non aggiornare method nel prediction per mantenere coerenza
                                     
                                     if i < 10:  # Debug per le prime 10
                                         print(f"🔍 Sessione {i+1}: ALTRO→'{clean_validated_label}' (path: {validation_info.get('validation_path', 'unknown')})")
@@ -3526,41 +3845,39 @@ class EndToEndPipeline:
             debug_logger.info(f"   Sessioni per review: {selection_stats['total_sessions_for_review']}")
             debug_logger.info(f"   Cluster esclusi: {selection_stats['excluded_clusters']}")
 
-            # 🆕 FASE 3.5: SALVATAGGIO RAPPRESENTANTI IN MONGODB PER REVIEW QUEUE
-            print(f"\n💾 FASE 3.5: POPOLAMENTO REVIEW QUEUE")
-            print(f"🚨 [DEBUG] AVVIO POPOLAMENTO REVIEW QUEUE")
+            # 4. Classificazione completa con ensemble ML+LLM
+            print(f"\n📊 FASE 4: CLASSIFICAZIONE COMPLETA CON ENSEMBLE ML+LLM")
+            print(f"🚨 [DEBUG] AVVIO CLASSIFICAZIONE ENSEMBLE COMPLETA")
             
-            debug_logger.info(f"📊 AVVIO FASE 3.5 - Popolamento review queue")
+            debug_logger.info(f"📊 AVVIO FASE 4 - Classificazione ensemble completa")
             
-            # Salva TUTTI i rappresentanti (non solo quelli limitati) per review queue completa
-            save_success = self._save_representatives_for_review(
-                sessioni, representatives, suggested_labels, cluster_labels
+            # Usa la funzione esistente che fa tutto: ensemble, salvataggio, outlier, propagazione
+            classification_results = self.classifica_e_salva_sessioni(
+                sessioni=sessioni,
+                batch_size=32,
+                use_ensemble=True,
+                optimize_clusters=True,
+                force_review=False
             )
             
-            if save_success:
-                print(f"✅ Review queue popolata con successo")
-                print(f"   🔍 L'interfaccia React ora può mostrare rappresentanti, outlier e propagati")
-                print(f"   🎯 Filtri disponibili: rappresentanti, outlier, propagati")
-            else:
-                print(f"⚠️ Warning: Impossibile popolare review queue - continuo con training")
+            print(f"✅ Classificazione ensemble completa:")
+            print(f"  � Sessioni processate: {classification_results.get('total_sessions', 0)}")
+            print(f"  💾 Salvate con successo: {classification_results.get('saved_successfully', 0)}")
+            print(f"  🎯 Alta confidenza: {classification_results.get('high_confidence', 0)}")
+            print(f"  ⚠️ Bassa confidenza: {classification_results.get('low_confidence', 0)}")
+            print(f"🚨 [DEBUG] FASE 4 COMPLETATA - Classificazione completa")
             
-            print(f"🚨 [DEBUG] FASE 3.5 COMPLETATA - Review queue popolata")
-
-            # 4. Training interattivo con rappresentanti selezionati
-            print(f"\n📊 FASE 4: TRAINING SUPERVISIONATO")
-            print(f"🚨🚨🚨 [DEBUG CRITICO] AVVIO FASE 4 - TRAINING SUPERVISIONATO")
-            print(f"🚨🚨🚨 [DEBUG CRITICO] Sto per chiamare allena_classificatore()")
-            print(f"🚨🚨🚨 [DEBUG CRITICO] Parametri per allena_classificatore:")
-            print(f"    - sessioni: {len(sessioni)} elementi")
-            print(f"    - cluster_labels: {len(cluster_labels)} elementi")
-            print(f"    - limited_representatives: {len(limited_representatives)} cluster")
-            print(f"    - suggested_labels: {len(suggested_labels)} elementi")
-            print(f"    - interactive_mode: True")
+            debug_logger.info(f"📊 FASE 4 COMPLETATA - Classificazione completa")
+            debug_logger.info(f"   Sessioni processate: {classification_results.get('total_sessions', 0)}")
+            debug_logger.info(f"   Salvate con successo: {classification_results.get('saved_successfully', 0)}")
             
-            training_metrics = self.allena_classificatore(
-                sessioni, cluster_labels, limited_representatives, suggested_labels, 
-                interactive_mode=True
-            )
+            # Aggiorna le metriche di training per compatibilità
+            training_metrics = {
+                'classification_stats': classification_results,
+                'ensemble_used': True,
+                'interactive_training': False,
+                'phase': 'complete_classification_with_ensemble'
+            }
             
             print(f"🚨🚨🚨 [DEBUG CRITICO] allena_classificatore() COMPLETATO!")
             print(f"🚨🚨🚨 [DEBUG CRITICO] Training metrics ricevuti: {type(training_metrics)}")
@@ -4408,10 +4725,16 @@ class EndToEndPipeline:
                     
                     # Classifica il rappresentante con ensemble ML+LLM
                     try:
+                        # 🚀 OTTIMIZZAZIONE: Usa features ML cached se disponibili
+                        cached_features = self._get_cached_ml_features(rep['session_id'])
+                        if cached_features is not None:
+                            print(f"   ✅ Usando features cached per rappresentante {rep['session_id']}")
+                        
                         prediction = self.ensemble_classifier.predict_with_ensemble(
                             rep_text,
                             return_details=True,
-                            embedder=self.embedder
+                            embedder=self.embedder,
+                            ml_features_precalculated=cached_features
                         )
                         prediction['representative_session_id'] = rep['session_id']
                         prediction['cluster_id'] = cluster_id
@@ -4598,11 +4921,17 @@ class EndToEndPipeline:
                     
                     # 🔧 FIX CRITICO: OUTLIER DEVONO USARE ENSEMBLE ESATTAMENTE COME I RAPPRESENTANTI
                     try:
+                        # 🚀 OTTIMIZZAZIONE: Usa features ML cached se disponibili per outlier
+                        cached_features = self._get_cached_ml_features(session_id)
+                        if cached_features is not None:
+                            print(f"   ✅ Usando features cached per outlier {session_id}")
+                        
                         # ✅ CLASSIFICAZIONE ENSEMBLE DIRETTA per outlier
                         prediction = self.ensemble_classifier.predict_with_ensemble(
                             session_texts[i],
                             return_details=True,
-                            embedder=self.embedder
+                            embedder=self.embedder,
+                            ml_features_precalculated=cached_features
                         )
                         
                         # ✅ PRESERVA metodo ensemble originale per final_decision
@@ -4711,12 +5040,17 @@ class EndToEndPipeline:
             
             # Fallback: classificazione standard di tutte le sessioni
             predictions = []
-            for text in session_texts:
+            for i, text in enumerate(session_texts):
                 try:
+                    # 🚀 OTTIMIZZAZIONE: Usa features cached anche nel fallback se disponibili  
+                    session_id = session_ids[i] if i < len(session_ids) else f"fallback_{i}"
+                    cached_features = self._get_cached_ml_features(session_id)
+                    
                     pred = self.ensemble_classifier.predict_with_ensemble(
                         text, 
                         return_details=True,
-                        embedder=self.embedder
+                        embedder=self.embedder,
+                        ml_features_precalculated=cached_features
                     )
                     pred['method'] = 'OPTIMIZE_FALLBACK'
                     pred['classified_by'] = 'fallback_ensemble'  # ✅ FIX: aggiungo classified_by

@@ -9,6 +9,10 @@ import json
 import sys
 import os
 from typing import Dict, List, Any, Optional, Tuple
+
+# Import della funzione di pulizia (import assoluto)
+sys.path.append(os.path.dirname(__file__))
+from intelligent_classifier import clean_label_text
 from datetime import datetime
 
 # Aggiungi il path per importare il modulo di supervisione umana
@@ -448,7 +452,8 @@ class AdvancedEnsembleClassifier:
         print(f"🔍 Training ML arricchito: {len([t for t in enhanced_texts if '[CATEGORIA:' in t])}/{len(texts)} testi con descrizioni")
         return enhanced_texts
     
-    def predict_with_ensemble(self, text: str, return_details: bool = False, embedder=None) -> Dict[str, Any]:
+    def predict_with_ensemble(self, text: str, return_details: bool = False, embedder=None, 
+                            ml_features_precalculated=None) -> Dict[str, Any]:
         """
         Predizione ensemble combinando LLM e ML
         
@@ -456,9 +461,14 @@ class AdvancedEnsembleClassifier:
             text: Testo da classificare
             return_details: Se True, ritorna dettagli di ogni classificatore
             embedder: Embedder già inizializzato da riutilizzare (evita CUDA OOM)
+            ml_features_precalculated: Features ML pre-calcolate (incluse BERTopic) per evitare ricalcoli
             
         Returns:
             Risultato della predizione ensemble
+            
+        Autore: Valerio Bignardi
+        Data creazione: 2025-09-06
+        Ultima modifica: 2025-09-06 - Aggiunta ottimizzazione BERTopic pre-calcolato
         """
         results = {
             'text_preview': text[:100] + '...' if len(text) > 100 else text,
@@ -481,15 +491,23 @@ class AdvancedEnsembleClassifier:
             print(f"   📊 LLM disponibile - procedo con classificazione")
             try:
                 llm_result = self.llm_classifier.classify_with_motivation(text)
+                
+                # 🧹 PULIZIA CRITICA: Applica pulizia caratteri speciali alla label LLM
+                raw_predicted_label = llm_result.predicted_label
+                clean_predicted_label = clean_label_text(raw_predicted_label)
+                
+                if clean_predicted_label != raw_predicted_label:
+                    print(f"🧹 LLM Label pulita: '{raw_predicted_label}' → '{clean_predicted_label}'")
+                
                 # Gestisci correttamente l'oggetto ClassificationResult
                 llm_prediction = {
-                    'predicted_label': llm_result.predicted_label,
+                    'predicted_label': clean_predicted_label,  # Usa la label pulita
                     'confidence': llm_result.confidence,
                     'motivation': llm_result.motivation
                 }
                 llm_confidence = llm_result.confidence
                 llm_available = True
-                print(f"   📊 LLM Predizione: '{llm_result.predicted_label}' (conf: {llm_result.confidence:.3f})")
+                print(f"   📊 LLM Predizione: '{clean_predicted_label}' (conf: {llm_result.confidence:.3f})")
                 print(f"   ✅ LLM Prediction creata con successo")
             except Exception as e:
                 print(f"❌ Errore LLM: {e}")
@@ -517,41 +535,49 @@ class AdvancedEnsembleClassifier:
         if self.ml_ensemble is not None:
             print(f"   📊 ML Ensemble disponibile - procedo con predizione")
             try:
-                # Usa l'embedder passato come parametro o creane uno nuovo solo se necessario
-                if embedder is not None:
-                    embedding = embedder.encode([text])
-                    print(f"   📊 Embedding generato - shape: {embedding.shape}")
+                # 🚀 OTTIMIZZAZIONE: Usa features pre-calcolate se disponibili
+                if ml_features_precalculated is not None:
+                    ml_features = ml_features_precalculated
+                    print(f"   ✅ Usando ml_features PRE-CALCOLATE - shape: {ml_features.shape}")
+                    print(f"   🚀 OTTIMIZZAZIONE: Evito ricalcolo BERTopic (già processato nella pipeline)")
                 else:
-                    print("⚠️ Nessun embedder fornito - usando servizio Docker obbligatorio")
-                    from EmbeddingEngine.labse_remote_client import LaBSERemoteClient
-                    temp_embedder = LaBSERemoteClient(
-                        service_url="http://localhost:8081",
-                        fallback_local=False  # 🚫 NESSUN FALLBACK LOCALE
-                    )
-                    embedding = temp_embedder.encode([text])
-                    print(f"   📊 Embedding generato (Docker remoto) - shape: {embedding.shape}")
-                
-                
-                # Applica feature augmentation BERTopic se disponibile
-                ml_features = embedding
-                if self.bertopic_provider is not None:
-                    print(f"   📊 BERTopic provider disponibile - applico feature augmentation")
-                    try:
-                        topic_feats = self.bertopic_provider.transform(
-                            [text], embeddings=embedding,
-                            top_k=self.bertopic_top_k,
-                            return_one_hot=self.bertopic_return_one_hot
+                    # Fallback: calcolo tradizionale per compatibilità
+                    print(f"   ⚠️ ml_features_precalculated=None - procedo con calcolo tradizionale")
+                    
+                    # Usa l'embedder passato come parametro o creane uno nuovo solo se necessario
+                    if embedder is not None:
+                        embedding = embedder.encode([text])
+                        print(f"   📊 Embedding generato - shape: {embedding.shape}")
+                    else:
+                        print("⚠️ Nessun embedder fornito - usando servizio Docker obbligatorio")
+                        from EmbeddingEngine.labse_remote_client import LaBSERemoteClient
+                        temp_embedder = LaBSERemoteClient(
+                            service_url="http://localhost:8081",
+                            fallback_local=False  # 🚫 NESSUN FALLBACK LOCALE
                         )
-                        parts = [embedding, topic_feats.get('topic_probas')]
-                        if self.bertopic_return_one_hot and 'one_hot' in topic_feats:
-                            parts.append(topic_feats['one_hot'])
-                        ml_features = np.concatenate([p for p in parts if p is not None], axis=1)
-                        print(f"   📊 Features augmented - shape finale: {ml_features.shape}")
-                    except Exception as be:
-                        print(f"⚠️ BERTopic transform fallita: {be}. Uso solo embedding base.")
-                        ml_features = embedding
-                else:
-                    print(f"   📊 Nessun BERTopic provider - uso solo embedding base")
+                        embedding = temp_embedder.encode([text])
+                        print(f"   📊 Embedding generato (Docker remoto) - shape: {embedding.shape}")
+                    
+                    # Applica feature augmentation BERTopic se disponibile (FALLBACK)
+                    ml_features = embedding
+                    if self.bertopic_provider is not None:
+                        print(f"   📊 BERTopic provider disponibile - applico feature augmentation (FALLBACK)")
+                        try:
+                            topic_feats = self.bertopic_provider.transform(
+                                [text], embeddings=embedding,
+                                top_k=self.bertopic_top_k,
+                                return_one_hot=self.bertopic_return_one_hot
+                            )
+                            parts = [embedding, topic_feats.get('topic_probas')]
+                            if self.bertopic_return_one_hot and 'one_hot' in topic_feats:
+                                parts.append(topic_feats['one_hot'])
+                            ml_features = np.concatenate([p for p in parts if p is not None], axis=1)
+                            print(f"   📊 Features augmented (FALLBACK) - shape finale: {ml_features.shape}")
+                        except Exception as be:
+                            print(f"⚠️ BERTopic feature augmentation fallita: {be}. Uso solo embedding base per ML prediction.")
+                            ml_features = embedding
+                    else:
+                        print(f"   📊 Nessun BERTopic provider - uso solo embedding base (FALLBACK)")
                 
                 # Verifica che ml_ensemble sia addestrato
                 if hasattr(self.ml_ensemble, 'classes_'):
@@ -565,9 +591,16 @@ class AdvancedEnsembleClassifier:
                     
                     print(f"   📊 ML Predizione: '{ml_label}' (conf: {ml_confidence:.3f})")
                     
+                    # 🧹 PULIZIA CRITICA: Applica pulizia caratteri speciali alla label ML  
+                    raw_ml_label = convert_numpy_types(ml_label)
+                    clean_ml_label = clean_label_text(raw_ml_label)
+                    
+                    if clean_ml_label != raw_ml_label:
+                        print(f"🧹 ML Label pulita: '{raw_ml_label}' → '{clean_ml_label}'")
+                    
                     # CONVERSIONE NUMPY -> PYTHON per evitare errori JSON serialization
                     ml_prediction = {
-                        'predicted_label': convert_numpy_types(ml_label),
+                        'predicted_label': clean_ml_label,  # Usa la label pulita
                         'confidence': convert_numpy_types(ml_confidence),
                         'probabilities': convert_numpy_types(dict(zip(self.ml_ensemble.classes_, ml_proba)))
                     }
@@ -709,8 +742,11 @@ class AdvancedEnsembleClassifier:
         
         if max_confidence < disagreement_config['low_confidence_threshold']:
             # Confidence troppo bassa → Tag ALTRO
+            # 🧹 PULIZIA CRITICA: Applica pulizia anche al tag ALTRO
+            clean_altro_tag = clean_label_text(disagreement_config['low_confidence_tag'])
+            
             return {
-                'predicted_label': convert_numpy_types(disagreement_config['low_confidence_tag']),
+                'predicted_label': convert_numpy_types(clean_altro_tag),
                 'ensemble_confidence': convert_numpy_types(max_confidence * 0.6),  # Penalità maggiore
                 'agreement': False,
                 'human_intervention': False,
@@ -739,8 +775,11 @@ class AdvancedEnsembleClassifier:
             
             final_confidence = (llm_conf * llm_weight + ml_conf * ml_weight)
             
+            # 🧹 PULIZIA CRITICA: Applica pulizia alla label di accordo
+            clean_agreement_label = clean_label_text(llm_label)
+            
             return {
-                'predicted_label': convert_numpy_types(llm_label),
+                'predicted_label': convert_numpy_types(clean_agreement_label),
                 'ensemble_confidence': convert_numpy_types(final_confidence),
                 'agreement': True,
                 'human_intervention': False,
@@ -786,8 +825,14 @@ class AdvancedEnsembleClassifier:
             decision_reason = 'Default: LLM preferito per casi nuovi/complessi'
         
         # Prepara risultato
+        # 🧹 PULIZIA CRITICA: Applica pulizia finale alla label dell'ensemble
+        clean_final_label = clean_label_text(convert_numpy_types(final_label))
+        
+        if clean_final_label != final_label:
+            print(f"🧹 Ensemble Label finale pulita: '{final_label}' → '{clean_final_label}'")
+        
         voting_result = {
-            'predicted_label': convert_numpy_types(final_label),
+            'predicted_label': clean_final_label,  # Usa la label pulita
             'ensemble_confidence': convert_numpy_types(final_confidence),
             'agreement': agreement,
             'human_intervention': False,
@@ -985,7 +1030,8 @@ class AdvancedEnsembleClassifier:
         
         print(f"🔗 Ensemble model caricato da {model_path}")
     
-    def batch_predict(self, texts: List[str], batch_size: int = 32, embedder=None) -> List[Dict[str, Any]]:
+    def batch_predict(self, texts: List[str], batch_size: int = 32, embedder=None, 
+                     ml_features_batch=None) -> List[Dict[str, Any]]:
         """
         Predizione batch per efficienza
         
@@ -993,9 +1039,14 @@ class AdvancedEnsembleClassifier:
             texts: Lista di testi da classificare
             batch_size: Dimensione del batch
             embedder: Embedder da riutilizzare per evitare CUDA OOM
+            ml_features_batch: Lista di features ML pre-calcolate per ogni testo (ottimizzazione BERTopic)
             
         Returns:
             Lista di predizioni
+            
+        Autore: Valerio Bignardi
+        Data creazione: 2025-09-06
+        Ultima modifica: 2025-09-06 - Aggiunta ottimizzazione BERTopic pre-calcolato
         """
         print(f"📦 Batch prediction di {len(texts)} testi...")
         
@@ -1015,10 +1066,21 @@ class AdvancedEnsembleClassifier:
             batch = texts[i:i+batch_size]
             batch_results = []
             
-            for text in batch:
+            for j, text in enumerate(batch):
                 try:
-                    # Passa l'embedder riutilizzabile
-                    prediction = self.predict_with_ensemble(text, return_details=True, embedder=embedder)
+                    # 🚀 OTTIMIZZAZIONE: Usa features pre-calcolate se disponibili
+                    text_index = i + j
+                    ml_features_for_text = None
+                    if ml_features_batch and text_index < len(ml_features_batch):
+                        ml_features_for_text = ml_features_batch[text_index]
+                    
+                    # Passa l'embedder riutilizzabile E le features pre-calcolate
+                    prediction = self.predict_with_ensemble(
+                        text, 
+                        return_details=True, 
+                        embedder=embedder,
+                        ml_features_precalculated=ml_features_for_text
+                    )
                     batch_results.append(prediction)
                 except Exception as e:
                     print(f"⚠️ Errore nella predizione: {e}")
@@ -1041,6 +1103,58 @@ class AdvancedEnsembleClassifier:
         
         print(f"✅ Batch prediction completata con embedder riutilizzabile")
         return results
+    
+    def create_ml_features_cache(self, texts: List[str], embeddings: np.ndarray) -> List[np.ndarray]:
+        """
+        Crea cache delle features ML (incluse BERTopic) per evitare ricalcoli
+        
+        Args:
+            texts: Lista di testi
+            embeddings: Embeddings corrispondenti ai testi
+            
+        Returns:
+            Lista di features ML augmentate per ogni testo
+            
+        Autore: Valerio Bignardi
+        Data creazione: 2025-09-06
+        Ultima modifica: 2025-09-06 - Funzione per ottimizzazione BERTopic
+        """
+        print(f"🏗️ Creazione cache features ML per {len(texts)} testi...")
+        
+        ml_features_cache = []
+        
+        for i, (text, embedding) in enumerate(zip(texts, embeddings)):
+            try:
+                # Applica feature augmentation BERTopic se disponibile
+                ml_features = embedding.reshape(1, -1)  # Assicurati che sia 2D
+                
+                if self.bertopic_provider is not None:
+                    try:
+                        topic_feats = self.bertopic_provider.transform(
+                            [text], embeddings=ml_features,
+                            top_k=self.bertopic_top_k,
+                            return_one_hot=self.bertopic_return_one_hot
+                        )
+                        parts = [ml_features, topic_feats.get('topic_probas')]
+                        if self.bertopic_return_one_hot and 'one_hot' in topic_feats:
+                            parts.append(topic_feats['one_hot'])
+                        ml_features = np.concatenate([p for p in parts if p is not None], axis=1)
+                    except Exception as be:
+                        print(f"⚠️ BERTopic fallito per testo {i}: {be}")
+                        # Usa solo embedding base
+                
+                ml_features_cache.append(ml_features)
+                
+                if (i + 1) % 100 == 0:  # Progress ogni 100
+                    print(f"   📈 Progress cache: {i + 1}/{len(texts)}")
+                    
+            except Exception as e:
+                print(f"⚠️ Errore creazione features per testo {i}: {e}")
+                # Fallback con solo embedding base
+                ml_features_cache.append(embedding.reshape(1, -1))
+        
+        print(f"✅ Cache features ML creata: {len(ml_features_cache)} entries")
+        return ml_features_cache
     
     def predict_with_llm_only(self, text: str, return_details: bool = False) -> Dict[str, Any]:
         """

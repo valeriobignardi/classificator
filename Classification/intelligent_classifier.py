@@ -1060,12 +1060,38 @@ class IntelligentClassifier:
     
     def _generate_cache_key(self, text: str, context: Optional[str] = None) -> str:
         """Genera chiave cache per il testo"""
+        # 🔍 TRACING ENTER
+        trace_all("_generate_cache_key", "ENTER", 
+                 called_from="classify_with_motivation",
+                 text_length=len(text) if text else 0,
+                 context_provided=context is not None,
+                 model_name=self.model_name)
+        
         content = f"{text}|{context or ''}|{self.model_name}|{self.temperature}"
-        return hashlib.md5(content.encode()).hexdigest()
+        cache_key = hashlib.md5(content.encode()).hexdigest()
+        
+        # 🔍 TRACING EXIT
+        trace_all("_generate_cache_key", "EXIT", 
+                 called_from="classify_with_motivation",
+                 cache_key_prefix=cache_key[:8],
+                 content_hash_length=len(cache_key))
+        
+        return cache_key
     
     def _get_cached_prediction(self, cache_key: str) -> Optional[ClassificationResult]:
         """Recupera predizione dalla cache se valida"""
+        # 🔍 TRACING ENTER
+        trace_all("_get_cached_prediction", "ENTER", 
+                 called_from="classify_with_motivation",
+                 cache_key_prefix=cache_key[:8] if cache_key else "None",
+                 cache_enabled=self.enable_cache,
+                 cache_size=len(self._prediction_cache))
+        
         if not self.enable_cache:
+            trace_all("_get_cached_prediction", "EXIT", 
+                     called_from="classify_with_motivation",
+                     exit_reason="CACHE_DISABLED",
+                     result=None)
             return None
         
         with self._cache_lock:
@@ -1076,11 +1102,21 @@ class IntelligentClassifier:
                 if datetime.now() - timestamp < timedelta(hours=self.cache_ttl_hours):
                     self.stats['cache_hits'] += 1
                     self.logger.debug(f"Cache hit per chiave {cache_key[:8]}...")
+                    
+                    trace_all("_get_cached_prediction", "EXIT", 
+                             called_from="classify_with_motivation",
+                             exit_reason="CACHE_HIT",
+                             cached_label=cached_result.predicted_label,
+                             cache_age_hours=(datetime.now() - timestamp).total_seconds() / 3600)
                     return cached_result
                 else:
                     # Rimuovi cache scaduta
                     del self._prediction_cache[cache_key]
         
+        trace_all("_get_cached_prediction", "EXIT", 
+                 called_from="classify_with_motivation",
+                 exit_reason="CACHE_MISS",
+                 result=None)
         return None
     
     def _cache_prediction(self, cache_key: str, result: ClassificationResult) -> None:
@@ -3084,10 +3120,38 @@ Rispondi in formato JSON con predicted_label, confidence e motivation."""
             
         Data ultima modifica: 2025-01-31
         """
-        if self.is_openai_model and self.openai_service:
-            return self._call_openai_api_structured(conversation_text)
-        else:
-            return self._call_ollama_api_structured(conversation_text)
+        # 🔍 TRACING ENTER
+        trace_all("_call_llm_api_structured", "ENTER", 
+                 called_from="classify_with_motivation",
+                 conversation_length=len(conversation_text) if conversation_text else 0,
+                 is_openai_model=getattr(self, 'is_openai_model', False),
+                 openai_service_available=getattr(self, 'openai_service', None) is not None)
+        
+        try:
+            if self.is_openai_model and self.openai_service:
+                result = self._call_openai_api_structured(conversation_text)
+                trace_all("_call_llm_api_structured", "EXIT", 
+                         called_from="classify_with_motivation",
+                         llm_provider="OPENAI",
+                         predicted_label=result.get('predicted_label', 'unknown'),
+                         confidence=result.get('confidence', 0.0))
+                return result
+            else:
+                result = self._call_ollama_api_structured(conversation_text)
+                trace_all("_call_llm_api_structured", "EXIT", 
+                         called_from="classify_with_motivation",
+                         llm_provider="OLLAMA",
+                         predicted_label=result.get('predicted_label', 'unknown'),
+                         confidence=result.get('confidence', 0.0))
+                return result
+                
+        except Exception as e:
+            trace_all("_call_llm_api_structured", "ERROR", 
+                     called_from="classify_with_motivation",
+                     error_type=type(e).__name__,
+                     error_message=str(e),
+                     llm_provider="OPENAI" if getattr(self, 'is_openai_model', False) else "OLLAMA")
+            raise e
     
     def _call_ollama_api_structured(self, conversation_text: str) -> Dict[str, Any]:
         """
@@ -4180,6 +4244,14 @@ Rispondi in formato JSON con predicted_label, confidence e motivation."""
         """
         Classificazione di fallback con supporto embedding intelligente
         """
+        # 🔍 TRACING ENTER
+        trace_all("_fallback_classification", "ENTER", 
+                 called_from="classify_with_motivation",
+                 conversation_length=len(conversation_text) if conversation_text else 0,
+                 error_reason=error_reason,
+                 embeddings_enabled=self.enable_embeddings,
+                 semantic_fallback_enabled=getattr(self, 'enable_semantic_fallback', False))
+        
         self.logger.warning(f"LLM non disponibile, fallback per: {error_reason}")
         
         # Se embedding abilitati, prova fallback semantico intelligente
@@ -4189,10 +4261,24 @@ Rispondi in formato JSON con predicted_label, confidence e motivation."""
             fallback_result = self._intelligent_semantic_fallback(conversation_text, error_reason)
             if fallback_result:
                 self.stats['embedding_fallback_used'] += 1
+                
+                trace_all("_fallback_classification", "EXIT", 
+                         called_from="classify_with_motivation",
+                         exit_reason="SEMANTIC_FALLBACK_SUCCESS",
+                         predicted_label=fallback_result.predicted_label,
+                         confidence=fallback_result.confidence)
                 return fallback_result
         
         # Altrimenti fallback puro attuale
-        return self._pure_fallback_classification(conversation_text, error_reason)
+        pure_result = self._pure_fallback_classification(conversation_text, error_reason)
+        
+        trace_all("_fallback_classification", "EXIT", 
+                 called_from="classify_with_motivation",
+                 exit_reason="PURE_FALLBACK",
+                 predicted_label=pure_result.predicted_label,
+                 confidence=pure_result.confidence)
+        
+        return pure_result
     
     def _intelligent_semantic_fallback(self, conversation_text: str, error_reason: str) -> Optional[ClassificationResult]:
         """
@@ -4626,7 +4712,18 @@ Rispondi in formato JSON con predicted_label, confidence e motivation."""
     
     def _get_semantic_cached_prediction(self, conversation_text: str) -> Optional[ClassificationResult]:
         """Cerca predizione in cache semantica se abilitata"""
+        # 🔍 TRACING ENTER
+        trace_all("_get_semantic_cached_prediction", "ENTER", 
+                 called_from="classify_with_motivation",
+                 conversation_length=len(conversation_text) if conversation_text else 0,
+                 embeddings_enabled=self.enable_embeddings,
+                 embedder_available=self.embedder is not None)
+        
         if not self.enable_embeddings or self.embedder is None:
+            trace_all("_get_semantic_cached_prediction", "EXIT", 
+                     called_from="classify_with_motivation",
+                     exit_reason="EMBEDDINGS_DISABLED",
+                     result=None)
             return None
         
         try:
@@ -4644,11 +4741,25 @@ Rispondi in formato JSON con predicted_label, confidence e motivation."""
                         if similarity > 0.95:
                             self.stats['semantic_cache_hits'] += 1
                             self.logger.debug(f"Cache semantica hit (similarità: {similarity:.3f})")
+                            
+                            trace_all("_get_semantic_cached_prediction", "EXIT", 
+                                     called_from="classify_with_motivation",
+                                     exit_reason="CACHE_HIT",
+                                     similarity=similarity,
+                                     cached_label=cached_result.predicted_label)
                             return cached_result
             
+            trace_all("_get_semantic_cached_prediction", "EXIT", 
+                     called_from="classify_with_motivation",
+                     exit_reason="CACHE_MISS",
+                     result=None)
             return None
             
         except Exception as e:
+            trace_all("_get_semantic_cached_prediction", "ERROR", 
+                     called_from="classify_with_motivation",
+                     error_type=type(e).__name__,
+                     error_message=str(e))
             self.logger.warning(f"Errore cache semantica: {e}")
             return None
     

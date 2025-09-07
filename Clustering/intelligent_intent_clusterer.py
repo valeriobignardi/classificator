@@ -19,6 +19,14 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
 from tenant import Tenant
 
+# Import trace_all per debugging
+try:
+    from Pipeline.end_to_end_pipeline import trace_all
+except ImportError:
+    # Fallback se non disponibile
+    def trace_all(function_name: str, action: str = "ENTER", called_from: str = None, **kwargs):
+        pass
+
 # 🔧 [FIX] Import HDBSCANClusterer all'inizio per evitare problemi di contesto
 try:
     from .hdbscan_clusterer import HDBSCANClusterer
@@ -839,23 +847,55 @@ class IntelligentIntentClusterer:
         Returns:
             Dizionario con etichetta finale, confidenza e statistiche di consenso
         """
+        trace_all(
+            'ENTER', 
+            '_build_consensus_label', 
+            {
+                'llm_results_count': len(llm_results) if llm_results else 0,
+                'has_results': bool(llm_results),
+                'first_result_preview': llm_results[0] if llm_results else None
+            }
+        )
+        
         if not llm_results:
-            return {
+            result = {
                 'final_label': 'altro',
                 'confidence': 0.1,
                 'reasoning': 'Nessun risultato LLM disponibile',
                 'stats': {'agreement_ratio': 0.0, 'total_representatives': 0}
             }
+            trace_all(
+                'EXIT', 
+                '_build_consensus_label', 
+                {
+                    'final_label': result['final_label'],
+                    'confidence': result['confidence'],
+                    'reason': 'NO_LLM_RESULTS',
+                    'stats': result['stats']
+                }
+            )
+            return result
         
         if len(llm_results) == 1:
             # Solo un rappresentante: usa direttamente il risultato
             result = llm_results[0]
-            return {
+            consensus_result = {
                 'final_label': result['intent'],
                 'confidence': result['confidence'],
                 'reasoning': f"Single representative: {result['reasoning']}",
                 'stats': {'agreement_ratio': 1.0, 'total_representatives': 1}
             }
+            trace_all(
+                'EXIT', 
+                '_build_consensus_label', 
+                {
+                    'final_label': consensus_result['final_label'],
+                    'confidence': consensus_result['confidence'],
+                    'reason': 'SINGLE_REPRESENTATIVE',
+                    'stats': consensus_result['stats']
+                }
+            )
+            return consensus_result
         
         # Raccoglie tutte le etichette e le confidenze
         labels = [result['intent'] for result in llm_results]
@@ -904,9 +944,24 @@ class IntelligentIntentClusterer:
             'confidence_std': float(np.std(confidences))
         }
         
-        return {
+        final_result = {
             'final_label': most_common_label,
             'confidence': final_confidence,
             'reasoning': reasoning,
             'stats': consensus_stats
         }
+        
+        trace_all(
+            'EXIT', 
+            '_build_consensus_label', 
+            {
+                'final_label': final_result['final_label'],
+                'confidence': final_result['confidence'],
+                'agreement_ratio': agreement_ratio,
+                'total_reps': total_reps,
+                'consensus_method': 'MAJORITY' if agreement_ratio >= 0.6 else 'HIGHEST_CONFIDENCE',
+                'stats': consensus_stats
+            }
+        )
+        
+        return final_result

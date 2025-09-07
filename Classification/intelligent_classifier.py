@@ -2253,6 +2253,18 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         Raises:
             Exception: Se i prompt obbligatori non sono configurati per il tenant
         """
+        trace_all(
+            'ENTER', 
+            '_build_classification_prompt', 
+            {
+                'conversation_length': len(conversation_text),
+                'has_context': context is not None,
+                'tenant_id': self.tenant_id,
+                'model_name': self.model_name,
+                'tokenizer_available': self.tokenizer is not None
+            }
+        )
+        
         # Analizza il testo per determinare context hints
         conversation_context = self._analyze_conversation_context(conversation_text)
         
@@ -2345,6 +2357,19 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             print()
         else:
             print(f"🚀 Prompt finale generato per LLM {self.model_name} - {len(prompt)} chars (debug_prompt=False)")
+        
+        trace_all(
+            'EXIT', 
+            '_build_classification_prompt', 
+            {
+                'prompt_length': len(prompt),
+                'tokenization_applied': tokenization_stats is not None,
+                'conversation_truncated': tokenization_stats['truncated'] if tokenization_stats else False,
+                'total_tokens': tokenization_stats['total_tokens_final'] if tokenization_stats else None,
+                'conversation_context': conversation_context,
+                'debug_enabled': self.debug_prompt
+            }
+        )
         
         return prompt
     

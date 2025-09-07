@@ -17,20 +17,22 @@ import numpy as np
 import time
 import yaml
 
-def trace_all(function_name: str, action: str = "ENTER", called_from: str = None, **kwargs):
+def trace_all(component: str = None, action: str = "ENTER", function: str = None, message: str = None, details: Dict = None, **kwargs):
     """
     Sistema di tracing completo per tracciare il flusso del clustering HDBSCAN
     
     Scopo della funzione: Tracciare ingresso, uscita ed errori di tutte le funzioni
-    Parametri di input: function_name, action, called_from, **kwargs (parametri da tracciare)
+    Parametri di input: component, action, function, message, details, **kwargs
     Parametri di output: None (scrive su file)
     Valori di ritorno: None
     Tracciamento aggiornamenti: 2025-09-07 - Valerio Bignardi - Sistema tracing HDBSCAN
     
     Args:
-        function_name (str): Nome della funzione da tracciare
+        component (str): Nome del componente (es. "HDBSCANClusterer")
         action (str): "ENTER", "EXIT", "ERROR"
-        called_from (str): Nome della funzione chiamante (per tracciare chiamate annidate)
+        function (str): Nome della funzione
+        message (str): Messaggio descrittivo
+        details (Dict): Dettagli da tracciare
         **kwargs: Parametri da tracciare (input, return_value, exception, etc.)
         
     Autore: Valerio Bignardi
@@ -74,16 +76,20 @@ def trace_all(function_name: str, action: str = "ENTER", called_from: str = None
         # Timestamp formattato
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         
-        # Costruisci messaggio di tracing con called_from
-        if called_from:
-            message_parts = [f"[{timestamp}]", f"{action:>5}", "->", f"{called_from}::{function_name}"]
-        else:
-            message_parts = [f"[{timestamp}]", f"{action:>5}", "->", function_name]
+        # Costruisci messaggio di tracing
+        function_name = function or "unknown"
+        component_name = component or "Unknown"
         
-        # Aggiungi parametri se richiesto
-        if action == "ENTER" and include_parameters and kwargs:
+        message_parts = [f"[{timestamp}]", f"{action:>5}", "->", f"{component_name}::{function_name}"]
+        
+        # Aggiungi messaggio se fornito
+        if message:
+            message_parts.append(f"- {message}")
+        
+        # Aggiungi dettagli se richiesto
+        if action == "ENTER" and include_parameters and details:
             params_str = []
-            for key, value in kwargs.items():
+            for key, value in details.items():
                 try:
                     # Converti i parametri in stringa gestendo oggetti complessi
                     if isinstance(value, (dict, list)):
@@ -118,6 +124,25 @@ def trace_all(function_name: str, action: str = "ENTER", called_from: str = None
                 message_parts.append(f"RETURN: {return_str}")
             except Exception:
                 message_parts.append(f"RETURN: <{type(kwargs['return_value']).__name__}>")
+        
+        # Aggiungi dettagli anche per EXIT se disponibili
+        elif action == "EXIT" and include_parameters and details:
+            details_str = []
+            for key, value in details.items():
+                try:
+                    if isinstance(value, (dict, list)):
+                        if len(str(value)) > 100:
+                            value_str = f"{type(value).__name__}(size={len(value)})"
+                        else:
+                            value_str = json.dumps(value, default=str, ensure_ascii=False)[:100]
+                    else:
+                        value_str = str(value)[:100]
+                    details_str.append(f"{key}={value_str}")
+                except Exception:
+                    details_str.append(f"{key}=<{type(value).__name__}>")
+            
+            if details_str:
+                message_parts.append(f"({', '.join(details_str)})")
         
         # Aggiungi eccezione se richiesto
         elif action == "ERROR" and include_exceptions and 'exception' in kwargs:
@@ -224,13 +249,21 @@ class HDBSCANClusterer:
             
         Ultima modifica: 02 Settembre 2025 - Supporto parametri React
         """
-        trace_all("__init__", "ENTER",
-                 min_cluster_size=min_cluster_size,
-                 min_samples=min_samples,
-                 cluster_selection_epsilon=cluster_selection_epsilon,
-                 metric=metric,
-                 use_umap=use_umap,
-                 tenant=type(tenant).__name__ if tenant else None)
+        trace_all(
+            component="HDBSCANClusterer",
+            action="ENTER",
+            function="__init__",
+            message="Inizializzazione HDBSCANClusterer",
+            details={
+                "min_cluster_size": min_cluster_size,
+                "min_samples": min_samples,
+                "cluster_selection_epsilon": cluster_selection_epsilon,
+                "metric": metric,
+                "use_umap": use_umap,
+                "tenant": type(tenant).__name__ if tenant else None
+            }
+        )
+        
         # Salva riferimento tenant per caricamento config React
         self.tenant = tenant
         

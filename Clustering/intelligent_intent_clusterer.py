@@ -196,6 +196,19 @@ class IntelligentIntentClusterer:
         """
         Estrae intent da ogni testo usando LLM in modo completamente automatico
         
+        Scopo della funzione:
+        - Estrae intent da ogni testo usando ensemble classifier o LLM
+        - Usa il metodo batch per efficienza massima invece di loop manuale
+        
+        Parametri di input e output:
+        - texts: List[str] - Lista di testi da analizzare
+        
+        Valori di ritorno:
+        - List[Dict[str, Any]]: Lista di dizionari con intent, confidence e reasoning per ogni testo
+        
+        Tracciamento aggiornamenti:
+        - 2025-09-07: Sostituito loop manuale con classify_batch per efficienza
+        
         Args:
             texts: Lista di testi da analizzare
             
@@ -206,10 +219,13 @@ class IntelligentIntentClusterer:
         
         print(f"🤖 Analisi LLM di {len(texts)} conversazioni...")
         
-        for i, text in enumerate(texts):
-            try:
-                # 🔧 CORREZIONE: Usa ensemble_classifier se disponibile, altrimenti fallback a llm_classifier
-                if self.use_ensemble and self.ensemble_classifier:
+        # 🚀 OTTIMIZZAZIONE CRITICA: Usa classify_batch invece di loop manuale
+        if self.use_ensemble and self.ensemble_classifier:
+            print(f"🧠💻 [ENSEMBLE BATCH] Classificazione di {len(texts)} conversazioni con ensemble...")
+            
+            # L'ensemble classifier potrebbe non supportare batch, quindi usiamo loop ottimizzato
+            for i, text in enumerate(texts):
+                try:
                     # Usa ensemble ML+LLM per classificazione completa
                     ensemble_result = self.ensemble_classifier.predict_with_ensemble(
                         text,
@@ -226,49 +242,88 @@ class IntelligentIntentClusterer:
                         'ensemble_details': ensemble_result  # 🆕 Salva dettagli completi ensemble
                     }
                     
-                    print(f"🧠💻 [ENSEMBLE] Text {i+1}: '{ensemble_result['predicted_label']}' (conf: {ensemble_result['confidence']:.3f}, method: {ensemble_result['method']})")
+                    results.append(intent_info)
                     
-                elif self.llm_classifier and self.llm_classifier.is_available():
-                    # Fallback: Usa LLM per classificazione intent automatica
-                    llm_result = self.llm_classifier.classify_with_motivation(text)
+                    if (i + 1) % 50 == 0 or i == len(texts) - 1:
+                        print(f"   📈 Progresso Ensemble: {i+1}/{len(texts)}")
                     
-                    # Il risultato è un oggetto ClassificationResult
+                except Exception as e:
+                    self.logger.error(f"Errore analisi Ensemble per testo {i}: {e}")
+                    
+                    # Fallback per errori
+                    results.append({
+                        'intent': 'altro',
+                        'confidence': 0.05,
+                        'reasoning': f'Errore Ensemble: {e}',
+                        'method': 'ensemble_error_fallback',
+                        'text_preview': text[:100] + '...' if len(text) > 100 else text
+                    })
+                    
+        elif self.llm_classifier and self.llm_classifier.is_available():
+            print(f"🤖 [LLM BATCH] Classificazione di {len(texts)} conversazioni con LLM batch...")
+            
+            # 🚀 USA CLASSIFY_BATCH - MOLTO PIÙ EFFICIENTE!
+            try:
+                batch_results = self.llm_classifier.classify_batch(texts, show_progress=True)
+                
+                # Converte i ClassificationResult in formato compatibile
+                for i, llm_result in enumerate(batch_results):
                     intent_info = {
                         'intent': llm_result.predicted_label,
                         'confidence': llm_result.confidence,
                         'reasoning': llm_result.motivation,
-                        'method': 'llm_intelligent',
-                        'text_preview': text[:100] + '...' if len(text) > 100 else text
+                        'method': f'llm_batch_{llm_result.method.lower()}',
+                        'text_preview': texts[i][:100] + '...' if len(texts[i]) > 100 else texts[i],
+                        'processing_time': llm_result.processing_time
                     }
-                    
-                else:
-                    # Fallback se nessun classificatore disponibile
-                    intent_info = {
-                        'intent': 'altro',
-                        'confidence': 0.1,
-                        'reasoning': 'Nessun classificatore disponibile',
-                        'method': 'fallback',
-                        'text_preview': text[:100] + '...' if len(text) > 100 else text
-                    }
+                    results.append(intent_info)
                 
-                results.append(intent_info)
+                print(f"✅ [LLM BATCH] Completata classificazione batch di {len(results)} conversazioni")
                 
-                # Progress feedback
-                if (i + 1) % 50 == 0 or i == len(texts) - 1:
-                    print(f"   📈 Progresso LLM: {i+1}/{len(texts)}")
-                    
             except Exception as e:
-                self.logger.error(f"Errore analisi LLM per testo {i}: {e}")
+                self.logger.error(f"Errore classificazione batch LLM: {e}")
+                print(f"❌ [LLM BATCH] Errore batch, fallback a loop manuale: {e}")
                 
-                # Fallback per errori
+                # Fallback a loop manuale in caso di errore batch
+                for i, text in enumerate(texts):
+                    try:
+                        llm_result = self.llm_classifier.classify_with_motivation(text)
+                        
+                        intent_info = {
+                            'intent': llm_result.predicted_label,
+                            'confidence': llm_result.confidence,
+                            'reasoning': llm_result.motivation,
+                            'method': 'llm_fallback_individual',
+                            'text_preview': text[:100] + '...' if len(text) > 100 else text
+                        }
+                        results.append(intent_info)
+                        
+                        if (i + 1) % 50 == 0 or i == len(texts) - 1:
+                            print(f"   📈 Progresso LLM Fallback: {i+1}/{len(texts)}")
+                            
+                    except Exception as inner_e:
+                        self.logger.error(f"Errore analisi LLM fallback per testo {i}: {inner_e}")
+                        
+                        results.append({
+                            'intent': 'altro',
+                            'confidence': 0.05,
+                            'reasoning': f'Errore LLM fallback: {inner_e}',
+                            'method': 'llm_error_fallback',
+                            'text_preview': text[:100] + '...' if len(text) > 100 else text
+                        })
+        else:
+            # Fallback se nessun classificatore disponibile
+            print(f"⚠️ [FALLBACK] Nessun classificatore disponibile per {len(texts)} conversazioni")
+            for i, text in enumerate(texts):
                 results.append({
                     'intent': 'altro',
-                    'confidence': 0.05,
-                    'reasoning': f'Errore LLM: {e}',
-                    'method': 'error_fallback',
+                    'confidence': 0.1,
+                    'reasoning': 'Nessun classificatore disponibile',
+                    'method': 'no_classifier_fallback',
                     'text_preview': text[:100] + '...' if len(text) > 100 else text
                 })
         
+        print(f"🏁 [EXTRACT_INTENTS] Completata analisi di {len(results)} conversazioni")
         return results
     
     def group_by_intelligent_intents(self, texts: List[str], llm_results: List[Dict[str, Any]]) -> Dict[str, List[int]]:

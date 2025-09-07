@@ -192,13 +192,15 @@ class AltroTagValidator:
 
     def _get_tag_embedding(self, tag_text: str) -> np.ndarray:
         """
-        Calcola embedding di un tag con caching
+        Calcola embedding di un tag con caching e normalizzazione case-insensitive
         
-        Scopo della funzione: Ottiene embedding di un tag con gestione cache
+        Scopo della funzione: Ottiene embedding di un tag con gestione cache e normalizzazione
         Parametri di input: tag_text (testo del tag)
         Parametri di output: Embedding normalizzato del tag
         Valori di ritorno: Array numpy con embedding
-        Tracciamento aggiornamenti: 2025-08-28 - Creata per nuova logica
+        Tracciamento aggiornamenti: 
+        - 2025-08-28 - Creata per nuova logica
+        - 2025-09-07 - Aggiunta normalizzazione case-insensitive con .lower()
         
         Args:
             tag_text: Testo del tag da embeddare
@@ -209,28 +211,36 @@ class AltroTagValidator:
         Autore: Valerio Bignardi
         Data: 2025-08-28
         """
-        # Verifica cache se abilitata
-        if self.enable_cache and self._embedding_cache and tag_text in self._embedding_cache:
-            return self._embedding_cache[tag_text]
+        # 🔧 CORREZIONE CRITICA: Normalizza tag a minuscolo per confronto case-insensitive
+        # Prima di qualsiasi elaborazione, trasforma in minuscolo per garantire 
+        # che tag come "INFO_CONTATTI" e "info_contatti" abbiano stesso embedding
+        normalized_tag_text = tag_text.lower() if tag_text else ""
+        
+        # Verifica cache se abilitata (usa tag normalizzato come chiave)
+        if self.enable_cache and self._embedding_cache and normalized_tag_text in self._embedding_cache:
+            return self._embedding_cache[normalized_tag_text]
         
         try:
-            # Calcola embedding
+            # 🎯 EMBEDDING CALCOLATO SU TAG MINUSCOLO per consistenza
+            # Calcola embedding sul tag normalizzato
             if hasattr(self.embedder, 'get_embedding'):
-                embedding = self.embedder.get_embedding(tag_text)
+                embedding = self.embedder.get_embedding(normalized_tag_text)
             else:
                 # Fallback per embedder senza get_embedding
-                embedding = self.embedder.encode([tag_text])[0]
+                embedding = self.embedder.encode([normalized_tag_text])[0]
             
             # Normalizza embedding
             if isinstance(embedding, list):
                 embedding = np.array(embedding)
             
+            # 🧮 NORMALIZZAZIONE L2 per similarità coseno corretta
             # Normalizzazione L2 per similarità coseno
             norm = np.linalg.norm(embedding)
             if norm > 0:
                 embedding = embedding / norm
             
-            # Salva in cache se abilitata
+            # 💾 CACHE: Salva in cache usando tag normalizzato come chiave
+            # Salva in cache se abilitata (usa tag normalizzato come chiave)
             if self.enable_cache and self._embedding_cache:
                 # Gestisce dimensione cache
                 if len(self._embedding_cache) >= self.max_cache_size:
@@ -238,12 +248,17 @@ class AltroTagValidator:
                     oldest_key = next(iter(self._embedding_cache))
                     del self._embedding_cache[oldest_key]
                 
-                self._embedding_cache[tag_text] = embedding
+                # Salva con chiave normalizzata
+                self._embedding_cache[normalized_tag_text] = embedding
+            
+            # 🔍 DEBUG: Log della normalizzazione se tag originale diverso
+            if tag_text != normalized_tag_text:
+                self.logger.debug(f"🔤 Tag normalizzato: '{tag_text}' → '{normalized_tag_text}' per embedding")
             
             return embedding
             
         except Exception as e:
-            self.logger.error(f"❌ Errore calcolo embedding per '{tag_text}': {e}")
+            self.logger.error(f"❌ Errore calcolo embedding per '{tag_text}' (normalizzato: '{normalized_tag_text}'): {e}")
             # Ritorna embedding zero come fallback
             return np.zeros(768)  # Dimensione tipica embedding
 
@@ -334,18 +349,20 @@ class AltroTagValidator:
         
         return clean_tag
 
-    def _get_existing_tags(self) -> List[str]:
+    def _get_existing_tags(self) -> Tuple[List[str], Dict[str, str]]:
         """
-        Ottiene lista tag esistenti con caching
+        Ottiene lista tag esistenti con caching e normalizzazione case-insensitive
         
-        Scopo della funzione: Recupera tag esistenti dal database con cache
+        Scopo della funzione: Recupera tag esistenti dal database con cache e normalizzazione
         Parametri di input: None
-        Parametri di output: Lista tag esistenti
-        Valori di ritorno: List di stringhe con i tag
-        Tracciamento aggiornamenti: 2025-08-28 - Creata per nuova implementazione
+        Parametri di output: Tupla con (tag normalizzati, mapping normalizzato -> originale)
+        Valori di ritorno: Tuple di (List di tag normalizzati, Dict mapping)
+        Tracciamento aggiornamenti: 
+        - 2025-08-28 - Creata per nuova implementazione
+        - 2025-09-07 - Aggiunta normalizzazione case-insensitive con mapping originali
         
         Returns:
-            Lista dei tag esistenti
+            Tuple con (lista tag normalizzati, dict mapping normalizzato -> originale)
             
         Autore: Valerio Bignardi
         Data: 2025-08-28
@@ -357,7 +374,7 @@ class AltroTagValidator:
             if (self._tags_cache is not None and 
                 self._last_cache_update is not None and 
                 (current_time - self._last_cache_update).seconds < 300):  # Cache 5 minuti
-                return self._tags_cache
+                return self._tags_cache, getattr(self, '_tags_mapping_cache', {})
             
             # Recupera tag dal database
             tag_objects = self.schema_manager.get_all_tags()
@@ -365,22 +382,40 @@ class AltroTagValidator:
             # Estrae i nomi dei tag
             existing_tags = [tag['tag_name'] for tag in tag_objects if tag and tag.get('tag_name')]
             
-            # Filtra tag validi (non vuoti, non "ALTRO")
-            valid_tags = [
-                tag for tag in existing_tags 
-                if tag and tag.strip() and tag.upper() != "ALTRO"
-            ]
+            # 🔧 CORREZIONE CRITICA: Crea mapping normalizzato -> originale per confronto case-insensitive
+            # Filtra tag validi e crea mapping normalizzato -> originale
+            valid_tags = []
+            tag_mapping = {}  # normalizzato -> originale
             
-            # Aggiorna cache
+            for tag in existing_tags:
+                if tag and tag.strip() and tag.upper() != "ALTRO":
+                    # Normalizza tag a minuscolo
+                    normalized_tag = tag.lower()
+                    
+                    # Se non esiste già un mapping per questo tag normalizzato, aggiungilo
+                    # (gestisce caso di duplicati dopo normalizzazione, mantenendo il primo)
+                    if normalized_tag not in tag_mapping:
+                        valid_tags.append(normalized_tag)
+                        tag_mapping[normalized_tag] = tag  # mapping normalizzato -> originale
+                        
+                        # 🔍 DEBUG: Log normalizzazione se diversa
+                        if tag != normalized_tag:
+                            self.logger.debug(f"🔤 Tag mappato: '{tag}' → '{normalized_tag}'")
+                    else:
+                        # Tag normalizzato già esistente, log il duplicato
+                        self.logger.debug(f"🔄 Tag duplicato dopo normalizzazione: '{tag}' (già presente: '{tag_mapping[normalized_tag]}')")
+            
+            # Aggiorna cache (sia tag che mapping)
             self._tags_cache = valid_tags
+            self._tags_mapping_cache = tag_mapping
             self._last_cache_update = current_time
             
-            self.logger.info(f"📋 Recuperati {len(valid_tags)} tag esistenti")
-            return valid_tags
+            self.logger.info(f"📋 Recuperati {len(valid_tags)} tag esistenti unici (normalizzati e deduplicati)")
+            return valid_tags, tag_mapping
             
         except Exception as e:
             self.logger.error(f"❌ Errore recupero tag esistenti: {e}")
-            return []
+            return [], {}
 
     def _extract_tag_from_llm_response(self, llm_raw_response: str) -> Optional[str]:
         """
@@ -504,7 +539,7 @@ class AltroTagValidator:
             suggested_embedding = self._get_tag_embedding(suggested_tag)
             
             # Step 3: Ottieni tag esistenti e calcola embedding
-            existing_tags = self._get_existing_tags()
+            existing_tags, tag_mapping = self._get_existing_tags()
             
             if not existing_tags:
                 self.logger.info(f"📝 Nessun tag esistente - crea nuovo: '{suggested_tag}'")
@@ -516,34 +551,38 @@ class AltroTagValidator:
                     llm_suggested_tag=suggested_tag
                 )
             
-            # Step 4: Confronta con tutti i tag esistenti
+            # Step 4: Confronta con tutti i tag esistenti (normalizzati)
             best_similarity = 0.0
-            best_matching_tag = None
+            best_matching_tag_normalized = None
             
-            self.logger.info(f"🔍 Confronto con {len(existing_tags)} tag esistenti...")
+            self.logger.info(f"🔍 Confronto con {len(existing_tags)} tag esistenti (case-insensitive)...")
             
-            for existing_tag in existing_tags:
-                existing_embedding = self._get_tag_embedding(existing_tag)
+            for existing_tag_normalized in existing_tags:
+                existing_embedding = self._get_tag_embedding(existing_tag_normalized)
                 similarity = self._calculate_similarity(suggested_embedding, existing_embedding)
                 
                 if similarity > best_similarity:
                     best_similarity = similarity
-                    best_matching_tag = existing_tag
+                    best_matching_tag_normalized = existing_tag_normalized
             
-            self.logger.info(f"🎯 Migliore match: '{best_matching_tag}' (similarità: {best_similarity:.3f})")
+            # 🔧 CORREZIONE: Ottieni tag originale dal mapping per il risultato finale
+            best_matching_tag_original = tag_mapping.get(best_matching_tag_normalized, best_matching_tag_normalized)
+            
+            self.logger.info(f"🎯 Migliore match: '{best_matching_tag_original}' (normalizzato: '{best_matching_tag_normalized}', similarità: {best_similarity:.3f})")
             
             # Step 5: Decisione basata su soglia
             if best_similarity >= self.similarity_threshold:
+                # 🎯 RITORNA IL TAG ORIGINALE (non normalizzato) per mantenere case originale
                 # Usa tag esistente più simile
-                self.logger.info(f"✅ Similarità >= {self.similarity_threshold} - usa tag esistente: '{best_matching_tag}'")
+                self.logger.info(f"✅ Similarità >= {self.similarity_threshold} - usa tag esistente: '{best_matching_tag_original}'")
                 
                 return ValidationResult(
                     should_add_new_tag=False,
-                    final_tag=best_matching_tag,
+                    final_tag=best_matching_tag_original,  # 🔧 TAG ORIGINALE
                     confidence=best_similarity,
                     validation_path="similarity_match",
                     similarity_score=best_similarity,
-                    matched_existing_tag=best_matching_tag,
+                    matched_existing_tag=best_matching_tag_original,  # 🔧 TAG ORIGINALE
                     llm_suggested_tag=suggested_tag
                 )
             else:
@@ -556,7 +595,7 @@ class AltroTagValidator:
                     confidence=1.0 - best_similarity,  # Confidence = differenza semantica
                     validation_path="new_tag_created",
                     similarity_score=best_similarity,
-                    matched_existing_tag=best_matching_tag,
+                    matched_existing_tag=best_matching_tag_original,  # 🔧 TAG ORIGINALE per riferimento
                     llm_suggested_tag=suggested_tag
                 )
                 
@@ -573,13 +612,15 @@ class AltroTagValidator:
 
     def add_new_tag_to_database(self, new_tag: str, conversation_id: str) -> bool:
         """
-        Aggiunge nuovo tag al database
+        Aggiunge nuovo tag al database con verifica case-insensitive
         
-        Scopo della funzione: Inserisce nuovo tag nel database tag
+        Scopo della funzione: Inserisce nuovo tag nel database tag con controllo duplicati case-insensitive
         Parametri di input: new_tag (nuovo tag), conversation_id (ID conversazione)
         Parametri di output: Successo operazione
         Valori di ritorno: True se successo, False altrimenti
-        Tracciamento aggiornamenti: 2025-08-28 - Creata per gestione nuovi tag
+        Tracciamento aggiornamenti: 
+        - 2025-08-28 - Creata per gestione nuovi tag
+        - 2025-09-07 - Aggiunto controllo case-insensitive per duplicati
         
         Args:
             new_tag: Tag da aggiungere
@@ -592,26 +633,31 @@ class AltroTagValidator:
         Data: 2025-08-28
         """
         try:
-            # Verifica che tag non esista già
-            tag_objects = self.schema_manager.get_all_tags()
-            existing_tag_names = [tag['tag_name'] for tag in tag_objects if tag and tag.get('tag_name')]
+            # 🔧 CORREZIONE: Verifica esistenza con confronto case-insensitive
+            existing_tags, tag_mapping = self._get_existing_tags()
             
-            if new_tag in existing_tag_names:
-                self.logger.info(f"ℹ️ Tag '{new_tag}' già esistente")
+            # Normalizza il nuovo tag per confronto
+            new_tag_normalized = new_tag.lower()
+            
+            # Verifica se tag normalizzato esiste già
+            if new_tag_normalized in existing_tags:
+                original_tag = tag_mapping.get(new_tag_normalized, new_tag_normalized)
+                self.logger.info(f"ℹ️ Tag '{new_tag}' già esistente come '{original_tag}' (confronto case-insensitive)")
                 return True
             
-            # Aggiunge nuovo tag usando schema_manager
+            # Aggiunge nuovo tag usando schema_manager (con il case originale suggerito dal LLM)
             success = self.schema_manager.add_tag_if_not_exists(
-                tag_name=new_tag,
+                tag_name=new_tag,  # 🔧 Mantiene case originale suggerito dal LLM
                 tag_description=f"Tag creato automaticamente da conversazione {conversation_id}",
                 tag_color="#9C27B0"  # Colore viola per tag auto-generati
             )
             
             if success:
-                self.logger.info(f"✅ Nuovo tag aggiunto: '{new_tag}'")
+                self.logger.info(f"✅ Nuovo tag aggiunto: '{new_tag}' (case originale preservato)")
                 
-                # Invalida cache
+                # Invalida cache per forzare reload
                 self._tags_cache = None
+                self._tags_mapping_cache = {}
                 self._last_cache_update = None
                 
                 return True
@@ -659,13 +705,15 @@ class AltroTagValidator:
 
     def clear_caches(self) -> None:
         """
-        Pulisce tutte le cache
+        Pulisce tutte le cache incluso il mapping normalizzato -> originale
         
         Scopo della funzione: Reset completo cache per aggiornamento dati
         Parametri di input: None
         Parametri di output: None
         Valori di ritorno: None
-        Tracciamento aggiornamenti: 2025-08-28 - Creata per gestione cache
+        Tracciamento aggiornamenti: 
+        - 2025-08-28 - Creata per gestione cache
+        - 2025-09-07 - Aggiunta pulizia cache mapping normalizzato -> originale
         
         Autore: Valerio Bignardi
         Data: 2025-08-28
@@ -675,9 +723,10 @@ class AltroTagValidator:
                 self._embedding_cache.clear()
             
             self._tags_cache = None
+            self._tags_mapping_cache = {}  # 🔧 AGGIUNTA: Pulisci anche cache mapping
             self._last_cache_update = None
             
-            self.logger.info("🧹 Cache pulite completamente")
+            self.logger.info("🧹 Cache pulite completamente (incluso mapping normalizzato -> originale)")
             
         except Exception as e:
             self.logger.error(f"❌ Errore pulizia cache: {e}")

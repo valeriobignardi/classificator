@@ -3948,6 +3948,20 @@ Rispondi in formato JSON con predicted_label, confidence e motivation."""
         """
         Classifica una conversazione con motivazione dettagliata
         
+        Scopo della funzione:
+        - Classifica una singola conversazione usando LLM con motivazione dettagliata
+        - Gestisce cache semantica, validazione embedding e fallback
+        
+        Parametri di input e output:
+        - conversation_text: str - Testo della conversazione da classificare
+        - context: Optional[str] - Contesto aggiuntivo opzionale
+        
+        Valori di ritorno:
+        - ClassificationResult: Oggetto con predicted_label, confidence, motivation, method, etc.
+        
+        Tracciamento aggiornamenti:
+        - 2025-09-07: Aggiunto tracing completo ENTER/EXIT/ERROR
+        
         Args:
             conversation_text: Testo della conversazione da classificare
             context: Contesto aggiuntivo opzionale
@@ -3955,6 +3969,13 @@ Rispondi in formato JSON con predicted_label, confidence e motivation."""
         Returns:
             ClassificationResult con dettagli completi
         """
+        # 🔍 TRACING ENTER
+        trace_all("classify_with_motivation", "ENTER", 
+                 called_from="batch_or_single_classification",
+                 conversation_length=len(conversation_text) if conversation_text else 0,
+                 context_provided=context is not None,
+                 tenant_id=getattr(self, 'tenant_id', 'unknown'))
+        
         if not conversation_text or not conversation_text.strip():
             return ClassificationResult(
                 predicted_label="altro",
@@ -4098,9 +4119,25 @@ Rispondi in formato JSON con predicted_label, confidence e motivation."""
             text_preview = conversation_text[:200].replace('\n', ' ').replace('\r', ' ') if len(conversation_text) > 200 else conversation_text.replace('\n', ' ').replace('\r', ' ')
             self.logger.info(f"Classificazione completata: {final_result.predicted_label} (conf: {final_result.confidence:.3f}, tempo: {final_result.processing_time:.2f}s, metodo: {final_result.method}) - Testo: '{text_preview}{'...' if len(conversation_text) > 200 else ''}'")
             
+            # 🔍 TRACING EXIT - Success
+            trace_all("classify_with_motivation", "EXIT", 
+                     called_from="batch_or_single_classification",
+                     predicted_label=final_result.predicted_label,
+                     confidence=final_result.confidence,
+                     method=final_result.method,
+                     processing_time=final_result.processing_time,
+                     exit_reason="SUCCESS")
+            
             return final_result
             
         except Exception as e:
+            # 🔍 TRACING ERROR
+            trace_all("classify_with_motivation", "ERROR", 
+                     called_from="batch_or_single_classification",
+                     error_type=type(e).__name__,
+                     error_message=str(e),
+                     conversation_length=len(conversation_text) if conversation_text else 0)
+            
             self.logger.error(f"Errore nella classificazione: {e}")
             self._update_stats(time.time() - start_time, success=False)
             
@@ -4116,10 +4153,26 @@ Rispondi in formato JSON con predicted_label, confidence e motivation."""
                 error_msg = f"❌ SISTEMA BLOCCATO: {e}"
                 self.logger.error(error_msg)
                 print(error_msg)
+                
+                # 🔍 TRACING EXIT - Critical Error
+                trace_all("classify_with_motivation", "EXIT", 
+                         called_from="batch_or_single_classification",
+                         exit_reason="CRITICAL_ERROR")
+                
                 raise e  # Rilancia l'errore originale per bloccare il sistema
             
             # Altri errori possono usare fallback
-            return self._fallback_classification(conversation_text, f"LLM_ERROR: {str(e)}")
+            fallback_result = self._fallback_classification(conversation_text, f"LLM_ERROR: {str(e)}")
+            
+            # 🔍 TRACING EXIT - Fallback
+            trace_all("classify_with_motivation", "EXIT", 
+                     called_from="batch_or_single_classification",
+                     predicted_label=fallback_result.predicted_label,
+                     confidence=fallback_result.confidence,
+                     method=fallback_result.method,
+                     exit_reason="FALLBACK_USED")
+            
+            return fallback_result
     
     def _fallback_classification(self, 
                                conversation_text: str, 
@@ -4273,6 +4326,20 @@ Rispondi in formato JSON con predicted_label, confidence e motivation."""
         """
         Classifica multiple conversazioni in batch (metodo principale)
         
+        Scopo della funzione:
+        - Classifica multiple conversazioni usando il metodo classify_with_motivation
+        - Gestisce progress tracking e fallback per elementi falliti
+        
+        Parametri di input e output:
+        - conversations: List[str] - Lista di testi da classificare
+        - show_progress: bool - Se mostrare progress bar
+        
+        Valori di ritorno:
+        - List[ClassificationResult]: Lista di risultati classificazione
+        
+        Tracciamento aggiornamenti:
+        - 2025-09-07: Aggiunto tracing completo ENTER/EXIT/ERROR
+        
         Args:
             conversations: Lista di testi da classificare
             show_progress: Se mostrare progress bar
@@ -4280,11 +4347,25 @@ Rispondi in formato JSON con predicted_label, confidence e motivation."""
         Returns:
             Lista di risultati classificazione
         """
+        # 🔍 TRACING ENTER
+        trace_all("classify_batch", "ENTER", 
+                 called_from="intelligent_intent_clusterer_or_api",
+                 total_conversations=len(conversations),
+                 show_progress=show_progress,
+                 batch_size=len(conversations))
+        
         if not conversations:
+            # 🔍 TRACING EXIT - Empty Input
+            trace_all("classify_batch", "EXIT", 
+                     called_from="intelligent_intent_clusterer_or_api",
+                     exit_reason="EMPTY_INPUT",
+                     results_count=0)
             return []
         
         results = []
         total = len(conversations)
+        successful_classifications = 0
+        fallback_used = 0
         
         # Progress tracking se richiesto
         if show_progress and total > 1:
@@ -4295,19 +4376,44 @@ Rispondi in formato JSON con predicted_label, confidence e motivation."""
                 result = self.classify_with_motivation(conversation_text)
                 results.append(result)
                 
+                # Traccia se è stato usato fallback
+                if 'FALLBACK' in result.method.upper():
+                    fallback_used += 1
+                else:
+                    successful_classifications += 1
+                
                 if show_progress and total > 10 and (i + 1) % max(1, total // 10) == 0:
                     self.logger.info(f"Progresso batch: {i + 1}/{total} ({((i + 1) / total * 100):.1f}%)")
                     
             except Exception as e:
+                # 🔍 TRACING ERROR
+                trace_all("classify_batch", "ERROR", 
+                         called_from="intelligent_intent_clusterer_or_api",
+                         error_type=type(e).__name__,
+                         error_message=str(e),
+                         current_item=i,
+                         total_items=total)
+                
                 self.logger.error(f"Errore nella classificazione batch elemento {i}: {e}")
                 # Crea risultato di fallback per l'elemento fallito
                 fallback_result = self._fallback_classification(
                     conversation_text, f"BATCH_ERROR: {str(e)}"
                 )
                 results.append(fallback_result)
+                fallback_used += 1
         
         if show_progress and total > 1:
             self.logger.info(f"Classificazione batch completata: {len(results)}/{total} elementi")
+        
+        # 🔍 TRACING EXIT - Success
+        trace_all("classify_batch", "EXIT", 
+                 called_from="intelligent_intent_clusterer_or_api",
+                 total_conversations=total,
+                 results_count=len(results),
+                 successful_classifications=successful_classifications,
+                 fallback_used=fallback_used,
+                 success_rate=(successful_classifications / total * 100) if total > 0 else 0,
+                 exit_reason="SUCCESS")
         
         return results
     

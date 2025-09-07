@@ -628,7 +628,161 @@ class DatabaseAIConfigService:
         self._cache_timestamp = None
         print("🗑️ Cache configurazioni svuotata")
 
+    def save_batch_processing_config(self, tenant_id: str, batch_config: Dict[str, Any]) -> bool:
+        """
+        Salva configurazione batch processing per tenant nel database
+        
+        Scopo:
+            Salva parametri classification_batch_size e max_parallel_calls 
+            nella configurazione LLM del tenant per persistenza
+        
+        Parametri di input:
+            tenant_id: ID del tenant (UUID)
+            batch_config: Dizionario con parametri batch {
+                'classification_batch_size': int,
+                'max_parallel_calls': int
+            }
+        
+        Valori di ritorno:
+            bool: True se salvataggio riuscito, False altrimenti
+        
+        Data ultima modifica: 2025-09-07
+        """
+        if not self._connetti():
+            return False
+        
+        try:
+            cursor = self.connection.cursor(dictionary=True)
+            
+            # Recupera configurazione LLM esistente
+            select_query = """
+            SELECT llm_config FROM engines 
+            WHERE tenant_id = %s AND is_active = TRUE
+            """
+            cursor.execute(select_query, (tenant_id,))
+            result = cursor.fetchone()
+            
+            if result:
+                # Carica configurazione esistente
+                existing_config = {}
+                if result['llm_config']:
+                    try:
+                        existing_config = json.loads(result['llm_config'])
+                    except:
+                        existing_config = {}
+                
+                # Merge con nuovi parametri batch
+                existing_config.update({
+                    'batch_processing': {
+                        'classification_batch_size': batch_config.get('classification_batch_size', 32),
+                        'max_parallel_calls': batch_config.get('max_parallel_calls', 200),
+                        'updated_at': datetime.now().isoformat()
+                    }
+                })
+                
+                # Salva configurazione aggiornata
+                llm_config_json = json.dumps(existing_config, ensure_ascii=False, indent=2)
+                
+                update_query = """
+                UPDATE engines 
+                SET llm_config = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE tenant_id = %s AND is_active = TRUE
+                """
+                
+                cursor.execute(update_query, (llm_config_json, tenant_id))
+                
+                print(f"✅ [BATCH CONFIG] Parametri batch salvati per tenant {tenant_id}")
+                print(f"   📦 classification_batch_size: {batch_config.get('classification_batch_size')}")
+                print(f"   ⚡ max_parallel_calls: {batch_config.get('max_parallel_calls')}")
+                
+            else:
+                print(f"❌ [BATCH CONFIG] Tenant {tenant_id} non trovato nella tabella engines")
+                cursor.close()
+                return False
+            
+            self.connection.commit()
+            cursor.close()
+            
+            # Invalida cache per forzare ricaricamento
+            self._tenant_configs_cache.clear()
+            self._cache_timestamp = None
+            
+            return True
+            
+        except Error as e:
+            print(f"❌ [BATCH CONFIG] Errore salvataggio parametri batch: {e}")
+            if self.connection:
+                self.connection.rollback()
+            return False
+    
+    
+    def get_batch_processing_config(self, tenant_id: str) -> Dict[str, Any]:
+        """
+        Recupera configurazione batch processing per tenant
+        
+        Scopo:
+            Carica parametri batch processing salvati nel database
+            con fallback ai valori di default se non configurati
+        
+        Parametri di input:
+            tenant_id: ID del tenant (UUID)
+        
+        Valori di ritorno:
+            dict: Configurazione batch processing con campi:
+                - classification_batch_size: int
+                - max_parallel_calls: int
+                - source: str (database/default)
+        
+        Data ultima modifica: 2025-09-07
+        """
+        # Valori di default da config.yaml
+        default_config = {
+            'classification_batch_size': 32,
+            'max_parallel_calls': 200,
+            'source': 'default'
+        }
+        
+        if not self._connetti():
+            return default_config
+        
+        try:
+            cursor = self.connection.cursor(dictionary=True)
+            
+            # Recupera configurazione LLM 
+            select_query = """
+            SELECT llm_config FROM engines 
+            WHERE tenant_id = %s AND is_active = TRUE
+            """
+            cursor.execute(select_query, (tenant_id,))
+            result = cursor.fetchone()
+            cursor.close()
+            
+            if result and result['llm_config']:
+                try:
+                    llm_config = json.loads(result['llm_config'])
+                    batch_config = llm_config.get('batch_processing', {})
+                    
+                    if batch_config:
+                        return {
+                            'classification_batch_size': batch_config.get('classification_batch_size', 32),
+                            'max_parallel_calls': batch_config.get('max_parallel_calls', 200),
+                            'source': 'database',
+                            'updated_at': batch_config.get('updated_at')
+                        }
+                        
+                except json.JSONDecodeError:
+                    print(f"⚠️ [BATCH CONFIG] Errore parsing llm_config per tenant {tenant_id}")
+            
+            return default_config
+            
+        except Error as e:
+            print(f"❌ [BATCH CONFIG] Errore caricamento parametri batch: {e}")
+            return default_config
+
+
+# =============================================================================
 # Test del servizio
+# =============================================================================
 if __name__ == "__main__":
     print("=== TEST DATABASE AI CONFIG SERVICE ===\n")
     

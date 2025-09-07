@@ -3783,17 +3783,99 @@ class EndToEndPipeline:
                  force_review=force_review,
                  disagreement_threshold=disagreement_threshold)
         
-        print(f"🔍 Selezione intelligente rappresentanti per review umana...")
+        # ===============================================================
+        # DEBUG DETTAGLIATO - Scrive in rappresentanti.log
+        # ===============================================================
+        import os
+        from datetime import datetime
+        
+        debug_log_path = "/home/ubuntu/classificatore/rappresentanti.log"
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        
+        with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+            debug_file.write(f"\n{'='*80}\n")
+            debug_file.write(f"[{timestamp}] INIZIO _select_representatives_for_human_review\n")
+            debug_file.write(f"{'='*80}\n")
+            
+            # Debug parametri in ingresso
+            debug_file.write(f"📋 PARAMETRI IN INGRESSO:\n")
+            debug_file.write(f"   - max_sessions: {max_sessions}\n")
+            debug_file.write(f"   - confidence_threshold: {confidence_threshold}\n")
+            debug_file.write(f"   - force_review: {force_review}\n")
+            debug_file.write(f"   - disagreement_threshold: {disagreement_threshold}\n")
+            debug_file.write(f"   - num_representatives dict keys: {len(representatives)}\n")
+            debug_file.write(f"   - num_suggested_labels: {len(suggested_labels)}\n")
+            debug_file.write(f"   - all_sessions count: {len(all_sessions) if all_sessions else 'None'}\n")
+            
+            # Debug contenuto representatives
+            debug_file.write(f"\n📊 ANALISI REPRESENTATIVES DICT:\n")
+            if not representatives:
+                debug_file.write(f"   ❌ CRITICO: representatives è VUOTO!\n")
+            else:
+                debug_file.write(f"   ✅ representatives contiene {len(representatives)} cluster\n")
+                total_reps = 0
+                for cluster_id, reps_list in representatives.items():
+                    reps_count = len(reps_list) if reps_list else 0
+                    total_reps += reps_count
+                    debug_file.write(f"      - Cluster {cluster_id}: {reps_count} rappresentanti\n")
+                    
+                    # Debug primi 2 rappresentanti di ogni cluster
+                    if reps_list and len(reps_list) > 0:
+                        for i, rep in enumerate(reps_list[:2]):
+                            session_id = rep.get('session_id', 'NO_SESSION_ID') if isinstance(rep, dict) else str(rep)
+                            debug_file.write(f"         [{i}] session_id: {session_id}\n")
+                
+                debug_file.write(f"   � TOTALE rappresentanti: {total_reps}\n")
+            
+            # Debug suggested_labels
+            debug_file.write(f"\n🏷️ SUGGESTED_LABELS:\n")
+            if not suggested_labels:
+                debug_file.write(f"   ❌ suggested_labels è VUOTO!\n")
+            else:
+                debug_file.write(f"   ✅ suggested_labels contiene {len(suggested_labels)} etichette\n")
+                for cluster_id, label in list(suggested_labels.items())[:5]:
+                    debug_file.write(f"      - Cluster {cluster_id}: '{label}'\n")
+                if len(suggested_labels) > 5:
+                    debug_file.write(f"      ... e altri {len(suggested_labels) - 5} cluster\n")
+        
+        print(f"�🔍 Selezione intelligente rappresentanti per review umana...")
+        print(f"🐛 [DEBUG] Scrivendo debug dettagliato in {debug_log_path}")
+        print(f"🐛 [DEBUG] Representatives input: {len(representatives)} cluster")
         
         # Carica configurazione DAL DATABASE
         try:
+            # Debug inizio caricamento parametri
+            with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+                debug_file.write(f"\n🔧 INIZIO CARICAMENTO PARAMETRI DAL DATABASE:\n")
+                debug_file.write(f"   - hasattr(self, 'tenant'): {hasattr(self, 'tenant')}\n")
+                debug_file.write(f"   - self.tenant is not None: {self.tenant is not None if hasattr(self, 'tenant') else 'N/A'}\n")
+                if hasattr(self, 'tenant') and self.tenant:
+                    debug_file.write(f"   - tenant.tenant_id: {getattr(self.tenant, 'tenant_id', 'NO_TENANT_ID')}\n")
+                    debug_file.write(f"   - tenant.name: {getattr(self.tenant, 'name', 'NO_NAME')}\n")
+            
             # NUOVO: Leggi parametri dal database MySQL
             if hasattr(self, 'tenant') and self.tenant:
                 training_params = get_supervised_training_params_from_db(self.tenant.tenant_id)
                 print(f"✅ Parametri selezione rappresentanti da database MySQL")
+                
+                # Debug risultato chiamata database
+                with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+                    debug_file.write(f"\n📋 RISULTATO get_supervised_training_params_from_db:\n")
+                    debug_file.write(f"   - training_params type: {type(training_params)}\n")
+                    debug_file.write(f"   - training_params is None: {training_params is None}\n")
+                    if training_params:
+                        debug_file.write(f"   - training_params keys: {list(training_params.keys())}\n")
+                        for key, value in training_params.items():
+                            debug_file.write(f"      - {key}: {value}\n")
+                    else:
+                        debug_file.write(f"   ❌ training_params è None!\n")
+                
             else:
                 print(f"⚠️ Tenant non disponibile, leggo da config.yaml")
                 training_params = None
+                
+                with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+                    debug_file.write(f"\n⚠️ TENANT NON DISPONIBILE - FALLBACK A config.yaml\n")
             
             if training_params:
                 # Usa parametri dal database
@@ -3808,14 +3890,34 @@ class EndToEndPipeline:
                 print(f"📊 [DB MYSQL] selection_strategy: {selection_strategy}")
                 print(f"📊 [DB MYSQL] confidence_threshold_priority: {confidence_threshold_priority}")
                 min_cluster_size = 2  # Fisso, non configurabile
+                
+                # Debug parametri estratti dal database
+                with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+                    debug_file.write(f"\n✅ PARAMETRI ESTRATTI DAL DATABASE:\n")
+                    debug_file.write(f"   - min_reps_per_cluster: {min_reps_per_cluster}\n")
+                    debug_file.write(f"   - max_reps_per_cluster: {max_reps_per_cluster}\n")
+                    debug_file.write(f"   - default_reps_per_cluster: {default_reps_per_cluster}\n")
+                    debug_file.write(f"   - selection_strategy: {selection_strategy}\n")
+                    debug_file.write(f"   - confidence_threshold_priority: {confidence_threshold_priority}\n")
+                    debug_file.write(f"   - min_cluster_size: {min_cluster_size}\n")
             else:
                 # Fallback a config.yaml
                 print (f"⚠️ Parametri selezione rappresentanti non trovati nel DB, leggo da config.yaml")
+                
+                with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+                    debug_file.write(f"\n📄 FALLBACK A config.yaml:\n")
+                    debug_file.write(f"   - config_path: {getattr(self, 'config_path', 'NO_CONFIG_PATH')}\n")
+                
                 with open(self.config_path, 'r', encoding='utf-8') as file:
                     config = yaml.safe_load(file)
                 
                 supervised_config = config.get('supervised_training', {})
                 human_review_config = supervised_config.get('human_review', {})
+                
+                # Debug config.yaml
+                with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+                    debug_file.write(f"   - supervised_config keys: {list(supervised_config.keys()) if supervised_config else 'None'}\n")
+                    debug_file.write(f"   - human_review_config keys: {list(human_review_config.keys()) if human_review_config else 'None'}\n")
                 
                 # Parametri di selezione
                 min_reps_per_cluster = human_review_config.get('min_representatives_per_cluster', 1)
@@ -3824,6 +3926,15 @@ class EndToEndPipeline:
                 selection_strategy = human_review_config.get('selection_strategy', 'prioritize_by_size')
                 min_cluster_size = human_review_config.get('min_cluster_size_for_review', 2)
                 print(f"📊 [CONFIG YAML] Parametri da config.yaml")
+                
+                # Debug parametri da config.yaml
+                with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+                    debug_file.write(f"\n📄 PARAMETRI DA config.yaml:\n")
+                    debug_file.write(f"   - min_reps_per_cluster: {min_reps_per_cluster}\n")
+                    debug_file.write(f"   - max_reps_per_cluster: {max_reps_per_cluster}\n")
+                    debug_file.write(f"   - default_reps_per_cluster: {default_reps_per_cluster}\n")
+                    debug_file.write(f"   - selection_strategy: {selection_strategy}\n")
+                    debug_file.write(f"   - min_cluster_size: {min_cluster_size}\n")
             
         except Exception as e:
             print(f"⚠️ Errore config, uso valori default: {e}")
@@ -3832,11 +3943,40 @@ class EndToEndPipeline:
             default_reps_per_cluster = 3
             selection_strategy = 'prioritize_by_size'
             min_cluster_size = 2
+            
+            # Debug errore configurazione
+            with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+                debug_file.write(f"\n❌ ERRORE CARICAMENTO CONFIGURAZIONE:\n")
+                debug_file.write(f"   - Errore: {str(e)}\n")
+                debug_file.write(f"   - Usando valori di default\n")
+                debug_file.write(f"   - min_reps_per_cluster: {min_reps_per_cluster}\n")
+                debug_file.write(f"   - max_reps_per_cluster: {max_reps_per_cluster}\n")
+                debug_file.write(f"   - default_reps_per_cluster: {default_reps_per_cluster}\n")
+                debug_file.write(f"   - selection_strategy: {selection_strategy}\n")
+                debug_file.write(f"   - min_cluster_size: {min_cluster_size}\n")
         
         # Calcola dimensioni cluster
         cluster_sizes = {}
         for cluster_id, reps in representatives.items():
             cluster_sizes[cluster_id] = len(reps) if reps else 0
+        
+        # Debug dimensioni cluster
+        with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+            debug_file.write(f"\n📊 CALCOLO DIMENSIONI CLUSTER:\n")
+            debug_file.write(f"   - Numero cluster totali: {len(cluster_sizes)}\n")
+            cluster_size_distribution = {}
+            for size in cluster_sizes.values():
+                cluster_size_distribution[size] = cluster_size_distribution.get(size, 0) + 1
+            
+            debug_file.write(f"   - Distribuzione dimensioni:\n")
+            for size, count in sorted(cluster_size_distribution.items()):
+                debug_file.write(f"      • Dimensione {size}: {count} cluster\n")
+            
+            debug_file.write(f"\n📋 DETTAGLIO DIMENSIONI PER CLUSTER:\n")
+            for cluster_id, size in list(cluster_sizes.items())[:10]:
+                debug_file.write(f"      - Cluster {cluster_id}: {size} rappresentanti\n")
+            if len(cluster_sizes) > 10:
+                debug_file.write(f"      ... e altri {len(cluster_sizes) - 10} cluster\n")
         
         # Filtra cluster troppo piccoli
         eligible_clusters = {
@@ -3846,6 +3986,25 @@ class EndToEndPipeline:
         
         excluded_small_clusters = len(representatives) - len(eligible_clusters)
         
+        # Debug filtraggio cluster
+        with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+            debug_file.write(f"\n🔍 FILTRAGGIO CLUSTER PER DIMENSIONE MINIMA:\n")
+            debug_file.write(f"   - min_cluster_size soglia: {min_cluster_size}\n")
+            debug_file.write(f"   - Cluster originali: {len(representatives)}\n")
+            debug_file.write(f"   - Cluster eleggibili: {len(eligible_clusters)}\n")
+            debug_file.write(f"   - Cluster esclusi (troppo piccoli): {excluded_small_clusters}\n")
+            
+            if len(eligible_clusters) == 0:
+                debug_file.write(f"   ❌ CRITICO: NESSUN CLUSTER ELEGGIBILE!\n")
+                debug_file.write(f"   ❌ Tutti i cluster sono sotto la soglia di {min_cluster_size}\n")
+            else:
+                debug_file.write(f"   ✅ Cluster eleggibili trovati\n")
+                debug_file.write(f"\n📋 CLUSTER ELEGGIBILI:\n")
+                for cluster_id, reps in list(eligible_clusters.items())[:5]:
+                    debug_file.write(f"      - Cluster {cluster_id}: {len(reps)} rappresentanti\n")
+                if len(eligible_clusters) > 5:
+                    debug_file.write(f"      ... e altri {len(eligible_clusters) - 5} cluster\n")
+        
         print(f"📊 Analisi cluster:")
         print(f"  📋 Cluster totali: {len(representatives)}")
         print(f"  ✅ Cluster eleggibili: {len(eligible_clusters)}")
@@ -3854,6 +4013,14 @@ class EndToEndPipeline:
         # Se non abbiamo cluster eleggibili, ritorna tutto disponibile
         if not eligible_clusters:
             print(f"⚠️ Nessun cluster eleggibile, ritorno cluster disponibili")
+            
+            # Debug caso nessun cluster eleggibile
+            with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+                debug_file.write(f"\n❌ CASO CRITICO: NESSUN CLUSTER ELEGGIBILE\n")
+                debug_file.write(f"   - Ritornando tutti i cluster disponibili come fallback\n")
+                debug_file.write(f"   - Numero cluster da ritornare: {len(representatives)}\n")
+                total_sessions = sum(len(reps) for reps in representatives.values())
+                debug_file.write(f"   - Sessioni totali nel fallback: {total_sessions}\n")
             
             fallback_stats = {
                 'total_sessions_for_review': sum(len(reps) for reps in representatives.values()),
@@ -3868,6 +4035,14 @@ class EndToEndPipeline:
                      excluded_clusters=0,
                      reason="no_eligible_clusters")
             
+            # Debug ritorno fallback
+            with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+                debug_file.write(f"\n🏁 RITORNO FALLBACK - FINE FUNZIONE\n")
+                debug_file.write(f"   - Strategia: fallback_all\n")
+                debug_file.write(f"   - Cluster ritornati: {len(representatives)}\n")
+                debug_file.write(f"   - Sessioni totali: {fallback_stats['total_sessions_for_review']}\n")
+                debug_file.write(f"{'='*80}\n")
+            
             return representatives, fallback_stats
         
         # Calcola sessioni totali se prendiamo tutti i rappresentanti default
@@ -3875,6 +4050,14 @@ class EndToEndPipeline:
             min(len(reps), default_reps_per_cluster) 
             for reps in eligible_clusters.values()
         )
+        
+        # Debug calcolo sessioni
+        with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+            debug_file.write(f"\n📊 CALCOLO SESSIONI CON CONFIGURAZIONE STANDARD:\n")
+            debug_file.write(f"   - default_reps_per_cluster: {default_reps_per_cluster}\n")
+            debug_file.write(f"   - max_sessions limite: {max_sessions}\n")
+            debug_file.write(f"   - total_sessions_with_default: {total_sessions_with_default}\n")
+            debug_file.write(f"   - Può usare standard? {total_sessions_with_default <= max_sessions}\n")
         
         print(f"📊 Calcolo sessioni:")
         print(f"  🎯 Limite massimo: {max_sessions}")
@@ -3887,10 +4070,28 @@ class EndToEndPipeline:
             limited_representatives = {}
             total_selected_sessions = 0
             
+            # Debug inizio selezione standard
+            with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+                debug_file.write(f"\n✅ SELEZIONE STANDARD ({default_reps_per_cluster} reps/cluster):\n")
+                debug_file.write(f"   - Cluster da processare: {len(eligible_clusters)}\n")
+            
+            cluster_count = 0
             for cluster_id, reps in eligible_clusters.items():
                 selected_reps = reps[:default_reps_per_cluster]
                 limited_representatives[cluster_id] = selected_reps
                 total_selected_sessions += len(selected_reps)
+                cluster_count += 1
+                
+                # Debug per primi 3 cluster
+                if cluster_count <= 3:
+                    with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+                        debug_file.write(f"      - Cluster {cluster_id}: {len(reps)} → {len(selected_reps)} selezionati\n")
+            
+            # Debug risultato selezione standard
+            with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+                if cluster_count > 3:
+                    debug_file.write(f"      ... e altri {cluster_count - 3} cluster processati\n")
+                debug_file.write(f"   - Risultato: {len(limited_representatives)} cluster con {total_selected_sessions} sessioni\n")
             
             result_stats = {
                 'total_sessions_for_review': total_selected_sessions,
@@ -3904,16 +4105,40 @@ class EndToEndPipeline:
                      clusters_selected=len(limited_representatives),
                      excluded_clusters=excluded_small_clusters)
             
+            # Debug ritorno selezione standard
+            with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+                debug_file.write(f"\n🏁 RITORNO SELEZIONE STANDARD - FINE FUNZIONE\n")
+                debug_file.write(f"   - Strategia: standard_{default_reps_per_cluster}_per_cluster\n")
+                debug_file.write(f"   - Cluster selezionati: {len(limited_representatives)}\n")
+                debug_file.write(f"   - Sessioni totali: {total_selected_sessions}\n")
+                debug_file.write(f"   - Cluster esclusi: {excluded_small_clusters}\n")
+                debug_file.write(f"   - limited_representatives keys: {list(limited_representatives.keys())[:5]}{'...' if len(limited_representatives) > 5 else ''}\n")
+                debug_file.write(f"{'='*80}\n")
+            
             return limited_representatives, result_stats
         
         # Dobbiamo applicare selezione intelligente
         print(f"⚡ Applicazione selezione intelligente (strategia: {selection_strategy})")
+        
+        # Debug inizio selezione intelligente
+        with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+            debug_file.write(f"\n⚡ SELEZIONE INTELLIGENTE:\n")
+            debug_file.write(f"   - Strategia: {selection_strategy}\n")
+            debug_file.write(f"   - Cluster eleggibili: {len(eligible_clusters)}\n")
+            debug_file.write(f"   - Budget massimo: {max_sessions}\n")
         
         if selection_strategy == 'prioritize_by_size':
             # Ordina cluster per dimensione (più grandi prima)
             sorted_clusters = sorted(eligible_clusters.keys(), 
                                    key=lambda cid: cluster_sizes[cid], 
                                    reverse=True)
+            
+            # Debug strategia by_size
+            with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+                debug_file.write(f"   📊 STRATEGIA: prioritize_by_size\n")
+                debug_file.write(f"   📊 Primi 5 cluster ordinati per dimensione:\n")
+                for i, cluster_id in enumerate(sorted_clusters[:5]):
+                    debug_file.write(f"      {i+1}. Cluster {cluster_id}: {cluster_sizes[cluster_id]} rappresentanti\n")
             
         elif selection_strategy == 'prioritize_by_confidence':
             # Ordina per confidenza (più bassi prima = hanno più bisogno di review)
@@ -3927,10 +4152,23 @@ class EndToEndPipeline:
             
             sorted_clusters = sorted(eligible_clusters.keys(), 
                                    key=get_cluster_confidence)
+            
+            # Debug strategia by_confidence
+            with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+                debug_file.write(f"   🎯 STRATEGIA: prioritize_by_confidence\n")
+                debug_file.write(f"   🎯 Primi 5 cluster ordinati per confidenza (bassa → alta):\n")
+                for i, cluster_id in enumerate(sorted_clusters[:5]):
+                    confidence = get_cluster_confidence(cluster_id)
+                    debug_file.write(f"      {i+1}. Cluster {cluster_id}: confidenza {confidence:.3f}\n")
                                    
         else:  # balanced
             # Strategia bilanciata: alterna grandi e a bassa confidenza
             sorted_clusters = list(eligible_clusters.keys())
+            
+            # Debug strategia balanced
+            with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+                debug_file.write(f"   ⚖️ STRATEGIA: balanced\n")
+                debug_file.write(f"   ⚖️ Cluster in ordine originale\n")
         
         # Assegna rappresentanti rispettando il limite
         limited_representatives = {}
@@ -3986,6 +4224,17 @@ class EndToEndPipeline:
                  excluded_clusters=excluded_clusters,
                  budget_used=total_selected_sessions,
                  budget_available=max_sessions)
+        
+        # Debug ritorno selezione intelligente
+        with open(debug_log_path, "a", encoding="utf-8") as debug_file:
+            debug_file.write(f"\n🏁 RITORNO SELEZIONE INTELLIGENTE - FINE FUNZIONE\n")
+            debug_file.write(f"   - Strategia: {selection_strategy}\n")
+            debug_file.write(f"   - Cluster selezionati: {len(limited_representatives)}\n")
+            debug_file.write(f"   - Sessioni totali: {total_selected_sessions}\n")
+            debug_file.write(f"   - Budget usato: {total_selected_sessions}/{max_sessions}\n")
+            debug_file.write(f"   - Cluster esclusi: {excluded_clusters}\n")
+            debug_file.write(f"   - limited_representatives keys: {list(limited_representatives.keys())[:5]}{'...' if len(limited_representatives) > 5 else ''}\n")
+            debug_file.write(f"{'='*80}\n")
         
         return limited_representatives, result_stats
     

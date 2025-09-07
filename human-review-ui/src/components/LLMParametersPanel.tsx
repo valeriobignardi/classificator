@@ -24,6 +24,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { LLMModel, LLMParameters, ValidationResult, LLMConfigService } from '../services/llmConfigService';
+import BatchProcessingConfigPanel from './BatchProcessingConfigPanel';
 
 interface LLMParametersPanelProps {
   tenantId: string;
@@ -460,7 +461,7 @@ const LLMParametersPanel: React.FC<LLMParametersPanelProps> = ({
               <input
                 type="range"
                 min="1"
-                max="200"
+                max="500"
                 step="1"
                 value={parameters.openai?.parallel_calls_max || 200}
                 onChange={(e) => updateParameter('openai', 'parallel_calls_max', parseInt(e.target.value))}
@@ -469,7 +470,7 @@ const LLMParametersPanel: React.FC<LLMParametersPanelProps> = ({
               />
               <div className="range-labels">
                 <span>1</span>
-                <span>200</span>
+                <span>500</span>
               </div>
             </div>
             
@@ -480,6 +481,20 @@ const LLMParametersPanel: React.FC<LLMParametersPanelProps> = ({
                 </span>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Sezione Batch Processing - Solo per modelli OpenAI */}
+        {selectedModel?.provider === 'openai' && (
+          <div className="batch-processing-section">
+            <BatchProcessingConfigPanel
+              tenantId={tenantId}
+              autoSave={autoSave}
+              disabled={disabled}
+              onConfigChange={(batchConfig) => {
+                console.log('🔄 [LLMParametersPanel] Batch config aggiornata:', batchConfig);
+              }}
+            />
           </div>
         )}
       </div>

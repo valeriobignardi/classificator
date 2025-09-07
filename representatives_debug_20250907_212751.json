@@ -1,0 +1,13 @@
+{
+  "debug_timestamp": "2025-09-07T21:27:50.670796",
+  "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+  "tenant_name": "Humanitas",
+  "steps_completed": [
+    "mongodb_analysis",
+    "sessions_analysis",
+    "mysql_analysis",
+    "code_analysis",
+    "logs_analysis"
+  ],
+  "success": true
+}

@@ -1,0 +1,906 @@
+{
+  "success": true,
+  "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+  "tenant_name": "Humanitas",
+  "collection_name": "humanitas_015007d9-d413-11ef-86a5-96000228e7fe",
+  "analysis_date": "2025-09-07T21:23:54.299661",
+  "collection_stats": {
+    "total_documents": 1360,
+    "tenant_documents": 1360,
+    "classification_methods": {
+      "INTELLIGENT_CLUSTERING": 1357,
+      "null": 3
+    }
+  },
+  "representatives": {
+    "total_by_metadata": 0,
+    "total_by_field": 0,
+    "by_classification": {},
+    "sample_documents": []
+  },
+  "outliers": {
+    "total_by_type": 1357,
+    "total_by_metadata": 1357,
+    "by_classification": {
+      "INFO_RICHIESTA_RITIRO_REFERTI": {
+        "count": 20,
+        "example_sessions": [
+          "02a2cfe02d057af4c0dbf1a2751f7d6d",
+          "ce71fc78bc2525f603ef7e6615b9bd6e",
+          "e2e90a6ed2b5352ddb8deed9312891a8"
+        ]
+      },
+      "INFO_PRENOTAZIONE_RICOVERO": {
+        "count": 3,
+        "example_sessions": [
+          "dbdd6b090911e98061cd7ba2fe96e664",
+          "b67a10c31d01ec2824b135422e9df80b",
+          "6c886eb8d30c6b2f79f5626e1da8e47c"
+        ]
+      },
+      "CONTACTO_RITIRO_REFERTI": {
+        "count": 6,
+        "example_sessions": [
+          "bf7e50a5c5c5da734d48d293e80afba6",
+          "2d2f9371cb0df1915338830619f96dd8",
+          "7f03f2ed0ef993e218fefb8a5ba7acb4"
+        ]
+      },
+      "INFO_RITIRO_REFERTI_CARTELLA_CLINICA": {
+        "count": 14,
+        "example_sessions": [
+          "04f310fef76d571537b3743571381aca",
+          "4655b45a700de10440a36c50eb09900f",
+          "cef3fb013c1e0bce911b06c9c127e022"
+        ]
+      },
+      "RICHIESTA_CONTATTO_HUMANITAS": {
+        "count": 9,
+        "example_sessions": [
+          "b26c8b6e8c4081ff576db632c20b7ff8",
+          "0138430553e5badefa62229606ccb0cc",
+          "7dc82aa7c0b724ed7a9b6d9a78db3b75"
+        ]
+      },
+      "INDICAZIONI_STRADALI": {
+        "count": 16,
+        "example_sessions": [
+          "6067d91bf74e337e9f8534632105649e",
+          "8317710b21f37061bb6da395606f5e78",
+          "0bcc0f4676415b203818fbed53fc08e4"
+        ]
+      },
+      "MODIFICA_PRENOTAZIONE": {
+        "count": 7,
+        "example_sessions": [
+          "a2aa29dc9acb5e43a5251b118e658d90",
+          "5064ddd594c9f17a08ac29716207ec2d",
+          "8cc33b4b35c2c0354d59d665bc614740"
+        ]
+      },
+      "PROBLEMA_RITIRO_REFERTI_CARTELLA_CLINICA": {
+        "count": 30,
+        "example_sessions": [
+          "33d3f68c811a11224569e02b846754eb",
+          "97fc2a5094aa81d92b688e93a04c0fc3",
+          "68db40829be7ee8e63098070406c79ba"
+        ]
+      },
+      "INFO_INTERVENTI": {
+        "count": 6,
+        "example_sessions": [
+          "3b3bc9281df3b0b109a45abc7d85b130",
+          "92666a55edd6842058d4844b91280c7f",
+          "7614e7977c3039432de0333151a56276"
+        ]
+      },
+      "PRENOTAZIONE_ONLINE": {
+        "count": 1,
+        "example_sessions": [
+          "0bf382326a63c996cc956acfdf42ec0a"
+        ]
+      },
+      "INFO_INFORTUNI": {
+        "count": 3,
+        "example_sessions": [
+          "074b2fa00594caa31a5aa05e4f38dbdf",
+          "da63fc9a2454d990fea16bf6c3adb462",
+          "48b106da35ffa10f537a0b89bb407cc1"
+        ]
+      },
+      "CONTATTO_REPARTO_ONCOLOGIA": {
+        "count": 4,
+        "example_sessions": [
+          "8db1148771f465dff0a888b144154236",
+          "c1e5c307d3fe88915e88b7cd1c6a8469",
+          "0dedf9bf831abc88125fbb7a6429b35e"
+        ]
+      },
+      "INFO_CONTACTS_MEDICO": {
+        "count": 1,
+        "example_sessions": [
+          "60bc7aab34d5275284ec611c7337fd05"
+        ]
+      },
+      "CONTATTO_HUMANITAS": {
+        "count": 13,
+        "example_sessions": [
+          "9df4ea9b1d6be286c103a12141a5e65f",
+          "3b916e243adf06148b85d4742b24644d",
+          "182d5d621041affac5afb197291a1ae6"
+        ]
+      },
+      "RICHIESTA_CONTATTO_MEDICO": {
+        "count": 10,
+        "example_sessions": [
+          "8a605c64f9e7b4299dfd92b524850252",
+          "5f89bb42bd63aed788c5c3f044ebcb98",
+          "f77b78091aeff5bcc64b1b5670102fa5"
+        ]
+      },
+      "COLLABORAZIONE": {
+        "count": 3,
+        "example_sessions": [
+          "161cc0c9e19b33f9f88d56a1a57caaca",
+          "289a1982bad15018fa1ba0e994e13e3a",
+          "1a3ea466903983c4d9b45c86f65dc545"
+        ]
+      },
+      "CONVENZIONI_VIAGGIO_STRUTTURE_ALBERGHIERE": {
+        "count": 18,
+        "example_sessions": [
+          "f55af4afeccb1937dff440217277b584",
+          "45c69529d1133ae978b5b0d784a3a41c",
+          "82f4ecc208c6fc0e9ced6537a67a722b"
+        ]
+      },
+      "INFO_ALOPECIA": {
+        "count": 1,
+        "example_sessions": [
+          "05e7a36a02e93d2d61c77cd85baccbac"
+        ]
+      },
+      "INFO_RISONANZA_MAGNETICA_APERTA": {
+        "count": 10,
+        "example_sessions": [
+          "c87961fc5395abbaf877c3a27cd1c29d",
+          "2a6862dc52fc0595b8a8acf579511f93",
+          "18def659e776c28c8fd8608c9c6414c8"
+        ]
+      },
+      "INFORMAZIONI_SU_CONSULENZA_MEDICA": {
+        "count": 1,
+        "example_sessions": [
+          "89db47d31a1b17878805f93a037163e5"
+        ]
+      },
+      "INFO_INFERTILITA_MASCILE": {
+        "count": 1,
+        "example_sessions": [
+          "c88e7bbbf5f82a492fca45a3796033d3"
+        ]
+      },
+      "CAMBIO_ANAGRAFICA": {
+        "count": 18,
+        "example_sessions": [
+          "a880380c1a9d3d34f26a5a26c8ca03f9",
+          "fbf2bb6c8a61063888e340eb55435c18",
+          "0e9311f1ece2d6b81228752106e7c011"
+        ]
+      },
+      "CONTACTO_REPARTO": {
+        "count": 1,
+        "example_sessions": [
+          "7f042a95539d31eea176aa7038dc1529"
+        ]
+      },
+      "INFO_SPERMIOCOLTURA": {
+        "count": 6,
+        "example_sessions": [
+          "9fb6855ecbd3ed83ca64b398da514bbe",
+          "63e123b5a25ec6f6136b220460ef879e",
+          "b841393219dc29e8589df0c569ee0a03"
+        ]
+      },
+      "INFO_RITIRO_FARMACI": {
+        "count": 5,
+        "example_sessions": [
+          "7de07bca942392bd5d69e0c221a74328",
+          "1d6afdb5978b7a3085f36c58824aff5b",
+          "e2162d1058eeb156ae3c3c931e09537e"
+        ]
+      },
+      "INFO_ACCESSO_PORTALE": {
+        "count": 13,
+        "example_sessions": [
+          "537a8d8d80b6d36bbe284798e6f33b6a",
+          "320b23f72971961d706ea048fb4b914f",
+          "a2fb0ce9bec75715eadc0790e37385b4"
+        ]
+      },
+      "RICERCA_MEDICI": {
+        "count": 9,
+        "example_sessions": [
+          "80689979887d33eb34581a70fc106539",
+          "d2ad8b14cac7df9a2b50a643c85758f4",
+          "c83e0aa1beb06860873b9e048ac44c1a"
+        ]
+      },
+      "INFO_DIAGNOSI_DISLESSIA": {
+        "count": 1,
+        "example_sessions": [
+          "63661716ec6d058f24a5bbfa1581f8c9"
+        ]
+      },
+      "ALLERGIA_AL_NICHEL": {
+        "count": 3,
+        "example_sessions": [
+          "700e6ccc5058d9140d7b769559ef966d",
+          "35b92429857185578f606c66410f65f4",
+          "d42b6792d663bfeaff0045bd1f27a6ba"
+        ]
+      },
+      "PARERE_MEDICO": {
+        "count": 2,
+        "example_sessions": [
+          "da82cf62cef2f9ff85c9369259428f74",
+          "c3a4fd23bfdfb6fbaf8ec0513b714da5"
+        ]
+      },
+      "PROBLEMA_PAGAMENTO_ONLINE": {
+        "count": 2,
+        "example_sessions": [
+          "a1f873ffeca4fc2dd7800aa504665608",
+          "441dcf59581198c1467fc801b5a88ab8"
+        ]
+      },
+      "REGISTRAZIONE_PORTALE_HUMANITAS": {
+        "count": 11,
+        "example_sessions": [
+          "8bfad5e1fb66cd16f3654f72c4db95b7",
+          "921c7e7eb4886c78eadba29929834084",
+          "92754211450c683ba9e2616d421def07"
+        ]
+      },
+      "PRENOTAZIONE": {
+        "count": 22,
+        "example_sessions": [
+          "348fb2c030577f6655dc7d98889364e7",
+          "fe686c0efe1483d3f9d9592f00979506",
+          "16a8199cc7de0fb34d62ae83344c27cd"
+        ]
+      },
+      "INFO_RICHIESTA_RITIRO_REFERTI_CARTELLA_CLINICA": {
+        "count": 17,
+        "example_sessions": [
+          "faa09bfcbf737cc2511335d5cd340950",
+          "7894eda11b4f55c5923dabab5fa94b4c",
+          "d49d02b6b25558e123317b42426d2d89"
+        ]
+      },
+      "VISITA_SPECIALISTICA_ONCOLOGICA": {
+        "count": 2,
+        "example_sessions": [
+          "abbece3c56243f7d77ece52d8c99a8fa",
+          "63463b6f721ab7bda83108a9647415d2"
+        ]
+      },
+      "PROBLEMA_PRENOTAZIONE": {
+        "count": 14,
+        "example_sessions": [
+          "e7d76e1673621118b36b0afb5681fc15",
+          "a11b2905d41638d070ea61f7ac211018",
+          "9bf6385e39038970b5eb242c93ed4fc5"
+        ]
+      },
+      "LAVORA_CON_NOI": {
+        "count": 7,
+        "example_sessions": [
+          "0af83e98dfd0b8468ec9f16676d69b48",
+          "a92f74401a42bcc2ee8faab478f88e86",
+          "60b66f94343685499337ab83342ad786"
+        ]
+      },
+      "INFO_RICETTA": {
+        "count": 3,
+        "example_sessions": [
+          "5248cfaf123745d74bd4a98914fc3c35",
+          "3dd7b689aaf7600b798f40e4e07c8bc0",
+          "61aab89a94959f50c586afa55b27ce50"
+        ]
+      },
+      "CONTATTO_HUMANO": {
+        "count": 5,
+        "example_sessions": [
+          "678be189985450d0bd65f28571f05382",
+          "ca533cddcd473a11bbc4400a3c2fdc2a",
+          "e5c3943ba9420c26eb90d684d21d3392"
+        ]
+      },
+      "CONTATTO_REPARTO_PRERICOVERO": {
+        "count": 6,
+        "example_sessions": [
+          "6b73f08123bfaa5bc037bb53ae6224d3",
+          "9a9193dc4a1239998c9f9558b039387f",
+          "63d0197692ed22bc65c2db6adfb31790"
+        ]
+      },
+      "CANCELLAZIONE_PRENOTAZIONE": {
+        "count": 15,
+        "example_sessions": [
+          "a3e055990fedf3136674e735c5db308b",
+          "efdda71529d7a5337119e107a802384f",
+          "ccb4fce88bd7aa6ca4f01584c396e872"
+        ]
+      },
+      "CONTACTO_FARMACIA": {
+        "count": 5,
+        "example_sessions": [
+          "60d08c7f11b8e382c9733603dfc813aa",
+          "3eaac9a735885f3565fccf62871829ea",
+          "4afcdf9e1e957272fa34db2a35959aea"
+        ]
+      },
+      "INFO_FATTURAZIONE": {
+        "count": 12,
+        "example_sessions": [
+          "de5345e1ff30caa0f3864660c958437a",
+          "5875df22f7b96be3c7f857a3e91c8e3a",
+          "83f26080bf66291b878e75cc498ded91"
+        ]
+      },
+      "NORME_PREPARAZIONE_ESAME": {
+        "count": 24,
+        "example_sessions": [
+          "1f7adb6afddb6d9dc1ce99e529444935",
+          "fc130a7a8d14c2f590bf8209919ad0be",
+          "66b5edca15aa399ed0499a4f76dffd8c"
+        ]
+      },
+      "INFO_AMMINISTRATIVE": {
+        "count": 22,
+        "example_sessions": [
+          "0e28925c97556de1238e14d7d5b8426e",
+          "98847fc70ff72b3a1ecda7dda26d7b88",
+          "6fcbbba031b7c5bd55d82ea3d309d259"
+        ]
+      },
+      "INFO_PRENOTAZIONE_ONLINE": {
+        "count": 5,
+        "example_sessions": [
+          "a5dabb93f084ef1862281a7d9bb9bb44",
+          "4a3967eb46561101011f7b83145daa24",
+          "ee3b5bc6aa693d81763c7499a048df65"
+        ]
+      },
+      "PROBLEMA_FATTURAZIONE": {
+        "count": 7,
+        "example_sessions": [
+          "413e86f8e8a5cc32d0b0234c3da5d78a",
+          "32fdfda9ec278ee5776a7ae3907c4472",
+          "56029f2e82daaa598f5fbcbbfe60b1b0"
+        ]
+      },
+      "PROBLEMI_PRENOTAZIONE": {
+        "count": 16,
+        "example_sessions": [
+          "f11c3b3a02adfbbd4bebe6d0d163f244",
+          "86645995b75c7a4665b9e119ef1c6acb",
+          "224b0155a3c0f6f645ce06badc4ae4b2"
+        ]
+      },
+      "PROBLEMA_ACCESSO_PORTALE": {
+        "count": 135,
+        "example_sessions": [
+          "d41ccca7f62ee47c8efb02061b701af4",
+          "6e19082675efafd3cabd57e36208d028",
+          "0e73b5e5ee9ea4fe9d92ff2dc7568ce6"
+        ]
+      },
+      "STRUTTURE_CONVENZIONATE_ALBERGHIERE": {
+        "count": 6,
+        "example_sessions": [
+          "b4ef548b4267e4e2b4125539249872a3",
+          "8d88d78b6fac41525736c0dffdae7fd6",
+          "62e3ed5e5facd1935291a4c3c210b2ed"
+        ]
+      },
+      "INFORMAZIONI_SU_PAGAMENTO": {
+        "count": 7,
+        "example_sessions": [
+          "54306da4714958f6eb49b271584d445c",
+          "37ac1d52ae22d430f97943bdf1cfe889",
+          "f0210b49003492bd90524184e3bfb7a9"
+        ]
+      },
+      "CONTATTO_REPARTO": {
+        "count": 24,
+        "example_sessions": [
+          "d4422418ff247d2a447531a0f9f96229",
+          "03b08923e9ee97feb496a010f6d82b91",
+          "aa82bc05f1f4030ace6de0dec22f16f2"
+        ]
+      },
+      "INFO_RITIRO_REFERTI": {
+        "count": 79,
+        "example_sessions": [
+          "fa3223cbf500b545dc69b41569b651f2",
+          "84243c0a375b3809d662f01fb383d8b9",
+          "ebaa3c444b4a533f2c63cb8a9f1f6b9b"
+        ]
+      },
+      "INFO_FERTILITY_CENTER": {
+        "count": 13,
+        "example_sessions": [
+          "a3c1025033bd494bb7f665ffba174f53",
+          "0415745b27a830712de9af8bc28ace4b",
+          "7a0cc65c79995bd86c385c40fa19f814"
+        ]
+      },
+      "INFO_CONTATTI_MEDICO": {
+        "count": 6,
+        "example_sessions": [
+          "3cc9226d07986c735efe820304109c60",
+          "46d13cd55d237e71e769821f3b2d271a",
+          "2f2e2717649aa0df86ae844c6ad76190"
+        ]
+      },
+      "INFO_PRENOTAZIONE_ESAMI": {
+        "count": 10,
+        "example_sessions": [
+          "bcd8caf2a9a889a2cb7564bc21bfe7a6",
+          "b7901edbc20d7ae4aa7dfebc1df82888",
+          "890bdd7abdef8173929e1225c64854ed"
+        ]
+      },
+      "CONTATTO_FERTILITY_CENTER": {
+        "count": 3,
+        "example_sessions": [
+          "004619afe5fb15d53d1e7dee136067e6",
+          "1156e1bb269bdbc78cb0d27553c8b4fd",
+          "99e21d8a7f859b1fe9e0127d8b9aa719"
+        ]
+      },
+      "PROBLEMA_RITIRO_REFERTI": {
+        "count": 77,
+        "example_sessions": [
+          "7c120a0b2e5a1b7fee96c464017149e7",
+          "475ba9fda79e1fb6fff9ca1b080aa3d4",
+          "60f2a8b021e7ef5d3f69be018d3afd12"
+        ]
+      },
+      "PROBLEMA_ACCESSO_ALLEGATO": {
+        "count": 4,
+        "example_sessions": [
+          "750cbf75d577d770178bfe871945a43d",
+          "716a1d8f48116681efb6cf7428e0684c",
+          "c5195181a1d6709c297a33449c0e92d7"
+        ]
+      },
+      "INFO_ESAMI_PRESTAZIONI": {
+        "count": 55,
+        "example_sessions": [
+          "29fac73a798f6df66fed233cae03ec46",
+          "3fc9ab9e8c1b845ce71dd9aac47e8050",
+          "f20ab3a967c41558078e0cb43758a310"
+        ]
+      },
+      "INFO_CONTACTO_HUMANITAS": {
+        "count": 12,
+        "example_sessions": [
+          "98ab773004982fc9829ed2872ca09555",
+          "57d877e18c83712a0c7242e9494f2062",
+          "cfa53c944a7cf1c003dfcbbda8da66b3"
+        ]
+      },
+      "INFO_PRENOTAZIONE": {
+        "count": 19,
+        "example_sessions": [
+          "d4593d81068b4717aa1b3b21aed75999",
+          "a4e6e020f796a5c94029a5fd0ed411ff",
+          "bbb2f29e5b6328929bf0132fc3692079"
+        ]
+      },
+      "PRENOTAZIONE_ESAMI": {
+        "count": 11,
+        "example_sessions": [
+          "49b4726b01538cdec4d157936fa685f9",
+          "649472e2494c77bac888bdc9c700965d",
+          "4559fca59e8197ace001d753390b2e83"
+        ]
+      },
+      "INFO_RADIOTERAPIA": {
+        "count": 5,
+        "example_sessions": [
+          "36423347df4734494c85549d765aa518",
+          "5946a74044359c366df384c3b2b35766",
+          "2c8f2e66ff65d64738b91d0a68689514"
+        ]
+      },
+      "ALTRO": {
+        "count": 246,
+        "example_sessions": [
+          "5a1dade3e40ff6761fc0c8021b9c38c6",
+          "ed70c370223d1504d9a45bd8eb9d3103",
+          "d29b269dd895991067f1d02210c1465d"
+        ]
+      },
+      "CONTATTO_REPARTO_ESAMI": {
+        "count": 1,
+        "example_sessions": [
+          "2061a47185d28cfb906676e1c190458b"
+        ]
+      },
+      "CONTATTO_MEDICO": {
+        "count": 4,
+        "example_sessions": [
+          "dfa77c0160caf594b7eaedaa03386d16",
+          "48db982212362f796bfc329989196a27",
+          "e36e7e030e6d8896002c54863cce27dc"
+        ]
+      },
+      "RICHIESTA_CONTATTO_FERTILITY_CENTER": {
+        "count": 1,
+        "example_sessions": [
+          "24f08fb9519857a5cb2dd9a4b28a1bb3"
+        ]
+      },
+      "PROBLEMA_EMAIL": {
+        "count": 5,
+        "example_sessions": [
+          "04099ad49aff297c7538071ac16d9be5",
+          "cce6aab52ebb701d6c2f7b205c5693e6",
+          "9bb919c32463ff58522a5c31f58e04b0"
+        ]
+      },
+      "INFO_ESAMI_DI_LABORATORIO": {
+        "count": 52,
+        "example_sessions": [
+          "f1969530031e6033adaa71c48eef7017",
+          "8439795467edd6061289178b5af34a57",
+          "4d7ccf8dca864d5fa0252ca357c3c84a"
+        ]
+      },
+      "PROBLEMI_TECNICI": {
+        "count": 4,
+        "example_sessions": [
+          "8afe6a54b6be29bc249330e2ead69bbe",
+          "6385a93b633538f83e14aafd7b73efce",
+          "90355376f6507d7944234a47fc6fd69b"
+        ]
+      },
+      "PROBLEMA_RICOVERO": {
+        "count": 1,
+        "example_sessions": [
+          "b8f548288d5c3eda69845e6bb8e0db69"
+        ]
+      },
+      "PRENOTAZIONE_VIAGGI": {
+        "count": 1,
+        "example_sessions": [
+          "ed1ea9b4002bc3d238aa0b1c6160e266"
+        ]
+      },
+      "INFO_CANCRO_E_TUMORE": {
+        "count": 1,
+        "example_sessions": [
+          "299f19247cba3ebe3f3031b01a2cfd15"
+        ]
+      },
+      "RICHIESTA_RITIRO_REFERTI_CARTELLA_CLINICA": {
+        "count": 10,
+        "example_sessions": [
+          "999f615474844301215edd7a7a1f5183",
+          "0aab1aa30186184e7150f4af4ea67ece",
+          "e38b42e452bed71ec1bef35f3fd1eee3"
+        ]
+      },
+      "PROBLEMA_RICHIESTA_RITIRO_REFERTI_CARTELLA_CLINICA": {
+        "count": 8,
+        "example_sessions": [
+          "11c2943f0fa454cdd27afbd9f090e1b6",
+          "5f57b5c3d51871a35af068637514fbc7",
+          "0f27577ef60fb1549adb540a9ba20d1c"
+        ]
+      },
+      "ESAMI_DI_LABORATORIO": {
+        "count": 1,
+        "example_sessions": [
+          "bbcda1ac45d51897992654a727331281"
+        ]
+      },
+      "CONTATTO_RITIRO_REFERTI": {
+        "count": 1,
+        "example_sessions": [
+          "62cb080cb9f81edb1dc95af0744d20ba"
+        ]
+      },
+      "PROBLEMA_AMMINISTRATIVI": {
+        "count": 4,
+        "example_sessions": [
+          "75bddd46f97dab29e6b193bd1816edad",
+          "01f3e74e3e5a39b5092b0bc277bc2f61",
+          "fe4794b553b9547334836099550d5aa5"
+        ]
+      },
+      "GESTIONE_DELEGHE": {
+        "count": 2,
+        "example_sessions": [
+          "f66f05fb32cba57032269e0e652e97f8",
+          "83e73522917853db15bc68446552f43d"
+        ]
+      },
+      "PRONTO_SOCCORSO": {
+        "count": 1,
+        "example_sessions": [
+          "c6ec1ec0201f121388b8b3d3b1988900"
+        ]
+      },
+      "PROBLEMA_CON_IL_CARICAMENTO_DELLE_IMPEGNATIVE": {
+        "count": 10,
+        "example_sessions": [
+          "768f8a31ae6339fac44897e9c7716856",
+          "e9e4968a0a438931b77b4f21fa1b6707",
+          "3a1954d47a257a94f3ba2323973220dc"
+        ]
+      },
+      "INFO_PARCHEGGIO": {
+        "count": 12,
+        "example_sessions": [
+          "b02269a0739bd8b1562497b96e671e08",
+          "720e4453588d1628d19df52d3f5fd55e",
+          "399533a70d66444b0a69b6b8cd34b099"
+        ]
+      },
+      "CONTATTO_REPARTO_GRADENIGO": {
+        "count": 1,
+        "example_sessions": [
+          "882f19787621b6960aa66d1a7bb0c051"
+        ]
+      },
+      "SECOND_OPINION": {
+        "count": 3,
+        "example_sessions": [
+          "cdd26606028a31433067af795ff382c7",
+          "cfb69f8a8db335b99f37feccce49d550",
+          "04aefec3198bf8c1300f53adf192667f"
+        ]
+      },
+      "PROBLEMA_ESAMI_DI_LABORATORIO": {
+        "count": 1,
+        "example_sessions": [
+          "9c0828cdff71d14f97ecc6cb30a2eba2"
+        ]
+      },
+      "INFO_PARCHEGGIO_INDICAZIONI_STRADALI": {
+        "count": 1,
+        "example_sessions": [
+          "aadd2a55178ef4ff5d6fe6a894ff20ff"
+        ]
+      },
+      "INFO_VISITA_PROCTOLOGICA": {
+        "count": 7,
+        "example_sessions": [
+          "ad5b34a27e41f5f63f7667c5bda03013",
+          "b9bb6c5b1887ec8f02b2a3e5c83e12b5",
+          "fee613008cd4dfb9a531ebd800863d8f"
+        ]
+      },
+      "INVIO_RECLAMO_O_SEGNALAZIONE": {
+        "count": 6,
+        "example_sessions": [
+          "3ea0e396740853446b136c3f71db4532",
+          "c8ccd8e431df5b40c9f5b04d9ef9ddbb",
+          "e84d3351cf3689f99d6fb7e1804f75c5"
+        ]
+      },
+      "INFO_CERTIFICATI": {
+        "count": 13,
+        "example_sessions": [
+          "098386c7577a2042fef99279ce37e096",
+          "b858f8a8a29e26726f4a1efd7179c040",
+          "6d595ac7eb2bc8079879b4af7d68566f"
+        ]
+      },
+      "PAGAMENTO_ONLINE": {
+        "count": 2,
+        "example_sessions": [
+          "a2b34f4258a35988a5edeec909735075",
+          "61edcfcda5121df107c69e3ae95082ea"
+        ]
+      },
+      "PROBLEMI_AMMINISTRATIVI": {
+        "count": 4,
+        "example_sessions": [
+          "d657f4c2c9d4506e0533a2b0bc30376f",
+          "9e372a50f647f92fc930d46259db845c",
+          "290667684670252c6668697350f6a0bd"
+        ]
+      },
+      "INFO_POSTOPERATORIE": {
+        "count": 6,
+        "example_sessions": [
+          "0f676aa5b2b02f08afea4136881a770c",
+          "aaa8905c4ea350fc2aaeb3d9828b55cf",
+          "fc2da7bd6eda61ea0b8aed5051591619"
+        ]
+      },
+      "INFO_RICOVERO": {
+        "count": 19,
+        "example_sessions": [
+          "2911b193e691e5c6c3b6dbfc6fd7877b",
+          "2ca1ca98678c85283b57c3f8cd4c2063",
+          "2e912d22037ad3bbefca7a605fe92015"
+        ]
+      },
+      "INFO_PRERICOVERO": {
+        "count": 16,
+        "example_sessions": [
+          "45e1289e24941c7f13e84169dd078caa",
+          "573d9d2668965c0559be1bfbb17ec726",
+          "92b65bc92dc93b6e1f7bb9a7d0131a9e"
+        ]
+      },
+      "CONTATTO_REPARTO_BARIATRICO": {
+        "count": 1,
+        "example_sessions": [
+          "1329880a1c39bf70ead7131b4dd5849b"
+        ]
+      },
+      "CONSULENZA_MEDICA": {
+        "count": 5,
+        "example_sessions": [
+          "ee1a29e819f34b1b7a0a7284c250a0d3",
+          "af3390afa8921bd1cff27fb0c91d898c",
+          "11f3a7f3641aab1cb60a6ed044513d60"
+        ]
+      },
+      "CONTACTO_REPARTO_ESAMI": {
+        "count": 4,
+        "example_sessions": [
+          "a3f9e7c21f60921c1865bbeb6af10d88",
+          "9e6e55b7a83a168baff9a3e407d064f0",
+          "e721b7500c91a2265ca8c0e5c6b852c6"
+        ]
+      },
+      "RICHIESTA_RITIRO_REFERTI": {
+        "count": 7,
+        "example_sessions": [
+          "80eb0c034dabe7028c9ba1bdc9e1959e",
+          "163a4950ecfde5aef8f324ac57a55d94",
+          "1ac574a8d41d0d00119f98f2fb1e63bb"
+        ]
+      }
+    },
+    "sample_documents": [
+      {
+        "_id": "68bd8bb334ea2bca071e17ca",
+        "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+        "session_id": "bf7e50a5c5c5da734d48d293e80afba6",
+        "classification": "CONTACTO_RITIRO_REFERTI",
+        "classification_LLM": "CONTACTO_RITIRO_REFERTI",
+        "classification_method": "INTELLIGENT_CLUSTERING",
+        "classification_type": "OUTLIER",
+        "classified_at": "2025-09-07T13:42:11.498069",
+        "classified_by": "intelligent_clustering",
+        "confidence": 1.0,
+        "confidence_disagreement": 0.0,
+        "created_at": "2025-09-07T13:42:11.498069",
+        "disagreement": false,
+        "disagreement_score": 0.0,
+        "embedding": [],
+        "embedding_model": "no_embedding",
+        "human_reviewed": false,
+        "llm_confidence": 1.0,
+        "llm_prediction": "CONTACTO_RITIRO_REFERTI",
+        "llm_reasoning": "Richiesta di contatto per l'ufficio ritiro referti",
+        "metadata": {
+          "cluster_id": -1,
+          "is_representative": false,
+          "representative": false,
+          "outlier": true,
+          "propagated": false
+        },
+        "motivazione": "Richiesta di contatto per l'ufficio ritiro referti",
+        "notes": "",
+        "precision_LLM": 1.0,
+        "predicted_label": "CONTACTO_RITIRO_REFERTI",
+        "review_status": "auto_classified",
+        "session_type": "outlier",
+        "tenant_name": "Humanitas",
+        "tenant_slug": "humanitas",
+        "testo_completo": "[UTENTE] Posso avere telefono ufficio referti  [ASSISTENTE] L'ufficio ritiro referti di Humanitas si trova in Via Sardegna 5, Fizzonasco di Pieve Emanuele. Per ulteriori informazioni, puoi visitare la pagina [Referti e Cartelle Cliniche - Humanitas](https://www.humanitas.it/info/referti-cartelle-cliniche)【6:0†scraped_https___www.humanitas.it_info_referti.json】.",
+        "updated_at": "2025-09-07T13:42:11.498292"
+      },
+      {
+        "_id": "68bd8bb634ea2bca071e17d1",
+        "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+        "session_id": "04f310fef76d571537b3743571381aca",
+        "classification": "INFO_RITIRO_REFERTI_CARTELLA_CLINICA",
+        "classification_LLM": "INFO_RITIRO_REFERTI_CARTELLA_CLINICA",
+        "classification_method": "INTELLIGENT_CLUSTERING",
+        "classification_type": "OUTLIER",
+        "classified_at": "2025-09-07T13:42:14.371989",
+        "classified_by": "intelligent_clustering",
+        "confidence": 1.0,
+        "confidence_disagreement": 0.0,
+        "created_at": "2025-09-07T13:42:14.371989",
+        "disagreement": false,
+        "disagreement_score": 0.0,
+        "embedding": [],
+        "embedding_model": "no_embedding",
+        "human_reviewed": false,
+        "llm_confidence": 1.0,
+        "llm_prediction": "INFO_RITIRO_REFERTI_CARTELLA_CLINICA",
+        "llm_reasoning": "Richiesta informazioni su come ritirare vetrini, che rientra nella categoria di ritiro referti e cartelle cliniche.",
+        "metadata": {
+          "cluster_id": -1,
+          "is_representative": false,
+          "representative": false,
+          "outlier": true,
+          "propagated": false
+        },
+        "motivazione": "Richiesta informazioni su come ritirare vetrini, che rientra nella categoria di ritiro referti e cartelle cliniche.",
+        "notes": "",
+        "precision_LLM": 1.0,
+        "predicted_label": "INFO_RITIRO_REFERTI_CARTELLA_CLINICA",
+        "review_status": "auto_classified",
+        "session_type": "outlier",
+        "tenant_name": "Humanitas",
+        "tenant_slug": "humanitas",
+        "testo_completo": "[UTENTE] Vorrei sapere come devo ritirare dei vetrini [ASSISTENTE] Per ritirare i vetrini, è necessario recarsi presso l'ufficio ritiro referti situato in via Sardegna 5, 20090 Fizzonasco di Pieve Emanuele (MI). Gli orari di apertura sono dal lunedì al venerdì, dalle 10:00 alle 18:00, e il sabato dalle 9:00 alle 13:00. È importante portare con sé il promemoria del ritiro, un documento identificativo e la tessera sanitaria. Se il ritiro viene effettuato da una persona delegata, è necessaria una delega firmata, oltre ai documenti del delegante e del delegato【6:16†scraped_https___www.humanitas.it_info_referti-cartelle-cliniche.json】.\n\nPer maggiori informazioni può visitare la pagina [Referti e Cartelle Cliniche - Humanitas](https://www.humanitas.it/info/referti-cartelle-cliniche). [UTENTE] Volevo sapere come devo fare la richiesta per effettuare il ritiro dei vetrini [ASSISTENTE] Per effettuare la richiesta di ritiro dei vetrini, è necessario recarsi presso l'ufficio ritiro referti di Humanitas, situato in via Sardegna 5, Fizzonasco di Pieve Emanuele (MI). Porta con te il promemoria del ritiro, un documento identificativo e la tessera sanitaria. Se il ritiro viene effettuato da una persona delegata, è necessaria una delega firmata, oltre ai documenti del delegante e del delegato【6:0†scraped_https___www.humanitas.it_info_referti-cartelle-cliniche.json】.\n\nPer maggiori informazioni può visitare la pagina [Referti e Cartelle Cliniche - Humanitas](https://www.humanitas.it/info/referti-cartelle-cliniche).",
+        "updated_at": "2025-09-07T13:42:14.372085"
+      },
+      {
+        "_id": "68bd8bb834ea2bca071e17d4",
+        "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+        "session_id": "29fac73a798f6df66fed233cae03ec46",
+        "classification": "INFO_ESAMI_PRESTAZIONI",
+        "classification_LLM": "INFO_ESAMI_PRESTAZIONI",
+        "classification_method": "INTELLIGENT_CLUSTERING",
+        "classification_type": "OUTLIER",
+        "classified_at": "2025-09-07T13:42:16.526847",
+        "classified_by": "intelligent_clustering",
+        "confidence": 0.9,
+        "confidence_disagreement": 0.0,
+        "created_at": "2025-09-07T13:42:16.526847",
+        "disagreement": false,
+        "disagreement_score": 0.0,
+        "embedding": [],
+        "embedding_model": "no_embedding",
+        "human_reviewed": false,
+        "llm_confidence": 0.9,
+        "llm_prediction": "INFO_ESAMI_PRESTAZIONI",
+        "llm_reasoning": "L'utente chiede informazioni sull'apertura del centro prelievi a Fiordaliso, che rientra nelle informazioni su esami e prestazioni.",
+        "metadata": {
+          "cluster_id": -1,
+          "is_representative": false,
+          "representative": false,
+          "outlier": true,
+          "propagated": false
+        },
+        "motivazione": "L'utente chiede informazioni sull'apertura del centro prelievi a Fiordaliso, che rientra nelle informazioni su esami e prestazioni.",
+        "notes": "",
+        "precision_LLM": 0.9,
+        "predicted_label": "INFO_ESAMI_PRESTAZIONI",
+        "review_status": "auto_classified",
+        "session_type": "outlier",
+        "tenant_name": "Humanitas",
+        "tenant_slug": "humanitas",
+        "testo_completo": "[UTENTE] Il centro prelievi a fiordaliso è aperto? [ASSISTENTE] Il centro prelievi di Humanitas Medical Care Fiordaliso si trova in Via Eugenio Curiel, 25, 20089 - Rozzano (MI). Per informazioni sugli orari di apertura, ti consiglio di visitare il sito ufficiale [Humanitas Medical Care Fiordaliso](https://www.humanitas-care.it/dove-siamo/humanitas-medical-care-fiordaliso). Se hai bisogno di ulteriori dettagli, sono qui per aiutarti!",
+        "updated_at": "2025-09-07T13:42:16.526945"
+      }
+    ]
+  },
+  "propagated": {
+    "total_propagated": 0,
+    "by_classification": {},
+    "sample_documents": []
+  },
+  "summary": {
+    "total_representatives": 0,
+    "total_outliers": 1357,
+    "total_propagated": 0,
+    "total_documents": 1360
+  }
+}

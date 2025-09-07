@@ -1,0 +1,55 @@
+{
+  "analysis_timestamp": "2025-09-07T21:30:13.719999",
+  "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+  "tenant_name": "Humanitas",
+  "config_analysis": {
+    "clustering_config": {
+      "algorithm": "hdbscan",
+      "enabled": true,
+      "gpu_enabled": true,
+      "gpu_fallback_cpu": true,
+      "gpu_memory_limit": 0.8,
+      "min_cluster_size": 5,
+      "min_samples": 3
+    },
+    "bertopic_config": {
+      "enabled": true,
+      "hdbscan_params": {
+        "metric": "euclidean",
+        "min_cluster_size": 8,
+        "min_samples": 4
+      },
+      "model_subdir": "bertopic",
+      "return_one_hot": false,
+      "svd_components": 20,
+      "top_k": 10,
+      "umap_params": {
+        "metric": "euclidean",
+        "min_dist": 0.05,
+        "n_components": 3,
+        "n_neighbors": 10
+      },
+      "use_svd": true
+    },
+    "hdbscan_params": {
+      "metric": "euclidean",
+      "min_cluster_size": 8,
+      "min_samples": 4
+    }
+  },
+  "embedding_stats": {
+    "has_embedding": 0,
+    "empty_embedding": 10,
+    "no_embedding_field": 0,
+    "embedding_models": "{'no_embedding'}"
+  },
+  "suggestions": [
+    {
+      "priority": "CRITICO",
+      "issue": "Nessun embedding valido",
+      "solution": "Rigenerare embeddings per tutti i documenti",
+      "command": "python regenerate_embeddings.py --tenant humanitas"
+    }
+  ],
+  "success": true
+}

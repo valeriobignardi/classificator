@@ -1027,3 +1027,178 @@ class AIConfigurationService:
         if self.use_database and hasattr(self.db_service, 'clear_cache'):
             self.db_service.clear_cache()  # Il metodo DatabaseAIConfigService.clear_cache() non accetta parametri
             print(f"🧹 Cache database service pulita")
+    
+    
+    # =====================================
+    # GESTIONE BATCH PROCESSING CONFIG
+    # =====================================
+    
+    def save_batch_processing_config(self, tenant_id: str, batch_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Salva configurazione batch processing per tenant
+        
+        Scopo:
+            Salva parametri classification_batch_size e max_parallel_calls
+            con validazione e gestione errori
+        
+        Parametri di input:
+            tenant_id: ID del tenant (UUID)
+            batch_config: Dizionario con parametri {
+                'classification_batch_size': int (1-1000),
+                'max_parallel_calls': int (1-500)
+            }
+        
+        Valori di ritorno:
+            dict: Risultato operazione con successo/errore
+        
+        Data ultima modifica: 2025-09-07
+        """
+        try:
+            # Validazione parametri
+            batch_size = batch_config.get('classification_batch_size', 32)
+            parallel_calls = batch_config.get('max_parallel_calls', 200)
+            
+            # Valida range parametri
+            if not (1 <= batch_size <= 1000):
+                return {
+                    'success': False,
+                    'error': f'classification_batch_size deve essere tra 1 e 1000 (ricevuto: {batch_size})'
+                }
+            
+            if not (1 <= parallel_calls <= 500):
+                return {
+                    'success': False,
+                    'error': f'max_parallel_calls deve essere tra 1 e 500 (ricevuto: {parallel_calls})'
+                }
+            
+            # Salva nel database se disponibile
+            if self.use_database:
+                success = self.db_service.save_batch_processing_config(tenant_id, batch_config)
+                
+                if success:
+                    # Pulisce cache per forzare ricaricamento
+                    self.clear_cache(tenant_id)
+                    
+                    return {
+                        'success': True,
+                        'tenant_id': tenant_id,
+                        'batch_config': {
+                            'classification_batch_size': batch_size,
+                            'max_parallel_calls': parallel_calls
+                        },
+                        'saved_to': 'database',
+                        'timestamp': datetime.now().isoformat()
+                    }
+                else:
+                    return {
+                        'success': False,
+                        'error': 'Errore salvataggio nel database'
+                    }
+            else:
+                return {
+                    'success': False,
+                    'error': 'Database non disponibile - configurazione non persistente'
+                }
+                
+        except Exception as e:
+            print(f"❌ [AIConfig] Errore salvataggio batch config: {e}")
+            return {
+                'success': False,
+                'error': f'Errore interno: {str(e)}'
+            }
+    
+    
+    def get_batch_processing_config(self, tenant_id: str) -> Dict[str, Any]:
+        """
+        Recupera configurazione batch processing per tenant
+        
+        Scopo:
+            Carica parametri batch con fallback intelligente:
+            1. Database (se disponibile)
+            2. Config.yaml
+            3. Valori di default
+        
+        Parametri di input:
+            tenant_id: ID del tenant
+        
+        Valori di ritorno:
+            dict: {'success': bool, 'batch_config': dict} o {'success': False, 'error': str}
+        
+        Data ultima modifica: 2025-09-07
+        """
+        try:
+            # Prova a caricare dal database
+            if self.use_database:
+                db_config = self.db_service.get_batch_processing_config(tenant_id)
+                
+                if db_config.get('source') == 'database':
+                    return {
+                        'success': True,
+                        'batch_config': {
+                            'classification_batch_size': db_config['classification_batch_size'],
+                            'max_parallel_calls': db_config['max_parallel_calls'],
+                            'source': 'database',
+                            'updated_at': db_config.get('updated_at'),
+                            'tenant_id': tenant_id
+                        }
+                    }
+            
+            # Fallback su config.yaml
+            pipeline_config = self.config.get('pipeline', {})
+            openai_config = self.config.get('llm', {}).get('openai', {})
+            
+            return {
+                'success': True,
+                'batch_config': {
+                    'classification_batch_size': pipeline_config.get('classification_batch_size', 32),
+                    'max_parallel_calls': openai_config.get('max_parallel_calls', 200),
+                    'source': 'config_yaml',
+                    'tenant_id': tenant_id
+                }
+            }
+            
+        except Exception as e:
+            print(f"❌ [AIConfig] Errore caricamento batch config: {e}")
+            
+            # Fallback finale su default
+            return {
+                'success': False,
+                'error': str(e),
+                'fallback_config': {
+                    'classification_batch_size': 32,
+                    'max_parallel_calls': 200,
+                    'source': 'default',
+                    'tenant_id': tenant_id
+                }
+            }
+    
+    def clear_cache(self, tenant_id: Optional[str] = None) -> None:
+        """
+        Pulisce cache configurazioni
+        
+        Scopo:
+            Invalida cache per forzare ricaricamento configurazioni
+            dal database o config.yaml
+        
+        Parametri di input:
+            tenant_id: ID tenant specifico (se None, pulisce tutta la cache)
+        
+        Data ultima modifica: 2025-09-07
+        """
+        try:
+            if self.use_database and hasattr(self.db_service, '_tenant_configs_cache'):
+                if tenant_id:
+                    # Pulisce solo cache per tenant specifico
+                    self.db_service._tenant_configs_cache.pop(tenant_id, None)
+                    print(f"🧹 [AIConfig] Cache pulita per tenant {tenant_id}")
+                else:
+                    # Pulisce tutta la cache
+                    self.db_service._tenant_configs_cache.clear()
+                    print("🧹 [AIConfig] Cache completa pulita")
+                    
+                # Reset timestamp cache
+                if hasattr(self.db_service, '_cache_timestamp'):
+                    self.db_service._cache_timestamp = None
+            
+        except Exception as e:
+            print(f"⚠️ [AIConfig] Errore pulizia cache: {e}")

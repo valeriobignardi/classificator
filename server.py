@@ -3329,6 +3329,186 @@ def api_get_ai_debug_info(tenant_id: str):
             'error': f'Errore recupero debug info: {str(e)}'
         }), 500
 
+
+# =============================================================================
+# API BATCH PROCESSING CONFIGURATION
+# =============================================================================
+
+@app.route('/api/ai-config/<tenant_id>/batch-config', methods=['GET'])
+def api_get_batch_processing_config(tenant_id: str):
+    """
+    API per recuperare configurazione batch processing per tenant
+    
+    Args:
+        tenant_id: ID del tenant
+        
+    Returns:
+        Configurazione batch processing corrente con source
+        
+    Data ultima modifica: 2025-09-07
+    """
+    try:
+        service = get_ai_config_service()
+        batch_config = service.get_batch_processing_config(tenant_id)
+        
+        return jsonify({
+            'success': True,
+            'tenant_id': tenant_id,
+            'batch_config': batch_config
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Errore recupero configurazione batch: {str(e)}'
+        }), 500
+
+
+@app.route('/api/ai-config/<tenant_id>/batch-config', methods=['POST'])
+def api_save_batch_processing_config(tenant_id: str):
+    """
+    API per salvare configurazione batch processing per tenant
+    
+    Body JSON:
+        {
+            "classification_batch_size": int (1-1000),
+            "max_parallel_calls": int (1-500)
+        }
+        
+    Returns:
+        Risultato salvataggio con dettagli
+        
+    Data ultima modifica: 2025-09-07
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Body JSON richiesto'
+            }), 400
+        
+        # Estrai parametri
+        batch_config = {}
+        
+        if 'classification_batch_size' in data:
+            try:
+                batch_config['classification_batch_size'] = int(data['classification_batch_size'])
+            except (ValueError, TypeError):
+                return jsonify({
+                    'success': False,
+                    'error': 'classification_batch_size deve essere un intero'
+                }), 400
+        
+        if 'max_parallel_calls' in data:
+            try:
+                batch_config['max_parallel_calls'] = int(data['max_parallel_calls'])
+            except (ValueError, TypeError):
+                return jsonify({
+                    'success': False,
+                    'error': 'max_parallel_calls deve essere un intero'
+                }), 400
+        
+        if not batch_config:
+            return jsonify({
+                'success': False,
+                'error': 'Almeno un parametro batch richiesto'
+            }), 400
+        
+        # Salva configurazione
+        service = get_ai_config_service()
+        result = service.save_batch_processing_config(tenant_id, batch_config)
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Errore salvataggio configurazione batch: {str(e)}'
+        }), 500
+
+
+@app.route('/api/ai-config/<tenant_id>/batch-config/validate', methods=['POST'])
+def api_validate_batch_processing_config(tenant_id: str):
+    """
+    API per validare parametri batch processing senza salvarli
+    
+    Body JSON:
+        {
+            "classification_batch_size": int,
+            "max_parallel_calls": int
+        }
+        
+    Returns:
+        Risultato validazione con suggerimenti
+        
+    Data ultima modifica: 2025-09-07
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Body JSON richiesto'
+            }), 400
+        
+        validation_result = {
+            'success': True,
+            'valid': True,
+            'errors': [],
+            'warnings': [],
+            'suggestions': []
+        }
+        
+        # Valida classification_batch_size
+        if 'classification_batch_size' in data:
+            batch_size = data['classification_batch_size']
+            
+            if not isinstance(batch_size, int) or batch_size < 1 or batch_size > 1000:
+                validation_result['valid'] = False
+                validation_result['errors'].append(
+                    'classification_batch_size deve essere tra 1 e 1000'
+                )
+            elif batch_size > 100:
+                validation_result['warnings'].append(
+                    f'Batch size {batch_size} è elevato - potrebbe impattare memoria'
+                )
+            elif batch_size < 16:
+                validation_result['suggestions'].append(
+                    'Batch size basso - considera almeno 16 per migliori performance'
+                )
+        
+        # Valida max_parallel_calls
+        if 'max_parallel_calls' in data:
+            parallel_calls = data['max_parallel_calls']
+            
+            if not isinstance(parallel_calls, int) or parallel_calls < 1 or parallel_calls > 500:
+                validation_result['valid'] = False
+                validation_result['errors'].append(
+                    'max_parallel_calls deve essere tra 1 e 500'
+                )
+            elif parallel_calls > 300:
+                validation_result['warnings'].append(
+                    f'Parallel calls {parallel_calls} è molto elevato - attento ai rate limits'
+                )
+            elif parallel_calls < 10:
+                validation_result['suggestions'].append(
+                    'Parallel calls basso - considera almeno 10 per buone performance'
+                )
+        
+        return jsonify(validation_result)
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Errore validazione: {str(e)}'
+        }), 500
+
 @app.route('/api/review/<tenant_id>/available-tags', methods=['GET'])
 def api_get_available_tags(tenant_id: str):
     """

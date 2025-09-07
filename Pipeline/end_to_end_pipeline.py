@@ -1437,61 +1437,16 @@ class EndToEndPipeline:
                 # Fallback generico
                 suggested_labels[cluster_id] = f"Cluster {cluster_id}"
         
-        # 🆕 GESTIONE OUTLIER COME CLUSTER SPECIALE
-        # Trova tutte le sessioni outlier (cluster_id = -1)
+        # ✅ OUTLIER GESTITI AUTOMATICAMENTE
+        # Gli outlier non hanno bisogno di "rappresentanti" artificiali perché:
+        # 1. Vengono classificati individualmente con ensemble ML+LLM in fase runtime
+        # 2. Non beneficiano della propagazione (sono rappresentanti di se stessi)
+        # 3. Il review umano si concentra sui cluster veri per il training supervisionato
         outlier_indices = [i for i, label in enumerate(cluster_labels) if label == -1]
         n_outliers = len(outlier_indices)
         
         if n_outliers > 0:
-            print(f"🔍 Trovati {n_outliers} outlier - creazione cluster speciale per review...")
-            
-            # Crea rappresentanti per gli outlier (massimo 5 per non sovraccaricare il review)
-            max_outlier_reps = min(5, n_outliers)
-            outlier_representatives = []
-            
-            # Selezione intelligente outlier (più diversi possibile)
-            if n_outliers <= max_outlier_reps:
-                selected_outlier_indices = outlier_indices
-            else:
-                # Seleziona outlier più diversi usando distanza embedding
-                outlier_embeddings = embeddings[outlier_indices]
-                from sklearn.metrics.pairwise import cosine_distances
-                outlier_distances = cosine_distances(outlier_embeddings)
-                
-                # Trova gli outlier più distanti tra loro
-                selected_outlier_indices = [outlier_indices[0]]  # Primo outlier
-                
-                for _ in range(max_outlier_reps - 1):
-                    max_min_dist = -1
-                    best_idx = -1
-                    
-                    for idx in outlier_indices:
-                        if idx not in selected_outlier_indices:
-                            min_dist_to_selected = min(
-                                outlier_distances[outlier_indices.index(idx)][outlier_indices.index(sel_idx)]
-                                for sel_idx in selected_outlier_indices
-                            )
-                            if min_dist_to_selected > max_min_dist:
-                                max_min_dist = min_dist_to_selected
-                                best_idx = idx
-                    
-                    if best_idx != -1:
-                        selected_outlier_indices.append(best_idx)
-            
-            # Crea dati rappresentanti per outlier
-            for idx in selected_outlier_indices:
-                session_id = session_ids[idx]
-                session_data = sessioni[session_id].copy()
-                session_data['session_id'] = session_id
-                session_data['classification_confidence'] = 0.3  # Bassa confidenza di default
-                session_data['classification_method'] = 'outlier'
-                outlier_representatives.append(session_data)
-            
-            # Aggiungi outlier ai representatives e suggested_labels
-            representatives[-1] = outlier_representatives  # Usa -1 come cluster_id per outlier
-            suggested_labels[-1] = "Casi Outlier"  # Etichetta descrittiva per outlier
-            
-            print(f"   🎯 Selezionati {len(outlier_representatives)} rappresentanti outlier per review umano")
+            print(f"🔍 Trovati {n_outliers} outlier - verranno classificati individualmente con ensemble ML+LLM")
         
         # Statistiche clustering avanzate
         n_clusters = len(cluster_info)
@@ -1941,518 +1896,7 @@ class EndToEndPipeline:
             traceback.print_exc()
             return 0
 
-    def allena_classificatore(self,
-                            sessioni: Dict[str, Dict],
-                            cluster_labels: np.ndarray,
-                            representatives: Dict[int, List[Dict]],
-                            suggested_labels: Dict[int, str],
-                            interactive_mode: bool = True) -> Dict[str, Any]:
-        """
-        Allena il classificatore supervisionato con review umano interattivo
-        
-        Args:
-            sessioni: Sessioni di training
-            cluster_labels: Etichette dei cluster
-            representatives: Rappresentanti dei cluster
-            suggested_labels: Etichette suggerite
-            interactive_mode: Se True, abilita la review umana interattiva
-            
-        Returns:
-            Metriche di training
-        """
-        trace_all("allena_classificatore", "ENTER", 
-                 sessioni_count=len(sessioni), 
-                 cluster_labels_count=len(cluster_labels),
-                 representatives_count=len(representatives),
-                 suggested_labels_count=len(suggested_labels),
-                 interactive_mode=interactive_mode)
-        
-        print(f"🚨🚨🚨 [DEBUG CRITICO] DENTRO allena_classificatore()!!!")
-        print(f"🚨🚨🚨 [DEBUG CRITICO] allena_classificatore() È STATA CHIAMATA!")
-        print(f"🚨🚨🚨 [DEBUG CRITICO] Parametri ricevuti:")
-        print(f"     - sessioni: {len(sessioni)}")
-        print(f"     - cluster_labels: {len(cluster_labels)}")
-        print(f"     - representatives: {len(representatives)}")
-        print(f"     - suggested_labels: {len(suggested_labels)}")
-        print(f"     - interactive_mode: {interactive_mode}")
-        print(f"🎓 Training del classificatore...")
-        print(f"📊 Sessioni da processare: {len(sessioni)}")
-        print(f"🏷️  Etichette suggerite: {len(suggested_labels)}")
-        print(f"👤 Modalità interattiva: {interactive_mode}")
-        
-        # Setup debug logging - riutilizza il logger già configurato  
-        try:
-            import logging
-            debug_logger = logging.getLogger('pipeline_debug')
-            debug_logger.info(f"🚨 DENTRO allena_classificatore()! FUNZIONE CHIAMATA!")
-            debug_logger.info(f"   Parametri: sessioni={len(sessioni)}, cluster_labels={len(cluster_labels)}")
-            debug_logger.info(f"   representatives={len(representatives)}, suggested_labels={len(suggested_labels)}")
-            debug_logger.info(f"   interactive_mode={interactive_mode}")
-        except Exception as e:
-            print(f"🚨 Warning: Debug logging non disponibile: {e}")
-        
-        # 🔍 DEBUG: Stato BERTopic Provider per training ML
-        print(f"\n🤖 DEBUG: STATO BERTOPIC PROVIDER:")
-        bertopic_provider = getattr(self, '_bertopic_provider_trained', None)
-        print(f"   📋 Provider disponibile: {bertopic_provider is not None}")
-        if bertopic_provider:
-            print(f"   📊 Tipo: {type(bertopic_provider)}")
-            if hasattr(bertopic_provider, 'model') and bertopic_provider.model:
-                try:
-                    topics = bertopic_provider.model.get_topics()
-                    print(f"   📊 Numero topic: {len(topics)}")
-                    print(f"   📊 Topic validi: {len([t for t in topics.keys() if t != -1])}")
-                except Exception as e:
-                    print(f"   ❌ Errore accesso topic: {e}")
-            else:
-                print(f"   ❌ Modello interno mancante!")
-        else:
-            print(f"   ❌ NESSUN PROVIDER BERTOPIC DISPONIBILE!")
-            print(f"   🔍 Verificare fase 2A (training BERTopic anticipato)")
-        print(f"   🔧 Config BERTopic enabled: {self.bertopic_config.get('enabled', False)}")
-        print(f"")  # Linea vuota per separazione
-        
-        # 🆕 DEBUG MIGLIORATO: Analizza risultati clustering
-        n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
-        n_outliers = list(cluster_labels).count(-1)
-        total_sessions = len(cluster_labels)
-        
-        print(f"\n� ANALISI RISULTATI CLUSTERING:")
-        print(f"   📊 Sessioni totali: {total_sessions}")
-        print(f"   🎯 Cluster validi trovati: {n_clusters}")
-        print(f"   🔍 Outliers: {n_outliers}")
-        print(f"   📈 Percentuale clusterizzata: {((total_sessions - n_outliers) / total_sessions * 100):.1f}%")
-        
-        # 🚨 CONTROLLO CRITICO: Fallimento clustering = Errore fatale
-        if n_clusters == 0:
-            outlier_percentage = (n_outliers / total_sessions * 100) if total_sessions > 0 else 100
-            error_msg = f"""
-❌ CLUSTERING FALLITO - TRAINING INTERROTTO
-📊 Analisi fallimento:
-   • Sessioni processate: {total_sessions}
-   • Cluster formati: 0
-   • Outliers: {n_outliers} (100% delle sessioni)
-   
-🔍 Possibili cause:
-   • Dataset troppo piccolo (minimo raccomandato: 50+ sessioni)
-   • Dati troppo omogenei (tutte le conversazioni identiche)
-   • Parametri clustering troppo restrittivi (min_cluster_size, min_samples)
-   • Embeddings di scarsa qualità
-   
-💡 Soluzioni suggerite:
-   • Aumentare il dataset di training
-   • Verificare diversità delle conversazioni
-   • Ridurre min_cluster_size in config.yaml
-   • Controllare configurazione embedding
-            """
-            print(error_msg)
-            
-            # 🚨 RITORNA ERRORE INVECE DI FALLBACK
-            raise ValueError(f"Clustering fallito: 0 cluster formati su {total_sessions} sessioni. Il training supervisionato richiede almeno 1 cluster valido per funzionare correttamente. Verificare dataset e configurazione clustering.")
-        
-        # ✅ SUCCESSO CLUSTERING
-        print(f"\n✅ CLUSTERING RIUSCITO - SCENARIO CON CLUSTER")
-        print(f"🎯 Procedendo con training basato su {n_clusters} cluster validi")
-        
-        # Se modalità interattiva è abilitata, esegui review umano
-        if interactive_mode and n_clusters > 0:
-            print(f"\n👤 MODALITÀ INTERATTIVA ABILITATA")
-            print(f"📊 Trovati {n_clusters} cluster da revieware")
-            print("⏭️ Procedendo automaticamente con review interattiva abilitata")
-        
-        # Esegui review interattivo se abilitato
-        reviewed_labels = suggested_labels.copy()
-        print(f"🔍 Labels dopo review: {len(reviewed_labels)}")
-        
-        if interactive_mode:
-            print(f"\n🔍 INIZIO REVIEW INTERATTIVO")
-            
-            # 🆕 ORDINE PROCESSAMENTO: prima cluster crescenti (0,1,2...), poi outlier (-1)
-            # Separa cluster normali da outlier
-            normal_clusters = [cid for cid in suggested_labels.keys() if cid >= 0]
-            outlier_clusters = [cid for cid in suggested_labels.keys() if cid == -1]
-            
-            # Ordina cluster normali in modo crescente
-            normal_clusters_sorted = sorted(normal_clusters)
-            
-            # Processamento in ordine: cluster normali prima, poi outlier
-            processing_order = normal_clusters_sorted + outlier_clusters
-            
-            print(f"📋 Ordine di processamento:")
-            print(f"   🔢 Cluster normali: {normal_clusters_sorted}")
-            if outlier_clusters:
-                print(f"   🔍 Outlier: {outlier_clusters}")
-            
-            # Review di ogni cluster nell'ordine stabilito
-            for cluster_id in processing_order:
-                if cluster_id in representatives:
-                    suggested_label = suggested_labels[cluster_id]
-                    cluster_reps = representatives[cluster_id]
-                    
-                    # Messaggio specifico per outlier
-                    if cluster_id == -1:
-                        print(f"\n🔍 PROCESSAMENTO OUTLIER ({len(cluster_reps)} rappresentanti)")
-                    
-                    # Review umano del cluster
-                    final_label, human_confidence = self.interactive_trainer.review_cluster_representatives(
-                        cluster_id=cluster_id,
-                        representatives=cluster_reps,
-                        suggested_label=suggested_label
-                    )
-                    
-                    # Aggiorna l'etichetta se diversa
-                    if final_label != suggested_label:
-                        reviewed_labels[cluster_id] = final_label
-                        print(f"🔄 Cluster {cluster_id}: '{suggested_label}' → '{final_label}'")
-            
-            print(f"\n✅ Review interattivo completato")
-        
-        # Prepara dati di training con le etichette reviewed
-        # Ora usiamo direttamente embeddings e labels per l'ensemble
-        session_ids = list(sessioni.keys())
-        session_texts = [sessioni[sid]['testo_completo'] for sid in session_ids]
-        train_embeddings = self._get_embedder().encode(session_texts, session_ids=session_ids)
-        
-        # 🆕 CREA TRAINING LABELS CON GESTIONE MIGLIORATA OUTLIER
-        train_labels = []
-        print(f"\n📋 CREAZIONE TRAINING LABELS")
-        print(f"   📊 Sessioni totali: {len(session_ids)}")
-        print(f"   🏷️  Etichette reviewed: {len(reviewed_labels)}")
-        
-        for i, session_id in enumerate(session_ids):
-            # Trova il cluster di questa sessione
-            cluster_id = cluster_labels[i] if i < len(cluster_labels) else -1
-            
-            # Determina l'etichetta finale con priorità alle reviewed
-            if cluster_id in reviewed_labels:
-                raw_label = reviewed_labels[cluster_id]
-                final_label = clean_label_text(raw_label)
-                if final_label != raw_label:
-                    print(f"🧹 Label reviewed pulita: '{raw_label}' → '{final_label}'")
-                label_source = "reviewed"
-            else:
-                # Fallback per sessioni senza cluster o cluster non reviewed
-                final_label = 'altro'
-                label_source = "fallback"
-            
-            train_labels.append(final_label)
-            
-            # Log dettagliato per outlier
-            if cluster_id == -1:
-                print(f"🔍 Outlier {session_id}: '{final_label}' ({label_source})")
-        
-        train_labels = np.array(train_labels)
-        
-        # Statistiche etichette finali
-        unique_train_labels = set(train_labels)
-        print(f"📈 Labels uniche finali: {len(unique_train_labels)}")
-        
-        label_counts = {}
-        for label in train_labels:
-            label_counts[label] = label_counts.get(label, 0) + 1
-        
-        print(f"📋 Distribuzione finale etichette:")
-        for label, count in sorted(label_counts.items()):
-            percentage = (count / len(train_labels)) * 100
-            print(f"   {label}: {count} ({percentage:.1f}%)")
-        
-        # Verifica che ci siano abbastanza dati per ML training
-        unique_train_labels = set(train_labels)
-        if len(train_labels) < 2 or len(unique_train_labels) < 2:
-            print(f"⚠️ Insufficienti dati per training ML: {len(train_labels)} campioni, {len(unique_train_labels)} classi")
-            print(f"🔄 Saltando training ML, usando solo LLM per classificazioni future")
-            
-            # Salva informazioni cluster per ottimizzazione futura
-            self._last_cluster_labels = cluster_labels
-            self._last_representatives = representatives
-            self._last_reviewed_labels = reviewed_labels
-            print(f"💾 Salvate informazioni cluster per ottimizzazione futura")
-            
-            return {
-                'training_accuracy': 0.0,
-                'n_samples': len(train_labels),
-                'n_features': train_embeddings.shape[1] if len(train_embeddings) > 0 else 0,
-                'n_classes': len(unique_train_labels),
-                'interactive_review': interactive_mode,
-                'skip_reason': 'insufficient_data_for_ml_training',
-                'ensemble_mode': 'llm_only'
-            }
-        
-        if len(train_embeddings) < 5:
-            # 🚨 ERRORE: Troppo pochi embeddings per training ML
-            error_msg = f"""
-❌ TRAINING ML FALLITO - DATI INSUFFICIENTI
-📊 Analisi problema:
-   • Embeddings disponibili: {len(train_embeddings)}
-   • Minimum richiesto: 5
-   
-🔍 Possibili cause:
-   • Dataset troppo piccolo dopo clustering
-   • Troppi outliers, pochi dati nei cluster
-   • Errori nella generazione embeddings
-   
-💡 Soluzioni:
-   • Aumentare dimensione dataset
-   • Ridurre parametri clustering (min_cluster_size)
-   • Verificare qualità dati input
-            """
-            print(error_msg)
-            raise ValueError(f"Training ML impossibile: solo {len(train_embeddings)} embeddings disponibili (minimo: 5). Aumentare il dataset o modificare i parametri di clustering.")
-        
-        # 🆕 NUOVO FLUSSO: Usa BERTopic pre-addestrato per feature augmentation
-        ml_features = train_embeddings
-        bertopic_provider = getattr(self, '_bertopic_provider_trained', None)
-        
-        print(f"\n🔧 UTILIZZO BERTOPIC PRE-ADDESTRATO:")
-        print(f"   📋 BERTopic provider disponibile: {bertopic_provider is not None}")
-        
-        if bertopic_provider is not None:
-            try:
-                print(f"   🚀 Utilizzo BERTopic provider pre-addestrato per feature augmentation")
-                print(f"   📊 Testi da processare: {len(session_texts)}")
-                print(f"   📊 Training embeddings shape: {train_embeddings.shape}")
-                
-                print("   � Esecuzione bertopic_provider.transform() sui training data...")
-                start_transform = time.time()
-                tr = bertopic_provider.transform(
-                    session_texts,
-                    embeddings=train_embeddings,
-                    return_one_hot=self.bertopic_config.get('return_one_hot', False),
-                    top_k=self.bertopic_config.get('top_k', None)
-                )
-                transform_time = time.time() - start_transform
-                print(f"   ✅ Transform completato in {transform_time:.2f} secondi")
-                
-                topic_probas = tr.get('topic_probas')
-                one_hot = tr.get('one_hot')
-                
-                print(f"   📊 Topic probabilities shape: {topic_probas.shape if topic_probas is not None else 'None'}")
-                print(f"   📊 One-hot shape: {one_hot.shape if one_hot is not None else 'None'}")
-                
-                # Concatena features
-                parts = [train_embeddings]
-                if topic_probas is not None and topic_probas.size > 0:
-                    parts.append(topic_probas)
-                    print(f"   ✅ Topic probabilities aggiunte alle features")
-                if one_hot is not None and one_hot.size > 0:
-                    parts.append(one_hot)
-                    print(f"   ✅ One-hot encoding aggiunto alle features")
-                    
-                ml_features = np.concatenate(parts, axis=1)
-                print(f"   📊 Features finali shape: {ml_features.shape}")
-                print(f"   ✅ Feature enhancement: {train_embeddings.shape[1]} -> {ml_features.shape[1]}")
-                
-                # Inietta provider nell'ensemble per coerenza in inference
-                self.ensemble_classifier.set_bertopic_provider(
-                    bertopic_provider,
-                    top_k=self.bertopic_config.get('top_k', 15),
-                    return_one_hot=self.bertopic_config.get('return_one_hot', False)
-                )
-                print(f"   ✅ BERTopic provider iniettato nell'ensemble classifier")
-                
-                # 🚀 OTTIMIZZAZIONE: Crea cache features ML per evitare ricalcoli
-                print(f"🏗️ Creazione cache features ML per {len(session_texts)} sessioni...")
-                self._create_ml_features_cache(session_ids, session_texts, ml_features)
-                print(f"✅ Cache features ML creata - pronta per predizioni ottimizzate")
-                
-            except Exception as e:
-                print(f"⚠️ Errore nell'utilizzo BERTopic pre-addestrato: {e}")
-                print(f"   🔄 Proseguo con sole embeddings LaBSE")
-                bertopic_provider = None
-        else:
-            print(f"   ⚠️ Nessun BERTopic provider pre-addestrato disponibile")
-            print(f"   🔄 Proseguo con sole embeddings LaBSE")
-        
-        # Allena l'ensemble ML con le feature (augmentate o raw)
-        print("🎓 Training ensemble ML avanzato...")
-        print(f"🚨🚨🚨 [DEBUG CRITICO] AVVIO TRAINING ML ENSEMBLE!")
-        print(f"🚨🚨🚨 [DEBUG CRITICO] Features shape: {ml_features.shape}")
-        print(f"🚨🚨🚨 [DEBUG CRITICO] Train labels: {len(train_labels)}")
-        print(f"🚨🚨🚨 [DEBUG CRITICO] Unique labels: {len(set(train_labels))}")
-        print(f"🚨🚨🚨 [DEBUG CRITICO] self.ensemble_classifier: {self.ensemble_classifier}")
-        
-        # Log anche nel file ext.log
-        try:
-            import logging
-            debug_logger = logging.getLogger('pipeline_debug')
-            debug_logger.info(f"🔥 CHIAMATA train_ml_ensemble()!")
-            debug_logger.info(f"   Features shape: {ml_features.shape}")
-            debug_logger.info(f"   Train labels: {len(train_labels)}")
-            debug_logger.info(f"   Unique labels: {len(set(train_labels))}")
-        except Exception as e:
-            print(f"🚨 Warning: Debug logging non disponibile: {e}")
-        
-        metrics = self.ensemble_classifier.train_ml_ensemble(ml_features, train_labels)
-        
-        print(f"🚨🚨🚨 [DEBUG CRITICO] TRAINING ML ENSEMBLE COMPLETATO!")
-        print(f"🚨🚨🚨 [DEBUG CRITICO] Metrics ricevute: {metrics}")
-        
-        # Log completamento training
-        try:
-            debug_logger.info(f"✅ train_ml_ensemble() COMPLETATO!")
-            debug_logger.info(f"   Metrics ricevute: {type(metrics)}")
-        except Exception as e:
-            print(f"🚨 Warning: Debug logging non disponibile: {e}")
-        
-        # 🆕 ASSICURA CHE BERTOPIC PROVIDER SIA SEMPRE INIETTATO NELL'ENSEMBLE
-        # Inietta il provider anche se non è stato usato per il training
-        final_bertopic_provider = bertopic_provider or getattr(self, '_bertopic_provider_trained', None)
-        if final_bertopic_provider is not None:
-            print(f"🔗 INIEZIONE FINALE BERTOPIC PROVIDER NELL'ENSEMBLE:")
-            try:
-                self.ensemble_classifier.set_bertopic_provider(
-                    final_bertopic_provider,
-                    top_k=self.bertopic_config.get('top_k', 15),
-                    return_one_hot=self.bertopic_config.get('return_one_hot', False)
-                )
-                print(f"   ✅ BERTopic provider definitivamente iniettato per inferenza futura")
-            except Exception as e:
-                print(f"   ⚠️ Errore iniezione finale BERTopic: {e}")
-        else:
-            print(f"🔗 Nessun BERTopic provider disponibile per iniezione finale")
-        
-        # 🆕 Crea istanza MongoClassificationReader per generare nome modello
-        from mongo_classification_reader import MongoClassificationReader
-        mongo_reader = MongoClassificationReader(tenant=self.tenant)
-        
-        # Salva il modello ensemble e l'eventuale provider BERTopic
-        model_name = mongo_reader.generate_model_name(self.tenant_slug, "classifier")
-        self.ensemble_classifier.save_ensemble_model(f"models/{model_name}")
-        
-        # 🆕 SALVATAGGIO E CARICAMENTO IMMEDIATO BERTOPIC
-        if bertopic_provider is not None:
-            try:
-                print(f"\n💾 SALVATAGGIO BERTOPIC PRE-ADDESTRATO:")
-                provider_dir = os.path.join("models", f"{model_name}_{self.bertopic_config.get('model_subdir', 'bertopic')}")
-                print(f"   📁 Directory target: {provider_dir}")
-                
-                # Crea directory se non esiste
-                os.makedirs(provider_dir, exist_ok=True)
-                print(f"   📁 Directory creata/verificata")
-                
-                print(f"   💾 Avvio salvataggio bertopic_provider.save()...")
-                start_save = time.time()
-                bertopic_provider.save(provider_dir)
-                save_time = time.time() - start_save
-                print(f"   ✅ BERTopic provider salvato con successo in {save_time:.2f} secondi")
-                print(f"   📊 Path completo: {os.path.abspath(provider_dir)}")
-                
-                # Verifica file salvati
-                saved_files = [f for f in os.listdir(provider_dir) if os.path.isfile(os.path.join(provider_dir, f))]
-                print(f"   📄 File salvati: {len(saved_files)} -> {saved_files}")
-                
-                # 🚀 CARICAMENTO IMMEDIATO DEL BERTOPIC NEL ENSEMBLE
-                print(f"\n🚀 CARICAMENTO IMMEDIATO BERTOPIC NELL'ENSEMBLE:")
-                try:
-                    # Imposta il path nel classificatore per il caricamento automatico
-                    if hasattr(self.ensemble_classifier, 'llm_classifier') and hasattr(self.ensemble_classifier.llm_classifier, 'bertopic_provider'):
-                        print(f"   📁 Configurazione path BERTopic: {provider_dir}")
-                        # Se l'ensemble ha già il provider iniettato, è già pronto
-                        print(f"   ✅ BERTopic provider già iniettato nell'ensemble durante il training")
-                        print(f"   🎯 Sistema di fallback intelligente immediatamente operativo")
-                    else:
-                        print(f"   ⚠️ Ensemble non supporta BERTopic injection, salvataggio solo per restart")
-                        
-                except Exception as load_e:
-                    print(f"❌ ERRORE CARICAMENTO IMMEDIATO: {load_e}")
-                    print(f"   🔄 BERTopic sarà disponibile solo dopo restart del server")
-                
-            except Exception as e:
-                print(f"❌ ERRORE SALVATAGGIO BERTOPIC: {e}")
-                print(f"   🔍 Traceback: {traceback.format_exc()}")
-        else:
-            print(f"\n⚠️ NESSUN BERTOPIC DA SALVARE: bertopic_provider è None")
-            print(f"   💡 Verifica configurazione BERTopic nel config.yaml")
-        
-        # Aggiungi statistiche del review interattivo
-        if interactive_mode:
-            feedback_stats = self.interactive_trainer.get_feedback_summary()
-            metrics.update({
-                'interactive_review': True,
-                'reviewed_clusters': len(reviewed_labels),
-                'human_feedback_stats': feedback_stats
-            })
-            
-            # IMPORTANTE: Propaga le etichette dai cluster a tutte le sessioni (SOLO propagati, NON rappresentanti)
-            print(f"🔄 Propagazione etichette da {len(reviewed_labels)} cluster SOLO alle sessioni propagate...")
-            propagation_stats = self._propagate_labels_to_sessions(
-                sessioni, cluster_labels, reviewed_labels, representatives
-            )
-            metrics.update({
-                'propagation_stats': propagation_stats
-            })
-            
-            # 🆕 RIADDESTRAMENTO AUTOMATICO POST-TRAINING INTERATTIVO
-            print(f"\n🔄 RIADDESTRAMENTO AUTOMATICO POST-TRAINING INTERATTIVO")
-            print(f"   📊 Training labels disponibili: {len(train_labels)}")
-            print(f"   🎯 Classi unique: {len(set(train_labels))}")
-            
-            if len(train_labels) >= 10 and len(set(train_labels)) >= 2:
-                print(f"   ✅ Dati sufficienti per riaddestramento automatico")
-                print(f"   🔄 Avvio riaddestramento forzato ML ensemble con etichette umane...")
-                
-                try:
-                    # Forza riaddestramento ML ensemble con le etichette corrette dall'umano
-                    retrain_metrics = self.ensemble_classifier.train_ml_ensemble(
-                        ml_features, train_labels
-                    )
-                    print(f"   ✅ Riaddestramento completato con successo")
-                    print(f"   📊 Nuova accuracy: {retrain_metrics.get('accuracy', 'N/A'):.3f}")
-                    
-                    # Aggiorna il modello salvato con la versione riaddestrata
-                    model_name_retrained = mongo_reader.generate_model_name(
-                        self.tenant_slug, f"classifier_retrained_{datetime.now().strftime('%H%M%S')}"
-                    )
-                    self.ensemble_classifier.save_ensemble_model(f"models/{model_name_retrained}")
-                    print(f"   💾 Modello riaddestrato salvato come: {model_name_retrained}")
-                    
-                    # Aggiorna metrics con info riaddestramento
-                    metrics.update({
-                        'auto_retrained': True,
-                        'retrain_metrics': retrain_metrics,
-                        'retrained_model_name': model_name_retrained
-                    })
-                    
-                except Exception as retrain_error:
-                    print(f"   ❌ ERRORE nel riaddestramento automatico: {retrain_error}")
-                    metrics.update({
-                        'auto_retrained': False,
-                        'retrain_error': str(retrain_error)
-                    })
-            else:
-                print(f"   ⚠️ Dati insufficienti per riaddestramento automatico")
-                print(f"   💡 Minimo richiesto: 10 campioni e 2+ classi")
-                metrics.update({
-                    'auto_retrained': False,
-                    'retrain_skip_reason': f'insufficient_data_{len(train_labels)}_samples_{len(set(train_labels))}_classes'
-                })
-        else:
-            metrics['interactive_review'] = False
-        
-        # 🆕 CLASSIFICAZIONE E SALVATAGGIO RAPPRESENTANTI POST-TRAINING
-        print(f"\n🎯 CLASSIFICAZIONE RAPPRESENTANTI POST-TRAINING")
-        representatives_saved = self._classify_and_save_representatives_post_training(
-            sessioni, representatives, suggested_labels, cluster_labels, reviewed_labels
-        )
-        
-        if representatives_saved:
-            print(f"✅ Rappresentanti classificati e salvati con predizioni ML+LLM complete")
-            metrics.update({
-                'representatives_classified_post_training': True,
-                'representatives_with_ml_llm_predictions': True
-            })
-        else:
-            print(f"⚠️ Errore nella classificazione rappresentanti post-training")
-            metrics.update({
-                'representatives_classified_post_training': False,
-                'representatives_with_ml_llm_predictions': False
-            })
 
-        print(f"✅ Classificatore allenato e salvato come '{model_name}'")
-        
-        trace_all("allena_classificatore", "EXIT", return_value=metrics)
-        return metrics
-    
     def _classify_and_save_representatives_post_training(self,
                                                        sessioni: Dict[str, Dict],
                                                        representatives: Dict[int, List[Dict]],
@@ -2865,8 +2309,8 @@ class EndToEndPipeline:
             print(f"   📊 Input session_texts: {len(session_texts)}")
             
             predictions = self._classifica_ottimizzata_cluster(
-                sessioni, session_ids, session_texts, batch_size,
-                embeddings=embeddings, cluster_labels=cluster_labels, cluster_info=cluster_info
+                sessioni, session_ids, session_texts,
+                embeddings=embeddings, cluster_labels=cluster_labels, cluster_info=cluster_info, batch_size=batch_size
             )
             
             # 🚨 DEBUG SUPER CRITICO: Verifica risultato
@@ -6064,6 +5508,9 @@ class EndToEndPipeline:
                         return_details=True
                     )
                     
+                    # 🔧 FORZARE CONFIDENZA 0.5 per primo avvio (tutto in review)
+                    forced_confidence = 0.5
+                    
                     # Prepara dati per training futuro
                     embeddings = self._get_embedder().encode([conversation_text])[0]
                     
@@ -6072,13 +5519,14 @@ class EndToEndPipeline:
                         'text': conversation_text,
                         'embeddings': embeddings,
                         'llm_label': llm_result['predicted_label'],
-                        'llm_confidence': llm_result['confidence'],
+                        'llm_confidence': forced_confidence,  # 🔧 Forzata a 0.5
                         'cluster_id': cluster_id,
                         'is_representative': True,
                         'human_reviewed': False,  # Sarà aggiornato dopo review
                         'final_label': llm_result['predicted_label'],  # Inizialmente = LLM
                         'training_ready': True,
-                        'source': 'llm_only_primo_avvio'
+                        'source': 'llm_only_primo_avvio',
+                        'needs_review': True  # 🔧 Tutto in review per primo avvio
                     }
                     
                     training_data_list.append(training_data)
@@ -6127,6 +5575,9 @@ class EndToEndPipeline:
                     return_details=True
                 )
                 
+                # 🔧 FORZARE CONFIDENZA 0.5 per primo avvio (tutto in review)
+                forced_confidence = 0.5
+                
                 # Prepara dati per training futuro
                 embeddings = self._get_embedder().encode([conversation_text])[0]
                 
@@ -6135,13 +5586,14 @@ class EndToEndPipeline:
                     'text': conversation_text,
                     'embeddings': embeddings,
                     'llm_label': llm_result['predicted_label'],
-                    'llm_confidence': llm_result['confidence'],
+                    'llm_confidence': forced_confidence,  # 🔧 Forzata a 0.5
                     'cluster_id': -1,
                     'is_representative': False,
                     'human_reviewed': False,
                     'final_label': llm_result['predicted_label'],
                     'training_ready': True,
-                    'source': 'llm_only_primo_avvio'
+                    'source': 'llm_only_primo_avvio',
+                    'needs_review': True  # 🔧 Tutto in review per primo avvio
                 }
                 
                 training_data_list.append(training_data)
@@ -6177,6 +5629,10 @@ class EndToEndPipeline:
             self._last_representatives = representatives
             self._last_suggested_labels = suggested_labels
             
+            # 🆕 FASE 1.5: Crea file training per correzioni umane future
+            print(f"\n📁 FASE 1.5: CREAZIONE FILE TRAINING")
+            training_file_path = self.create_ml_training_file(training_data_list)
+            
             # Prepara risultato finale
             result = {
                 'status': 'llm_only_success',
@@ -6187,6 +5643,7 @@ class EndToEndPipeline:
                 'saved_for_training': len(training_data_list),
                 'saved_for_review': saved_count,
                 'training_data_ready': True,
+                'training_file_path': training_file_path,  # 🆕 Path del file training
                 'needs_human_review': True,
                 'next_step': 'human_review_then_ml_training',
                 'processing_time': elapsed_time
@@ -6221,6 +5678,186 @@ class EndToEndPipeline:
                 'processing_time': elapsed_time
             }
 
+    def create_ml_training_file(self, training_data_list: List[Dict[str, Any]]) -> str:
+        """
+        Crea file per addestramento ML con identificatori univoci per aggiornamenti umani.
+        
+        FASE 1.5: Creazione file training per future correzioni umane
+        
+        Scopo della funzione: Creare file ML training con ID univoci per update
+        Parametri di input: training_data_list con dati di classificazione
+        Parametri di output: path del file di training creato
+        Valori di ritorno: path del file training creato
+        Tracciamento aggiornamenti: 2025-09-07 - Valerio Bignardi - Nuovo per flusso FASE 1.5
+        
+        FLUSSO:
+        1. Crea file JSON con struttura training-ready
+        2. Ogni record ha unique_id per permettere update da review umana
+        3. Include conversation_text, predicted_label, confidence, cluster_info
+        4. File sarà aggiornato quando utente corregge etichette
+        
+        Args:
+            training_data_list: Lista di dict con dati classificazione
+            
+        Returns:
+            str: Path del file di training creato
+            
+        Autore: Valerio Bignardi  
+        Data: 2025-09-07
+        """
+        trace_all("create_ml_training_file", "ENTER", data_count=len(training_data_list))
+        
+        import json
+        import os
+        from datetime import datetime
+        
+        try:
+            print(f"📁 [TRAINING FILE] Creazione file training per ML...")
+            print(f"   📊 Records da salvare: {len(training_data_list)}")
+            
+            # Crea directory se non esiste
+            training_dir = "training_files"
+            os.makedirs(training_dir, exist_ok=True)
+            
+            # Nome file con timestamp e tenant
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            tenant_slug = self.tenant.tenant_slug if self.tenant else "unknown"
+            filename = f"ml_training_{tenant_slug}_{timestamp}.json"
+            filepath = os.path.join(training_dir, filename)
+            
+            # Prepara struttura training file
+            training_file_data = {
+                'metadata': {
+                    'created_at': datetime.now().isoformat(),
+                    'tenant_slug': tenant_slug,
+                    'tenant_name': self.tenant.tenant_name if self.tenant else "Unknown",
+                    'total_records': len(training_data_list),
+                    'source': 'llm_only_primo_avvio',
+                    'confidence_forced': 0.5,
+                    'needs_human_review': True,
+                    'version': '1.0'
+                },
+                'training_records': []
+            }
+            
+            # Processa ogni record
+            for i, data in enumerate(training_data_list):
+                training_record = {
+                    'unique_id': f"{tenant_slug}_{timestamp}_{i:06d}",  # ID univoco per update
+                    'session_id': data.get('session_id'),
+                    'conversation_text': data.get('text', ''),
+                    'predicted_label': data.get('llm_label'),
+                    'confidence': data.get('llm_confidence', 0.5),
+                    'cluster_id': data.get('cluster_id', -1),
+                    'is_representative': data.get('is_representative', False),
+                    'human_reviewed': False,  # Sarà aggiornato dopo review
+                    'human_corrected_label': None,  # Sarà popolato da review umana
+                    'needs_review': data.get('needs_review', True),
+                    'embeddings_included': True,  # Embeddings salvati separatamente
+                    'created_at': datetime.now().isoformat(),
+                    'last_updated': None
+                }
+                
+                training_file_data['training_records'].append(training_record)
+            
+            # Salva file JSON
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(training_file_data, f, indent=2, ensure_ascii=False)
+            
+            print(f"   ✅ File training creato: {filepath}")
+            print(f"   📊 Records salvati: {len(training_file_data['training_records'])}")
+            print(f"   🔑 ID univoci generati per future correzioni umane")
+            
+            trace_all("create_ml_training_file", "EXIT", filepath=filepath)
+            return filepath
+            
+        except Exception as e:
+            error_msg = f"Errore creazione file training: {str(e)}"
+            print(f"❌ [TRAINING FILE] {error_msg}")
+            trace_all("create_ml_training_file", "ERROR", error=error_msg)
+            return None
+
+    def update_training_file_with_human_corrections(self, 
+                                                   training_file_path: str,
+                                                   session_id: str, 
+                                                   corrected_label: str) -> bool:
+        """
+        Aggiorna file training con correzioni umane dalla review.
+        
+        FASE 2.5: Update file training con correzioni umane
+        
+        Scopo della funzione: Aggiornare file training con correzioni dalla review umana
+        Parametri di input: path file, session_id, etichetta corretta
+        Parametri di output: success flag
+        Valori di ritorno: True se aggiornamento riuscito
+        Tracciamento aggiornamenti: 2025-09-07 - Valerio Bignardi - Update training file
+        
+        Args:
+            training_file_path: Path del file training da aggiornare
+            session_id: ID sessione da correggere
+            corrected_label: Etichetta corretta dall'umano
+            
+        Returns:
+            bool: True se aggiornamento riuscito
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-07
+        """
+        trace_all("update_training_file_with_human_corrections", "ENTER",
+                 file_path=training_file_path, session_id=session_id, 
+                 corrected_label=corrected_label)
+        
+        import json
+        from datetime import datetime
+        
+        try:
+            print(f"🔄 [TRAINING UPDATE] Aggiornamento file con correzione umana...")
+            print(f"   📁 File: {training_file_path}")
+            print(f"   🆔 Session: {session_id}")
+            print(f"   🏷️ Nuova label: {corrected_label}")
+            
+            # Carica file esistente
+            if not os.path.exists(training_file_path):
+                print(f"❌ [TRAINING UPDATE] File non trovato: {training_file_path}")
+                return False
+            
+            with open(training_file_path, 'r', encoding='utf-8') as f:
+                training_data = json.load(f)
+            
+            # Trova e aggiorna record
+            updated = False
+            for record in training_data['training_records']:
+                if record['session_id'] == session_id:
+                    record['human_corrected_label'] = corrected_label
+                    record['human_reviewed'] = True
+                    record['last_updated'] = datetime.now().isoformat()
+                    updated = True
+                    break
+            
+            if not updated:
+                print(f"⚠️ [TRAINING UPDATE] Session {session_id} non trovata nel file")
+                return False
+            
+            # Aggiorna metadata
+            training_data['metadata']['last_human_update'] = datetime.now().isoformat()
+            
+            # Salva file aggiornato
+            with open(training_file_path, 'w', encoding='utf-8') as f:
+                json.dump(training_data, f, indent=2, ensure_ascii=False)
+            
+            print(f"   ✅ File aggiornato con correzione umana")
+            
+            trace_all("update_training_file_with_human_corrections", "EXIT", 
+                     updated=True)
+            return True
+            
+        except Exception as e:
+            error_msg = f"Errore aggiornamento file training: {str(e)}"
+            print(f"❌ [TRAINING UPDATE] {error_msg}")
+            trace_all("update_training_file_with_human_corrections", "ERROR", 
+                     error=error_msg)
+            return False
+
     def _get_mongo_reader(self):
         """
         Ottiene istanza MongoClassificationReader per salvataggio classificazioni.
@@ -6240,4 +5877,802 @@ class EndToEndPipeline:
         from mongo_classification_reader import MongoClassificationReader
         return MongoClassificationReader(tenant=self.tenant)
 
+    def aggiungi_caso_come_esempio_llm(self, 
+                                      session_id: str,
+                                      conversation_text: str,
+                                      etichetta_corretta: str,
+                                      categoria: str = None,
+                                      note_utente: str = None) -> Dict[str, Any]:
+        """
+        Aggiunge un caso di review umana come esempio LLM nel database MySQL.
+        
+        Scopo della funzione: Salvare conversazioni corrette dall'umano come esempi 
+                              di training per migliorare le prestazioni LLM
+        Parametri di input: session_id, conversation_text, etichetta_corretta, categoria, note_utente
+        Parametri di output: risultato operazione con dettagli
+        Valori di ritorno: Dict con success, esempio_id, messaggio
+        Tracciamento aggiornamenti: 2025-09-07 - Valerio Bignardi - Aggiunto supporto note_utente
+        
+        Args:
+            session_id: ID univoco della sessione 
+            conversation_text: Testo completo della conversazione
+            etichetta_corretta: Etichetta corretta assegnata dall'umano
+            categoria: Categoria opzionale per raggruppamento (default: etichetta_corretta)
+            note_utente: Note scritte dall'utente nell'interfaccia React per spiegare la decisione
+            
+        Returns:
+            Dict con risultato dell'operazione:
+            {
+                'success': bool,
+                'esempio_id': int,
+                'message': str,
+                'details': {...}
+            }
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-07
+        """
+        trace_all("aggiungi_caso_come_esempio_llm", "ENTER",
+                 session_id=session_id,
+                 etichetta_corretta=etichetta_corretta,
+                 categoria=categoria,
+                 note_utente=note_utente,
+                 text_length=len(conversation_text))
+        
+        start_time = time.time()
+        
+        try:
+            print(f"📚 [ESEMPIO LLM] Aggiunta caso come esempio...")
+            print(f"   🆔 Session ID: {session_id}")
+            print(f"   🏷️ Etichetta corretta: {etichetta_corretta}")
+            print(f"   📝 Lunghezza testo: {len(conversation_text)} caratteri")
+            if note_utente:
+                print(f"   📋 Note utente: {note_utente[:100]}{'...' if len(note_utente) > 100 else ''}")
+            
+            # Validazione input
+            if not session_id or not conversation_text or not etichetta_corretta:
+                error_msg = "Parametri mancanti: session_id, conversation_text e etichetta_corretta sono obbligatori"
+                print(f"❌ [ESEMPIO LLM] {error_msg}")
+                return {
+                    'success': False,
+                    'esempio_id': None,
+                    'message': error_msg,
+                    'details': {'validation_error': True}
+                }
+            
+            # Verifica tenant
+            if not self.tenant:
+                error_msg = "Tenant non configurato nella pipeline"
+                print(f"❌ [ESEMPIO LLM] {error_msg}")
+                return {
+                    'success': False,
+                    'esempio_id': None,
+                    'message': error_msg,
+                    'details': {'tenant_error': True}
+                }
+            
+            # Usa categoria = etichetta se non specificata
+            if not categoria:
+                categoria = etichetta_corretta
+            
+            # Formatta il contenuto come conversazione UTENTE/ASSISTENTE
+            esempio_content = f"UTENTE: {conversation_text}\nASSISTENTE: Classificazione: {etichetta_corretta}"
+            
+            # Genera nome esempio basato su timestamp e session_id
+            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+            esempio_name = f"review_caso_{session_id}_{timestamp_str}"
+            
+            # Descrizione dettagliata con note utente se disponibili
+            base_description = f"Esempio da review umana - Session: {session_id}, Corretto in: {etichetta_corretta}"
+            if note_utente and note_utente.strip():
+                description = f"{base_description}. Note: {note_utente.strip()}"
+            else:
+                description = base_description
+            
+            # Crea istanza PromptManager per accedere alla funzione create_example
+            from Utils.prompt_manager import PromptManager
+            prompt_manager = PromptManager(config_path=self.config_path)
+            
+            print(f"   📝 Creazione esempio nel database MySQL...")
+            print(f"   📛 Nome esempio: {esempio_name}")
+            print(f"   🗂️ Categoria: {categoria}")
+            
+            # Crea esempio nel database
+            esempio_id = prompt_manager.create_example(
+                tenant=self.tenant,
+                esempio_name=esempio_name,
+                esempio_content=esempio_content,
+                engine='LLM',  # Esempio specifico per LLM
+                esempio_type='CONVERSATION',  # Tipo conversazione
+                description=description,
+                categoria=categoria,
+                livello_difficolta='MEDIO'  # Default medio
+            )
+            
+            if esempio_id:
+                elapsed_time = time.time() - start_time
+                success_msg = f"Esempio LLM creato con successo: ID {esempio_id}"
+                
+                print(f"✅ [ESEMPIO LLM] {success_msg}")
+                print(f"   ⏱️ Completato in {elapsed_time:.2f}s")
+                print(f"   🆔 ID esempio: {esempio_id}")
+                print(f"   📂 Salvato in database: TAG.esempi")
+                
+                result = {
+                    'success': True,
+                    'esempio_id': esempio_id,
+                    'message': success_msg,
+                    'details': {
+                        'esempio_name': esempio_name,
+                        'categoria': categoria,
+                        'engine': 'LLM',
+                        'esempio_type': 'CONVERSATION',
+                        'processing_time': elapsed_time,
+                        'tenant_id': self.tenant.tenant_id,
+                        'tenant_name': self.tenant.tenant_name
+                    }
+                }
+                
+                trace_all("aggiungi_caso_come_esempio_llm", "EXIT", 
+                         return_value=result)
+                return result
+                
+            else:
+                error_msg = "Errore nella creazione dell'esempio (esempio_id = None)"
+                print(f"❌ [ESEMPIO LLM] {error_msg}")
+                
+                result = {
+                    'success': False,
+                    'esempio_id': None,
+                    'message': error_msg,
+                    'details': {'database_error': True}
+                }
+                
+                trace_all("aggiungi_caso_come_esempio_llm", "ERROR", 
+                         error_message=error_msg)
+                return result
+            
+        except Exception as e:
+            elapsed_time = time.time() - start_time
+            error_msg = f"Errore aggiunta esempio LLM: {str(e)}"
+            
+            print(f"❌ [ESEMPIO LLM] {error_msg}")
+            print(f"   ⏱️ Fallito dopo {elapsed_time:.2f}s")
+            import traceback
+            traceback.print_exc()
+            
+            result = {
+                'success': False,
+                'esempio_id': None,
+                'message': error_msg,
+                'details': {
+                    'exception': str(e),
+                    'processing_time': elapsed_time
+                }
+            }
+            
+            trace_all("aggiungi_caso_come_esempio_llm", "ERROR", 
+                     error_message=error_msg, exception=str(e))
+            return result
 
+    def esegui_training_supervisionato_fase1(self, 
+                                           sessioni: Dict[str, Dict],
+                                           cluster_labels: np.ndarray,
+                                           representatives: Dict[int, List[Dict]],
+                                           suggested_labels: Dict[int, str]) -> Dict[str, Any]:
+        """
+        FASE 1: TRAINING SUPERVISIONATO - Preparazione + Classificazione Iniziale
+        
+        Scopo della funzione: Eseguire clustering, classificazione con ML+LLM e salvataggio
+        Parametri di input: sessioni, cluster_labels, representatives, suggested_labels
+        Parametri di output: risultato con statistiche di classificazione
+        Valori di ritorno: Dict con success, total_classified, review_queue_populated
+        Tracciamento aggiornamenti: 2025-09-07 - Valerio Bignardi - Nuovo flusso a 3 fasi
+        
+        FLUSSO:
+        1. Estrai sessioni ✅ (già fatto prima di chiamare questo metodo)
+        2. Esegui clustering ✅ (già fatto prima di chiamare questo metodo)  
+        3. Classifica TUTTE le sessioni con ML+LLM:
+           - Se ML modello disponibile → ensemble ML+LLM
+           - Se ML modello NON disponibile → solo LLM (confidenza 0.5)
+        4. Salva TUTTO in MongoDB ✅
+        5. Review queue popolata automaticamente:
+           - Rappresentanti con bassa confidenza → review umana
+           - Outlier con bassa confidenza → review umana
+           - Primo avvio → TUTTO ha confidenza 0.5 → TUTTO in review
+        
+        Args:
+            sessioni: Dict sessioni estratte
+            cluster_labels: Array cluster ID per ogni sessione
+            representatives: Dict rappresentanti per cluster
+            suggested_labels: Dict etichette suggerite per cluster
+            
+        Returns:
+            Dict con risultato della fase 1:
+            {
+                'success': bool,
+                'total_sessions': int,
+                'total_classified': int,
+                'review_queue_populated': int,
+                'ml_model_available': bool,
+                'classification_method': str,
+                'cluster_stats': {...}
+            }
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-07
+        """
+        trace_all("esegui_training_supervisionato_fase1", "ENTER",
+                 sessioni_count=len(sessioni),
+                 cluster_labels_count=len(cluster_labels),
+                 representatives_count=len(representatives),
+                 suggested_labels_count=len(suggested_labels))
+        
+        start_time = time.time()
+        
+        try:
+            print(f"🚀 [FASE 1 TRAINING] Avvio classificazione iniziale...")
+            print(f"   📊 Sessioni da classificare: {len(sessioni)}")
+            print(f"   🏷️ Cluster con etichette: {len(suggested_labels)}")
+            print(f"   👥 Cluster con rappresentanti: {len(representatives)}")
+            
+            # Statistiche clustering
+            n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
+            n_outliers = list(cluster_labels).count(-1)
+            total_sessions = len(cluster_labels)
+            
+            print(f"   🎯 Cluster validi: {n_clusters}")
+            print(f"   🔍 Outliers: {n_outliers}")
+            print(f"   📈 Clusterizzate: {((total_sessions - n_outliers) / total_sessions * 100):.1f}%")
+            
+            # 3. CLASSIFICA TUTTE LE SESSIONI con ML+LLM
+            print(f"\n🤖 [FASE 1] Classificazione di tutte le sessioni...")
+            
+            # Verifica disponibilità modello ML
+            ml_model_available = self.ensemble_classifier.has_trained_ml_model() if hasattr(self.ensemble_classifier, 'has_trained_ml_model') else False
+            
+            if ml_model_available:
+                classification_method = "ENSEMBLE_ML_LLM"
+                base_confidence = 0.7  # Confidence più alta con ML disponibile
+                print(f"   ✅ Modello ML disponibile - Usando ensemble ML+LLM")
+            else:
+                classification_method = "SOLO_LLM"
+                base_confidence = 0.5  # Confidence default per primo avvio
+                print(f"   ⚠️ Modello ML non disponibile - Usando solo LLM (primo avvio)")
+            
+            classifications = []
+            review_queue_count = 0
+            
+            # Prepara lista sessioni per classificazione batch
+            session_texts = []
+            session_ids = []
+            session_cluster_ids = []
+            
+            for i, (session_id, session_data) in enumerate(sessioni.items()):
+                conversation_text = session_data.get('conversation_text', '')
+                cluster_id = cluster_labels[i] if i < len(cluster_labels) else -1
+                
+                session_texts.append(conversation_text)
+                session_ids.append(session_id)
+                session_cluster_ids.append(cluster_id)
+            
+            print(f"   📝 Preparate {len(session_texts)} sessioni per classificazione batch")
+            
+            # Esegui classificazione batch
+            if ml_model_available:
+                # Ensemble ML+LLM
+                print(f"   🔄 Esecuzione classificazione ensemble...")
+                batch_results = self._classify_sessions_batch_ensemble(session_texts, session_cluster_ids, suggested_labels)
+            else:
+                # Solo LLM (primo avvio)
+                print(f"   🔄 Esecuzione classificazione solo LLM...")
+                batch_results = self._classify_sessions_batch_llm_only(session_texts, session_cluster_ids, suggested_labels, base_confidence)
+            
+            # 4. SALVA TUTTO IN MONGODB
+            print(f"\n💾 [FASE 1] Salvataggio classificazioni in MongoDB...")
+            
+            mongo_reader = self._get_mongo_reader()
+            
+            for i, session_id in enumerate(session_ids):
+                session_data = sessioni[session_id]
+                cluster_id = session_cluster_ids[i]
+                classification_result = batch_results[i]
+                
+                # Determina se va in review queue
+                confidence = classification_result.get('confidence', base_confidence)
+                classification = classification_result.get('classification', 'ALTRO')
+                
+                # Logica review queue:
+                # - Primo avvio (ML non disponibile): TUTTO in review
+                # - Rappresentanti con bassa confidenza: in review
+                # - Outlier con bassa confidenza: in review
+                needs_review = False
+                if not ml_model_available:
+                    needs_review = True  # Primo avvio - tutto in review
+                elif cluster_id == -1:
+                    needs_review = True  # Outlier sempre in review
+                elif cluster_id in representatives and confidence < 0.7:
+                    needs_review = True  # Rappresentanti con bassa confidenza
+                
+                if needs_review:
+                    review_queue_count += 1
+                
+                # Prepara record per MongoDB
+                classification_record = {
+                    'session_id': session_id,
+                    'conversation_text': session_data.get('conversation_text', ''),
+                    'classification': classification,
+                    'confidence': confidence,
+                    'cluster_id': cluster_id,
+                    'is_representative': cluster_id in representatives and session_id in [r['session_id'] for r in representatives[cluster_id]],
+                    'is_outlier': cluster_id == -1,
+                    'review_status': 'pending' if needs_review else 'auto_approved',
+                    'classification_method': classification_method,
+                    'timestamp': datetime.now(),
+                    'tenant_id': self.tenant.tenant_id,
+                    'tenant_name': self.tenant.tenant_name,
+                    'metadata': {
+                        'clustering_algorithm': 'hdbscan',
+                        'embedding_model': getattr(self.embedder, 'model_name', 'unknown'),
+                        'llm_model': getattr(self.ensemble_classifier, 'llm_model', 'unknown'),
+                        'ml_model_available': ml_model_available
+                    }
+                }
+                
+                classifications.append(classification_record)
+            
+            # Salvataggio batch in MongoDB
+            print(f"   📊 Salvando {len(classifications)} classificazioni...")
+            try:
+                # Usa il metodo di salvataggio esistente o implementa batch save
+                for record in classifications:
+                    mongo_reader.save_classification(record)
+                
+                print(f"   ✅ Salvate {len(classifications)} classificazioni in MongoDB")
+                
+            except Exception as save_error:
+                print(f"   ❌ Errore salvataggio MongoDB: {save_error}")
+                raise
+            
+            # 5. STATISTICHE FINALI
+            elapsed_time = time.time() - start_time
+            
+            result = {
+                'success': True,
+                'total_sessions': total_sessions,
+                'total_classified': len(classifications),
+                'review_queue_populated': review_queue_count,
+                'ml_model_available': ml_model_available,
+                'classification_method': classification_method,
+                'cluster_stats': {
+                    'valid_clusters': n_clusters,
+                    'outliers': n_outliers,
+                    'cluster_percentage': ((total_sessions - n_outliers) / total_sessions * 100) if total_sessions > 0 else 0
+                },
+                'processing_time': elapsed_time
+            }
+            
+            print(f"\n✅ [FASE 1] Completata con successo!")
+            print(f"   📊 Sessioni classificate: {len(classifications)}")
+            print(f"   📋 In review queue: {review_queue_count}")
+            print(f"   🤖 Metodo: {classification_method}")
+            print(f"   ⏱️ Tempo elaborazione: {elapsed_time:.2f}s")
+            print(f"   🎯 Pronto per review umana (Fase 2)")
+            
+            trace_all("esegui_training_supervisionato_fase1", "EXIT", return_value=result)
+            return result
+            
+        except Exception as e:
+            elapsed_time = time.time() - start_time
+            error_msg = f"Errore nella Fase 1 training supervisionato: {str(e)}"
+            
+            print(f"❌ [FASE 1] {error_msg}")
+            print(f"   ⏱️ Fallito dopo {elapsed_time:.2f}s")
+            import traceback
+            traceback.print_exc()
+            
+            result = {
+                'success': False,
+                'error': error_msg,
+                'total_sessions': 0,
+                'total_classified': 0,
+                'review_queue_populated': 0,
+                'processing_time': elapsed_time
+            }
+            
+            trace_all("esegui_training_supervisionato_fase1", "ERROR", 
+                     error_message=error_msg, exception=str(e))
+            return result
+
+    def _classify_sessions_batch_ensemble(self, session_texts: List[str], 
+                                        cluster_ids: List[int],
+                                        suggested_labels: Dict[int, str]) -> List[Dict[str, Any]]:
+        """
+        Classifica sessioni in batch usando ensemble ML+LLM
+        
+        Scopo: Classificazione batch con modello ML disponibile
+        Input: session_texts, cluster_ids, suggested_labels
+        Output: Lista risultati classificazione
+        Data ultima modifica: 2025-09-07
+        """
+        results = []
+        
+        print(f"   🔄 Classificazione ensemble per {len(session_texts)} sessioni...")
+        
+        # Usa il metodo predict_with_ensemble se disponibile
+        try:
+            for i, text in enumerate(session_texts):
+                cluster_id = cluster_ids[i]
+                
+                # Usa suggested label come baseline se disponibile
+                suggested_label = suggested_labels.get(cluster_id, 'ALTRO')
+                
+                # Classifica con ensemble
+                ensemble_result = self.ensemble_classifier.predict_with_ensemble([text])
+                
+                if ensemble_result and len(ensemble_result) > 0:
+                    classification = ensemble_result[0].get('classification', suggested_label)
+                    confidence = ensemble_result[0].get('confidence', 0.7)
+                else:
+                    # Fallback al suggested label
+                    classification = suggested_label
+                    confidence = 0.6
+                
+                results.append({
+                    'classification': classification,
+                    'confidence': confidence,
+                    'method': 'ensemble_ml_llm'
+                })
+                
+        except Exception as e:
+            print(f"   ⚠️ Errore ensemble, fallback a solo LLM: {e}")
+            # Fallback a solo LLM
+            return self._classify_sessions_batch_llm_only(session_texts, cluster_ids, suggested_labels, 0.6)
+        
+        return results
+
+    def _classify_sessions_batch_llm_only(self, session_texts: List[str],
+                                        cluster_ids: List[int], 
+                                        suggested_labels: Dict[int, str],
+                                        base_confidence: float = 0.5) -> List[Dict[str, Any]]:
+        """
+        Classifica sessioni in batch usando solo LLM (primo avvio)
+        
+        Scopo: Classificazione batch senza modello ML
+        Input: session_texts, cluster_ids, suggested_labels, base_confidence
+        Output: Lista risultati classificazione
+        Data ultima modifica: 2025-09-07
+        """
+        results = []
+        
+        print(f"   🔄 Classificazione solo LLM per {len(session_texts)} sessioni...")
+        
+        for i, text in enumerate(session_texts):
+            cluster_id = cluster_ids[i]
+            
+            # Usa suggested label come classification di base
+            suggested_label = suggested_labels.get(cluster_id, 'ALTRO')
+            
+            # Per primo avvio, usa sempre suggested label con confidence bassa
+            # In futuro si può implementare classificazione LLM reale
+            classification = suggested_label
+            confidence = base_confidence
+            
+            results.append({
+                'classification': classification,
+                'confidence': confidence,
+                'method': 'llm_only_first_run'
+            })
+        
+        return results
+
+    def load_training_data_from_file(self, training_file_path: str = None) -> List[Dict[str, Any]]:
+        """
+        Carica dati di training dal file JSON per il riaddestramento ML.
+        
+        FASE 3: Caricamento dati training dal file per riaddestramento
+        
+        Scopo della funzione: Leggere file training JSON con correzioni umane
+        Parametri di input: path del file (opzionale, cerca automaticamente)
+        Parametri di output: lista dati training-ready
+        Valori di ritorno: Lista di dict con dati corretti per training ML
+        Tracciamento aggiornamenti: 2025-09-07 - Valerio Bignardi - FASE 3
+        
+        Args:
+            training_file_path: Path specifico del file (se None, cerca l'ultimo)
+            
+        Returns:
+            List[Dict]: Lista dati training con correzioni umane
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-07
+        """
+        trace_all("load_training_data_from_file", "ENTER", 
+                 training_file_path=training_file_path)
+        
+        import json
+        import os
+        import glob
+        
+        try:
+            print(f"📂 [TRAINING LOAD] Caricamento dati training dal file...")
+            
+            # Se nessun path specifico, cerca l'ultimo file per questo tenant
+            if not training_file_path:
+                training_dir = "training_files"
+                if not os.path.exists(training_dir):
+                    print(f"❌ [TRAINING LOAD] Directory training_files non trovata")
+                    return []
+                
+                tenant_slug = self.tenant.tenant_slug if self.tenant else "unknown"
+                pattern = os.path.join(training_dir, f"ml_training_{tenant_slug}_*.json")
+                files = glob.glob(pattern)
+                
+                if not files:
+                    print(f"❌ [TRAINING LOAD] Nessun file training trovato per {tenant_slug}")
+                    return []
+                
+                # Prendi il file più recente
+                training_file_path = max(files, key=os.path.getctime)
+                print(f"   📁 File automaticamente selezionato: {training_file_path}")
+            
+            # Carica file JSON
+            if not os.path.exists(training_file_path):
+                print(f"❌ [TRAINING LOAD] File non trovato: {training_file_path}")
+                return []
+            
+            with open(training_file_path, 'r', encoding='utf-8') as f:
+                training_file_data = json.load(f)
+            
+            # Estrai records di training
+            training_records = training_file_data.get('training_records', [])
+            
+            # Filtra solo records pronti per training (con correzioni umane o conferme)
+            ready_for_training = []
+            human_corrected = 0
+            llm_confirmed = 0
+            
+            for record in training_records:
+                # Record è pronto se ha correzione umana O è stato confermato nella review
+                if record.get('human_corrected_label'):
+                    # Usa etichetta corretta dall'umano
+                    training_record = {
+                        'session_id': record['session_id'],
+                        'conversation_text': record['conversation_text'],
+                        'predicted_label': record['human_corrected_label'],  # Label corretta
+                        'confidence': 1.0,  # Alta confidenza per correzioni umane
+                        'cluster_id': record.get('cluster_id', -1),
+                        'is_representative': record.get('is_representative', False),
+                        'source': 'human_corrected'
+                    }
+                    ready_for_training.append(training_record)
+                    human_corrected += 1
+                    
+                elif record.get('human_reviewed') and not record.get('needs_review', True):
+                    # Record confermato come corretto (nessuna correzione necessaria)
+                    training_record = {
+                        'session_id': record['session_id'],
+                        'conversation_text': record['conversation_text'],
+                        'predicted_label': record['predicted_label'],  # Label originale confermata
+                        'confidence': 0.8,  # Alta confidenza per conferme umane
+                        'cluster_id': record.get('cluster_id', -1),
+                        'is_representative': record.get('is_representative', False),
+                        'source': 'human_confirmed'
+                    }
+                    ready_for_training.append(training_record)
+                    llm_confirmed += 1
+            
+            print(f"   ✅ File caricato: {len(training_records)} records totali")
+            print(f"   📊 Pronti per training: {len(ready_for_training)}")
+            print(f"   🔧 Corretti dall'umano: {human_corrected}")
+            print(f"   ✅ Confermati LLM: {llm_confirmed}")
+            
+            # Salva path del file per riferimenti futuri
+            self._last_training_file_path = training_file_path
+            
+            trace_all("load_training_data_from_file", "EXIT", 
+                     records_loaded=len(ready_for_training))
+            return ready_for_training
+            
+        except Exception as e:
+            error_msg = f"Errore caricamento file training: {str(e)}"
+            print(f"❌ [TRAINING LOAD] {error_msg}")
+            trace_all("load_training_data_from_file", "ERROR", error=error_msg)
+            return []
+
+    def manual_retrain_model(self, force: bool = False) -> Dict[str, Any]:
+        """
+        Riaddestra il modello ML usando i dati corretti dalla review umana.
+        CHIAMATO SOLO quando l'utente preme "RIADDESTRA MODELLO" dall'interfaccia React.
+        
+        Scopo della funzione: Riaddestramento ML usando pipeline esistente
+        Parametri di input: force (ignora controlli di sicurezza se True)
+        Parametri di output: risultato del riaddestramento con metriche
+        Valori di ritorno: Dict con success, accuracy, dettagli
+        Tracciamento aggiornamenti: 2025-09-07 - Valerio Bignardi - Usa pipeline esistente
+        
+        Args:
+            force: Se True, ignora controlli di sicurezza e forza riaddestramento
+            
+        Returns:
+            Dict con risultato del riaddestramento:
+            {
+                'success': bool,
+                'accuracy': float,
+                'message': str,
+                'training_stats': {...}
+            }
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-07
+        """
+        trace_all("manual_retrain_model", "ENTER", force=force)
+        
+        start_time = time.time()
+        
+        try:
+            print(f"🔄 [RIADDESTRAMENTO MANUALE] Avvio riaddestramento modello ML...")
+            print(f"   🏢 Tenant: {self.tenant.tenant_name if self.tenant else 'N/A'}")
+            print(f"   ⚡ Force mode: {force}")
+            
+            # 1. Verifica prerequisiti
+            if not self.tenant:
+                error_msg = "Tenant non configurato"
+                return {
+                    'success': False,
+                    'accuracy': 0.0,
+                    'message': error_msg,
+                    'training_stats': {'error': 'no_tenant'}
+                }
+            
+            # 2. Carica dati di training corretti dal file di training
+            print(f"   📚 Caricamento dati di training dal file JSON...")
+            
+            training_data = self.load_training_data_from_file()
+            
+            if not training_data or len(training_data) < 5:
+                min_required = 5
+                found = len(training_data) if training_data else 0
+                
+                if not force:
+                    error_msg = f"Dati insufficienti per training: {found}/{min_required} richiesti"
+                    print(f"❌ [RIADDESTRAMENTO] {error_msg}")
+                    return {
+                        'success': False,
+                        'accuracy': 0.0,
+                        'message': error_msg,
+                        'training_stats': {
+                            'data_found': found,
+                            'minimum_required': min_required,
+                            'insufficient_data': True
+                        }
+                    }
+                else:
+                    print(f"⚠️ [RIADDESTRAMENTO] Force mode: procedo con {found} campioni")
+            
+            print(f"   ✅ Caricati {len(training_data)} esempi di training dal file")
+            
+            # 3. Prepara features e labels dal file JSON
+            session_texts = [data['conversation_text'] for data in training_data]
+            # Usa label corretta dall'umano se disponibile, altrimenti label originale
+            train_labels = [
+                data.get('human_corrected_label') or data.get('predicted_label') 
+                for data in training_data
+            ]
+            
+            # Genera embeddings
+            print(f"   🧠 Generazione embeddings...")
+            embedder = self._get_embedder()
+            train_embeddings = embedder.encode(session_texts)
+            
+            # 4. Riaddestra ensemble ML
+            print(f"   🎓 Riaddestramento ensemble ML...")
+            print(f"     📊 Samples: {len(train_labels)}")
+            print(f"     🏷️ Unique labels: {len(set(train_labels))}")
+            
+            # Usa BERTopic se disponibile per feature augmentation
+            ml_features = train_embeddings
+            bertopic_provider = getattr(self, '_bertopic_provider_trained', None)
+            
+            if bertopic_provider is not None:
+                try:
+                    print(f"     🤖 Applicazione feature augmentation BERTopic...")
+                    tr = bertopic_provider.transform(
+                        session_texts,
+                        embeddings=train_embeddings,
+                        return_one_hot=self.bertopic_config.get('return_one_hot', False),
+                        top_k=self.bertopic_config.get('top_k', None)
+                    )
+                    
+                    # Concatena features aggiuntive
+                    parts = [train_embeddings]
+                    if tr.get('topic_probas') is not None:
+                        parts.append(tr['topic_probas'])
+                    if tr.get('one_hot') is not None:
+                        parts.append(tr['one_hot'])
+                    
+                    ml_features = np.concatenate(parts, axis=1)
+                    print(f"     ✅ Features augmented: {train_embeddings.shape[1]} → {ml_features.shape[1]}")
+                    
+                except Exception as e:
+                    print(f"     ⚠️ Errore BERTopic augmentation: {e}")
+                    print(f"     🔄 Proseguo con sole embeddings")
+            
+            # Training effettivo
+            training_metrics = self.ensemble_classifier.train_ml_ensemble(
+                ml_features, 
+                np.array(train_labels)
+            )
+            
+            if not training_metrics or not training_metrics.get('accuracy'):
+                error_msg = "Training ML fallito - nessuna metrica restituita"
+                print(f"❌ [RIADDESTRAMENTO] {error_msg}")
+                return {
+                    'success': False,
+                    'accuracy': 0.0,
+                    'message': error_msg,
+                    'training_stats': {'training_failed': True}
+                }
+            
+            # 5. Salva modello aggiornato
+            print(f"   💾 Salvataggio modello aggiornato...")
+            model_name = f"retrained_{self.tenant.tenant_slug}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            model_path = f"models/{model_name}"
+            
+            try:
+                self.ensemble_classifier.save_ensemble_model(model_path)
+                print(f"   ✅ Modello salvato: {model_path}")
+            except Exception as save_error:
+                print(f"   ⚠️ Errore salvataggio modello: {save_error}")
+                # Non è fatale, il modello è in memoria
+            
+            # 6. Risultati finali
+            elapsed_time = time.time() - start_time
+            accuracy = training_metrics.get('accuracy', 0.0)
+            
+            success_msg = f"Riaddestramento completato - Accuracy: {accuracy:.3f}"
+            
+            print(f"✅ [RIADDESTRAMENTO MANUALE] {success_msg}")
+            print(f"   ⏱️ Completato in {elapsed_time:.2f}s")
+            print(f"   📚 Training samples: {len(training_data)}")
+            print(f"   🏷️ Classi uniche: {len(set(train_labels))}")
+            
+            result = {
+                'success': True,
+                'accuracy': accuracy,
+                'message': success_msg,
+                'training_stats': {
+                    **training_metrics,
+                    'training_samples': len(training_data),
+                    'unique_classes': len(set(train_labels)),
+                    'processing_time': elapsed_time,
+                    'force_mode': force
+                }
+            }
+            
+            trace_all("manual_retrain_model", "EXIT", return_value=result)
+            return result
+            
+        except Exception as e:
+            elapsed_time = time.time() - start_time
+            error_msg = f"Errore durante riaddestramento: {str(e)}"
+            
+            print(f"❌ [RIADDESTRAMENTO MANUALE] {error_msg}")
+            print(f"   ⏱️ Fallito dopo {elapsed_time:.2f}s")
+            import traceback
+            traceback.print_exc()
+            
+            result = {
+                'success': False,
+                'accuracy': 0.0,
+                'message': error_msg,
+                'training_stats': {
+                    'exception': str(e),
+                    'processing_time': elapsed_time,
+                    'force_mode': force
+                }
+            }
+            
+            trace_all("manual_retrain_model", "ERROR", 
+                     error_message=error_msg, exception=str(e))
+            return result

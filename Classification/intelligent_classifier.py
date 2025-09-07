@@ -759,7 +759,17 @@ class IntelligentClassifier:
             
         Data ultima modifica: 2025-01-31
         """
+        # 🔍 TRACING ENTER
+        trace_all("_is_openai_model", "ENTER", 
+                 called_from="__init__",
+                 model_name=model_name if model_name else "None",
+                 tenant_id=getattr(self, 'tenant_id', 'unknown'))
+        
         if not model_name:
+            trace_all("_is_openai_model", "EXIT", 
+                     called_from="__init__",
+                     result=False,
+                     exit_reason="EMPTY_MODEL_NAME")
             return False
             
         # Lista modelli OpenAI supportati
@@ -767,6 +777,11 @@ class IntelligentClassifier:
         
         # Verifica diretta nel nome
         if model_name in openai_models:
+            trace_all("_is_openai_model", "EXIT", 
+                     called_from="__init__",
+                     result=True,
+                     exit_reason="DIRECT_MATCH",
+                     matched_model=model_name)
             return True
             
         # Verifica anche nella configurazione modelli
@@ -776,15 +791,35 @@ class IntelligentClassifier:
                 if isinstance(model_config, dict):
                     if (model_config.get('name') == model_name and 
                         model_config.get('provider') == 'openai'):
+                        trace_all("_is_openai_model", "EXIT", 
+                                 called_from="__init__",
+                                 result=True,
+                                 exit_reason="CONFIG_MATCH",
+                                 provider="openai")
                         return True
                 elif isinstance(model_config, str) and model_config == model_name:
                     # Fallback per modelli senza provider specificato
-                    return model_name.startswith('gpt-')
+                    is_gpt = model_name.startswith('gpt-')
+                    if is_gpt:
+                        trace_all("_is_openai_model", "EXIT", 
+                                 called_from="__init__",
+                                 result=True,
+                                 exit_reason="GPT_PREFIX_MATCH")
+                        return True
         except Exception as e:
+            trace_all("_is_openai_model", "ERROR", 
+                     called_from="__init__",
+                     error_type=type(e).__name__,
+                     error_message=str(e))
             print(f"⚠️ Errore verifica modello OpenAI: {e}")
             
         # Fallback: verifica se il nome inizia con 'gpt-'
-        return model_name.startswith('gpt-')
+        is_gpt_fallback = model_name.startswith('gpt-')
+        trace_all("_is_openai_model", "EXIT", 
+                 called_from="__init__",
+                 result=is_gpt_fallback,
+                 exit_reason="GPT_PREFIX_FALLBACK")
+        return is_gpt_fallback
     
     def _setup_logger(self) -> logging.Logger:
         """Setup del logger con configurazione appropriata"""
@@ -2899,9 +2934,80 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         
         return previous_row[-1]
     
+    def _extract_system_user_from_chatmL_prompt(self, chatml_prompt: str) -> tuple[str, str]:
+        """
+        Estrae system e user content da prompt ChatML-like per uso con OpenAI API
+        
+        Scopo della funzione:
+        Parsifica il prompt ChatML generato da _build_classification_prompt
+        ed estrae le sezioni system e user per l'API OpenAI messages format
+        
+        Parametri di input:
+        chatml_prompt: Prompt in formato ChatML con <|system|>, <|user|>, <|assistant|>
+        
+        Valori di ritorno:
+        tuple: (system_content, user_content) estratti dal prompt ChatML
+        
+        Data ultima modifica: 2024-12-19
+        """
+        trace_all(
+            'ENTER', 
+            '_extract_system_user_from_chatmL_prompt', 
+            {
+                'prompt_length': len(chatml_prompt),
+                'prompt_preview': chatml_prompt[:200] + '...' if len(chatml_prompt) > 200 else chatml_prompt
+            }
+        )
+        
+        try:
+            # Estrae contenuto system (tra <|system|> e <|user|>)
+            system_start = chatml_prompt.find('<|system|>')
+            user_start = chatml_prompt.find('<|user|>')
+            assistant_start = chatml_prompt.find('<|assistant|>')
+            
+            if system_start == -1 or user_start == -1:
+                raise ValueError("Formato ChatML non valido: mancano tag <|system|> o <|user|>")
+            
+            # Estrae system content
+            system_content = chatml_prompt[system_start + len('<|system|>'):user_start].strip()
+            
+            # Estrae user content
+            if assistant_start != -1:
+                user_content = chatml_prompt[user_start + len('<|user|>'):assistant_start].strip()
+            else:
+                user_content = chatml_prompt[user_start + len('<|user|>'):].strip()
+            
+            if self.enable_logging:
+                print(f"🔧 [ChatML Parser] System content: {len(system_content)} chars")
+                print(f"🔧 [ChatML Parser] User content: {len(user_content)} chars")
+            
+            trace_all(
+                'EXIT', 
+                '_extract_system_user_from_chatmL_prompt', 
+                {
+                    'system_length': len(system_content),
+                    'user_length': len(user_content),
+                    'extraction_success': True
+                }
+            )
+            
+            return system_content, user_content
+            
+        except Exception as e:
+            trace_all(
+                'ERROR', 
+                '_extract_system_user_from_chatmL_prompt', 
+                {
+                    'error': str(e),
+                    'prompt_preview': chatml_prompt[:500] if len(chatml_prompt) > 500 else chatml_prompt
+                }
+            )
+            raise Exception(f"Errore estrazione ChatML: {e}")
+    
     def _call_openai_api_structured(self, conversation_text: str) -> Dict[str, Any]:
         """
-        Chiama API OpenAI per classificazione strutturata con supporto parallelismo
+        Chiama API OpenAI per classificazione strutturata con Function Tools
+        Carica tools dal database esattamente come Ollama per coerenza completa
         
         Args:
             conversation_text: Testo della conversazione da classificare
@@ -2909,60 +3015,176 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         Returns:
             Dict con predicted_label, confidence, motivation
             
-        Data ultima modifica: 2025-01-31
+        Data ultima modifica: 2025-09-07
         """
         trace_all(
-            'ENTER', 
             '_call_openai_api_structured', 
-            {
-                'conversation_length': len(conversation_text),
-                'tenant_id': self.tenant_id,
-                'model_name': self.model_name,
-                'openai_service_available': self.openai_service is not None
-            }
+            'ENTER',
+            called_from="classify_with_motivation",
+            conversation_length=len(conversation_text),
+            tenant_id=self.tenant_id,
+            model_name=self.model_name,
+            openai_service_available=self.openai_service is not None
         )
         
         if not self.openai_service:
             raise ValueError("Servizio OpenAI non inizializzato")
         
+        # 🔄 CARICAMENTO TOOLS DAL DATABASE (stessa logica di Ollama)
+        classification_tools = []
+        
+        if self.prompt_manager and self.tool_manager:
+            try:
+                # 1. Recupera gli ID dei tool dal prompt "intelligent_classifier_system"
+                resolved_tenant_id = self.prompt_manager._resolve_tenant_id(self.tenant_id)
+                tool_ids = self.prompt_manager.get_prompt_tools(
+                    tenant_id=resolved_tenant_id,
+                    prompt_name="intelligent_classifier_system",
+                    engine="LLM"
+                )
+                
+                if self.enable_logging:
+                    print(f"🤖 [OpenAI] Tool IDs recuperati dal prompt: {tool_ids}")
+                
+                # 2. Per ogni tool ID, recupera il tool completo dal database
+                for tool_id in tool_ids:
+                    try:
+                        # tool_id deve essere un numero intero
+                        if not isinstance(tool_id, int):
+                            if isinstance(tool_id, str) and tool_id.isdigit():
+                                tool_id = int(tool_id)
+                            else:
+                                if self.enable_logging:
+                                    print(f"⚠️ [OpenAI] Tool ID non valido: {tool_id}")
+                                continue
+                        
+                        db_tool = self.tool_manager.get_tool_by_id(tool_id)
+                        
+                        if db_tool:
+                            # Estrai i parametri corretti dal function_schema
+                            function_schema = db_tool['function_schema']
+                            
+                            if isinstance(function_schema, dict) and 'function' in function_schema:
+                                parameters = function_schema['function']['parameters']
+                            else:
+                                parameters = function_schema
+                            
+                            # Costruisce il tool per OpenAI (stesso formato di Ollama)
+                            classification_tool = {
+                                "type": "function", 
+                                "function": {
+                                    "name": db_tool['tool_name'],
+                                    "description": db_tool['description'],
+                                    "parameters": parameters
+                                }
+                            }
+                            
+                            # Aggiorna l'enum dei domain_labels nel tool
+                            if (self.domain_labels and 
+                                'properties' in classification_tool['function']['parameters'] and
+                                'predicted_label' in classification_tool['function']['parameters']['properties'] and
+                                'enum' in classification_tool['function']['parameters']['properties']['predicted_label']):
+                                
+                                classification_tool['function']['parameters']['properties']['predicted_label']['enum'] = list(self.domain_labels)
+                                if self.enable_logging:
+                                    print(f"🔄 [OpenAI] Aggiornato enum domain_labels: {self.domain_labels}")
+                            
+                            classification_tools.append(classification_tool)
+                            
+                            if self.enable_logging:
+                                print(f"✅ [OpenAI] Tool caricato: {db_tool['tool_name']}")
+                        
+                        else:
+                            if self.enable_logging:
+                                print(f"⚠️ [OpenAI] Tool non trovato per ID: {tool_id}")
+                    
+                    except Exception as tool_error:
+                        if self.enable_logging:
+                            print(f"❌ [OpenAI] Errore caricamento tool {tool_id}: {tool_error}")
+                        continue
+                        
+            except Exception as e:
+                if self.enable_logging:
+                    print(f"❌ [OpenAI] Errore recupero tools dal database: {e}")
+        
+        # Verifica che ci sia almeno un tool disponibile
+        if not classification_tools:
+            raise ValueError(
+                "❌ ERRORE CRITICO OpenAI: Nessun tool di classificazione disponibile dal database. "
+                "Verificare che il prompt 'intelligent_classifier_system' abbia tool associati."
+            )
+        
         try:
-            # Costruisce prompt per OpenAI con esempi del dominio
-            system_prompt = self._build_openai_system_prompt()
-            user_prompt = self._build_openai_user_prompt(conversation_text)
+            # 🔄 USA STESSA FUNZIONE DI OLLAMA: _build_classification_prompt
+            # Questo garantisce prompt identico con esempi dinamici dal database
+            full_prompt = self._build_classification_prompt(conversation_text, context=None)
             
-            # Messaggi per chat completion
+            # 🔧 ESTRAZIONE system e user dal prompt ChatML di Ollama
+            system_content, user_content = self._extract_system_user_from_chatmL_prompt(full_prompt)
+            
+            # Messaggi per chat completion con function tools
             messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_content}
             ]
             
             if self.enable_logging:
-                print(f"🤖 [OpenAI] Calling {self.model_name} for classification")
-                print(f"🤖 [OpenAI] Conversation length: {len(conversation_text)} chars")
+                print(f"🤖 [OpenAI] Using same prompt as Ollama via _build_classification_prompt")
+                print(f"🤖 [OpenAI] System prompt length: {len(system_content)} chars")
+                print(f"🤖 [OpenAI] User prompt length: {len(user_content)} chars")
+                print(f"🤖 [OpenAI] Calling {self.model_name} with {len(classification_tools)} tools")
             
-            # Chiama OpenAI con wrapper sincrono
+            # 🔧 NUOVO: Chiama OpenAI con function tools (non solo response_format)
             response = sync_chat_completion(
                 service=self.openai_service,
                 model=self.model_name,
                 messages=messages,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
-                response_format={"type": "json_object"}  # Forza risposta JSON
+                tools=classification_tools,  # 🔑 AGGIUNTA: Function tools per OpenAI
+                tool_choice="auto"  # Permette al modello di scegliere quando usare tools
             )
             
-            # Estrae contenuto dalla risposta OpenAI
+            # Estrae contenuto dalla risposta OpenAI con function call
             if 'choices' not in response or not response['choices']:
                 raise ValueError("Risposta OpenAI vuota o malformata")
             
-            content = response['choices'][0]['message']['content']
+            message = response['choices'][0]['message']
             
-            # Parse JSON dalla risposta
-            try:
-                structured_result = json.loads(content)
-            except json.JSONDecodeError as e:
-                # Fallback con parsing robusto
-                print(f"⚠️ [OpenAI] JSON malformato, tentativo parsing: {e}")
-                structured_result = self._extract_json_from_openai_response(content)
+            # Verifica se OpenAI ha fatto una function call
+            if 'tool_calls' in message and message['tool_calls']:
+                tool_call = message['tool_calls'][0]
+                
+                if (tool_call.get('function', {}).get('name') == 'classify_conversation' and 
+                    'arguments' in tool_call['function']):
+                    
+                    # Parse dei function call arguments
+                    if isinstance(tool_call['function']['arguments'], str):
+                        structured_result = json.loads(tool_call['function']['arguments'])
+                    else:
+                        structured_result = tool_call['function']['arguments']
+                    
+                    if self.enable_logging:
+                        print(f"✅ [OpenAI] Function call received: {structured_result}")
+                
+                else:
+                    raise ValueError(f"Function call non riconosciuta: {tool_call}")
+            
+            # Fallback: Se non c'è function call, prova parsing del contenuto
+            elif 'content' in message and message['content']:
+                content = message['content'].strip()
+                
+                if self.enable_logging:
+                    print(f"⚠️ [OpenAI] No function call, parsing content: {content[:100]}...")
+                
+                try:
+                    structured_result = json.loads(content)
+                except json.JSONDecodeError as e:
+                    # Fallback con parsing robusto esistente
+                    structured_result = self._extract_json_from_openai_response(content)
+            
+            else:
+                raise ValueError("Risposta OpenAI senza tool_calls né content")
             
             # Valida struttura risposta
             required_fields = ['predicted_label', 'confidence', 'motivation']
@@ -2972,12 +3194,10 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             
             # Normalizza confidence come float
             if isinstance(structured_result['confidence'], str):
-                # Remove % sign if present
                 conf_str = structured_result['confidence'].replace('%', '')
                 structured_result['confidence'] = float(conf_str) / 100.0
             elif isinstance(structured_result['confidence'], (int, float)):
                 conf_val = float(structured_result['confidence'])
-                # Normalize to 0-1 range if it's 0-100
                 if conf_val > 1.0:
                     structured_result['confidence'] = conf_val / 100.0
                 else:
@@ -2987,13 +3207,14 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 print(f"✅ [OpenAI] Classification successful: {structured_result['predicted_label']} (conf: {structured_result['confidence']:.3f})")
             
             trace_all(
-                'SUCCESS',
                 '_call_openai_api_structured',
-                {
-                    'predicted_label': structured_result['predicted_label'],
-                    'confidence': structured_result['confidence'],
-                    'tokens_used': response.get('usage', {}).get('total_tokens', 0)
-                }
+                'EXIT',
+                called_from="classify_with_motivation",
+                predicted_label=structured_result['predicted_label'],
+                confidence=structured_result['confidence'],
+                tokens_used=response.get('usage', {}).get('total_tokens', 0),
+                tools_used=len(classification_tools),
+                exit_reason="SUCCESS"
             )
             
             return structured_result
@@ -3003,65 +3224,16 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 print(f"❌ [OpenAI] Errore durante classificazione: {e}")
             
             trace_all(
-                'ERROR',
                 '_call_openai_api_structured',
-                {'error': str(e)}
+                'ERROR',
+                called_from="classify_with_motivation",
+                error_type=type(e).__name__,
+                error_message=str(e),
+                conversation_length=len(conversation_text),
+                tools_loaded=len(classification_tools)
             )
             
             raise
-    
-    def _build_openai_system_prompt(self) -> str:
-        """
-        Costruisce system prompt per OpenAI con istruzioni di classificazione
-        
-        Returns:
-            Prompt di sistema per GPT
-            
-        Data ultima modifica: 2025-01-31
-        """
-        domain_labels_str = ', '.join(sorted(self.domain_labels)) if self.domain_labels else "altro"
-        
-        system_prompt = f"""Sei un assistente AI specializzato nella classificazione di conversazioni ospedaliere.
-
-Il tuo compito è classificare conversazioni tra pazienti e operatori sanitari in una delle seguenti categorie:
-{domain_labels_str}
-
-REGOLE IMPORTANTI:
-1. Rispondi SEMPRE in formato JSON valido
-2. Usa SOLO le etichette fornite nell'elenco sopra
-3. Se nessuna categoria si adatta bene, usa "altro"
-4. La confidence deve essere un numero tra 0.0 e 1.0
-5. Fornisci una breve motivazione della tua scelta
-
-FORMATO RISPOSTA RICHIESTO:
-{{"predicted_label": "etichetta_scelta", "confidence": 0.85, "motivation": "Breve spiegazione del perché hai scelto questa etichetta"}}
-
-ESEMPI:
-- Conversazione su prenotazione visita → "prenotazione_visita"
-- Richiesta informazioni generali → "info_generali"  
-- Problema tecnico o errore → "problema_tecnico"
-- Conversazione non classificabile → "altro"
-"""
-        return system_prompt
-    
-    def _build_openai_user_prompt(self, conversation_text: str) -> str:
-        """
-        Costruisce user prompt per OpenAI con la conversazione da classificare
-        
-        Args:
-            conversation_text: Testo della conversazione
-            
-        Returns:
-            Prompt utente per GPT
-            
-        Data ultima modifica: 2025-01-31
-        """
-        return f"""Classifica la seguente conversazione ospedaliera:
-
-CONVERSAZIONE:
-{conversation_text}
-
-Rispondi in formato JSON con predicted_label, confidence e motivation."""
     
     def _extract_json_from_openai_response(self, content: str) -> Dict[str, Any]:
         """
@@ -3075,6 +3247,12 @@ Rispondi in formato JSON con predicted_label, confidence e motivation."""
             
         Data ultima modifica: 2025-01-31
         """
+        # 🔍 TRACING ENTER
+        trace_all("_extract_json_from_openai_response", "ENTER", 
+                 called_from="_call_openai_api_structured",
+                 content_length=len(content) if content else 0,
+                 content_preview=content[:100] if content else "None")
+        
         # Pattern per trovare JSON nella risposta
         json_patterns = [
             r'\{[^{}]*"predicted_label"[^{}]*\}',
@@ -3082,7 +3260,7 @@ Rispondi in formato JSON con predicted_label, confidence e motivation."""
             r'\{.*\}'
         ]
         
-        for pattern in json_patterns:
+        for i, pattern in enumerate(json_patterns):
             matches = re.findall(pattern, content, re.DOTALL)
             for match in matches:
                 try:
@@ -3093,6 +3271,12 @@ Rispondi in formato JSON con predicted_label, confidence e motivation."""
                             result['confidence'] = 0.5
                         if 'motivation' not in result:
                             result['motivation'] = "Classificazione estratta da risposta parziale"
+                        
+                        trace_all("_extract_json_from_openai_response", "EXIT", 
+                                 called_from="_call_openai_api_structured",
+                                 extraction_method=f"JSON_PATTERN_{i}",
+                                 predicted_label=result['predicted_label'],
+                                 confidence=result['confidence'])
                         return result
                 except json.JSONDecodeError:
                     continue
@@ -3102,11 +3286,19 @@ Rispondi in formato JSON con predicted_label, confidence e motivation."""
         confidence_match = re.search(r'"confidence":\s*([0-9.]+)', content)
         motivation_match = re.search(r'"motivation":\s*"([^"]+)"', content)
         
-        return {
+        fallback_result = {
             'predicted_label': label_match.group(1) if label_match else 'altro',
             'confidence': float(confidence_match.group(1)) if confidence_match else 0.5,
             'motivation': motivation_match.group(1) if motivation_match else 'Estratto da risposta malformata'
         }
+        
+        trace_all("_extract_json_from_openai_response", "EXIT", 
+                 called_from="_call_openai_api_structured",
+                 extraction_method="REGEX_FALLBACK",
+                 predicted_label=fallback_result['predicted_label'],
+                 confidence=fallback_result['confidence'])
+        
+        return fallback_result
     
     def _call_llm_api_structured(self, conversation_text: str) -> Dict[str, Any]:
         """

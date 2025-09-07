@@ -469,6 +469,22 @@ class IntelligentIntentClusterer:
         Returns:
             Tuple (cluster_labels, cluster_info)
         """
+        # 🔍 TRACING ENTER
+        trace_all(
+            'cluster_intelligently', 
+            'ENTER',
+            called_from="IntelligentIntentClusterer",
+            texts_count=len(texts),
+            embeddings_shape=embeddings.shape if embeddings is not None else None,
+            tenant_id=self.tenant_id if hasattr(self, 'tenant_id') and self.tenant_id else None,
+            use_ensemble=getattr(self, 'use_ensemble', False),
+            clustering_config={
+                'min_cluster_size': getattr(self, 'min_cluster_size', None),
+                'min_samples': getattr(self, 'min_samples', None),
+                'use_umap': getattr(self, 'use_umap', None)
+            }
+        )
+        
         print(f"🧠 Avvio clustering intelligente OTTIMIZZATO di {len(texts)} conversazioni...")
         
         # 🆕 Setup debug logging per suggested_labels
@@ -504,6 +520,17 @@ class IntelligentIntentClusterer:
         # FASE 1: Clustering semantico con HDBSCAN (parametri più restrittivi)
         print(f"📊 Fase 1: Clustering semantico con HDBSCAN...")
         
+        # 🔍 TRACING FASE 1
+        trace_all(
+            'cluster_intelligently', 
+            'PHASE_1_HDBSCAN_START',
+            called_from="cluster_intelligently",
+            embeddings_count=len(embeddings),
+            min_cluster_size=getattr(self, 'min_cluster_size', None),
+            min_samples=getattr(self, 'min_samples', None),
+            use_umap=getattr(self, 'use_umap', True)
+        )
+        
         # 🔧 [FIX] Usa HDBSCANClusterer con supporto UMAP (import già fatto all'inizio)
         
         # Crea clusterer con supporto UMAP
@@ -537,8 +564,30 @@ class IntelligentIntentClusterer:
         print(f"   📈 Cluster HDBSCAN trovati: {n_clusters}")
         print(f"   🔍 Outliers: {n_outliers}")
         
+        # 🔍 TRACING FASE 1 RESULTS
+        trace_all(
+            'cluster_intelligently', 
+            'PHASE_1_HDBSCAN_COMPLETE',
+            called_from="cluster_intelligently",
+            n_clusters=n_clusters,
+            n_outliers=n_outliers,
+            total_samples=len(embeddings),
+            outlier_ratio=n_outliers / len(embeddings) if len(embeddings) > 0 else 0.0,
+            clustering_successful=n_clusters > 0
+        )
+        
         # FASE 2: Selezione rappresentanti per ogni cluster
         print(f"👥 Fase 2: Selezione rappresentanti per cluster...")
+        
+        # 🔍 TRACING FASE 2
+        trace_all(
+            'cluster_intelligently', 
+            'PHASE_2_REPRESENTATIVES_START',
+            called_from="cluster_intelligently",
+            clusters_to_process=n_clusters,
+            min_conversations_per_intent=getattr(self, 'min_conversations_per_intent', None),
+            diverse_representatives_enabled=getattr(self, 'diverse_representatives_enabled', None)
+        )
         cluster_info = {}
         representative_texts = []
         cluster_to_rep_idx = {}
@@ -570,9 +619,31 @@ class IntelligentIntentClusterer:
                     
                     print(f"   � Cluster {cluster_id}: {len(cluster_indices)} sessioni, {len(selected_reps)} rappresentanti selezionati")
         
+        # 🔍 TRACING FASE 2 COMPLETE
+        trace_all(
+            'cluster_intelligently', 
+            'PHASE_2_REPRESENTATIVES_COMPLETE',
+            called_from="cluster_intelligently",
+            total_representatives=len(representative_texts),
+            clusters_with_representatives=len(cluster_to_rep_idx),
+            avg_representatives_per_cluster=len(representative_texts) / len(cluster_to_rep_idx) if cluster_to_rep_idx else 0.0,
+            cluster_to_rep_mapping=dict(cluster_to_rep_idx)
+        )
+        
         # FASE 3: Analisi LLM SOLO sui rappresentanti (molto più veloce!)
         print(f"🤖 Fase 3: Analisi LLM di {len(representative_texts)} rappresentanti...")
         debug_logger.info(f"🤖 FASE 3: Analisi LLM di {len(representative_texts)} rappresentanti")
+        
+        # 🔍 TRACING FASE 3
+        trace_all(
+            'cluster_intelligently', 
+            'PHASE_3_LLM_ANALYSIS_START',
+            called_from="cluster_intelligently",
+            representative_texts_count=len(representative_texts),
+            use_ensemble=getattr(self, 'use_ensemble', False),
+            llm_classifier_available=self.llm_classifier is not None,
+            ensemble_classifier_available=self.ensemble_classifier is not None
+        )
         
         if representative_texts:
             llm_results = self.extract_intents_with_llm(representative_texts)
@@ -595,8 +666,32 @@ class IntelligentIntentClusterer:
         else:
             llm_results = []
         
+        # 🔍 TRACING FASE 3 COMPLETE
+        trace_all(
+            'cluster_intelligently', 
+            'PHASE_3_LLM_ANALYSIS_COMPLETE',
+            called_from="cluster_intelligently",
+            llm_results_count=len(llm_results),
+            llm_analysis_successful=len(llm_results) > 0,
+            clusters_with_results=len([cid for cid, rep_info in cluster_to_rep_idx.items() if rep_info['start'] < len(llm_results)]),
+            llm_results_preview=[{
+                'intent': r.get('intent', 'unknown'),
+                'confidence': r.get('confidence', 0.0)
+            } for r in llm_results[:3]]  # Prime 3 per debug
+        )
+        
         # FASE 4: Creazione cluster_info con etichette da consenso ensemble
         print(f"🔄 Fase 4: Analisi consenso e propagazione etichette...")
+        
+        # 🔍 TRACING FASE 4
+        trace_all(
+            'cluster_intelligently', 
+            'PHASE_4_CONSENSUS_START',
+            called_from="cluster_intelligently",
+            clusters_to_process=len(cluster_to_rep_idx),
+            consensus_strategy=getattr(self, 'consensus_strategy', 'majority'),
+            majority_threshold=getattr(self, 'majority_threshold', 0.6)
+        )
         
         for cluster_id, rep_info in cluster_to_rep_idx.items():
             if rep_info['start'] < len(llm_results):
@@ -626,6 +721,21 @@ class IntelligentIntentClusterer:
                       f"conf: {consensus_result['confidence']:.3f}, "
                       f"consenso: {consensus_result['stats']['agreement_ratio']:.2f})")
         
+        # 🔍 TRACING FASE 4 COMPLETE
+        trace_all(
+            'cluster_intelligently', 
+            'PHASE_4_CONSENSUS_COMPLETE',
+            called_from="cluster_intelligently",
+            clusters_processed=len(cluster_info),
+            avg_cluster_confidence=np.mean([info.get('confidence', 0.0) for info in cluster_info.values()]) if cluster_info else 0.0,
+            consensus_results_summary=[{
+                'cluster_id': cid,
+                'intent': info.get('intent', 'unknown'),
+                'confidence': info.get('confidence', 0.0),
+                'size': info.get('size', 0)
+            } for cid, info in cluster_info.items()]
+        )
+        
         # FASE 5: Gestione outliers come rappresentanti individuali
         outlier_indices = [i for i, label in enumerate(cluster_labels) if label == -1]
         if outlier_indices:
@@ -633,6 +743,16 @@ class IntelligentIntentClusterer:
             debug_logger.info(f"🔍 FASE 5: Analisi individuale di {len(outlier_indices)} outliers")
             debug_logger.info("📋 RISULTATI CLASSIFICAZIONE OUTLIER:")
             debug_logger.info("-" * 60)
+            
+            # 🔍 TRACING FASE 5
+            trace_all(
+                'cluster_intelligently', 
+                'PHASE_5_OUTLIERS_START',
+                called_from="cluster_intelligently",
+                outlier_count=len(outlier_indices),
+                outlier_ratio=len(outlier_indices) / len(texts) if len(texts) > 0 else 0.0,
+                outlier_indices=outlier_indices[:10]  # Prime 10 per debug
+            )
             
             # 🆕 MODIFICA: Tratta ogni outlier come rappresentante individuale
             outlier_texts = [texts[i] for i in outlier_indices]
@@ -750,6 +870,21 @@ class IntelligentIntentClusterer:
         for handler in debug_logger.handlers[:]:
             debug_logger.removeHandler(handler)
             handler.close()
+        
+        # 🔍 TRACING EXIT
+        trace_all(
+            'cluster_intelligently', 
+            'EXIT',
+            called_from="IntelligentIntentClusterer",
+            final_clusters_count=final_n_clusters,
+            final_outliers_count=final_n_outliers,
+            total_llm_calls=total_llm_calls,
+            efficiency_percentage=((len(texts) - total_llm_calls) / len(texts) * 100) if len(texts) > 0 else 0.0,
+            avg_confidence=avg_confidence,
+            cluster_info_keys=list(cluster_info.keys()),
+            cluster_labels_shape=cluster_labels.shape if cluster_labels is not None else None,
+            processing_successful=True
+        )
         
         return cluster_labels, cluster_info
     

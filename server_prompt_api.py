@@ -541,6 +541,279 @@ def preview_prompt_with_variables(prompt_id: int):
         }), 500
 
 
+# =============================================================================
+# ESEMPI LLM E RIADDESTRAMENTO ENDPOINTS
+# =============================================================================
+
+@app.route('/api/examples/add-review-case', methods=['POST'])
+def add_review_case_as_llm_example():
+    """
+    Aggiunge un caso di review umana come esempio LLM nel database.
+    
+    Scopo: Endpoint per salvare conversazioni corrette dall'umano come esempi
+    Input: JSON con session_id, conversation_text, etichetta_corretta, categoria, tenant_id
+    Output: Risultato dell'operazione con dettagli
+    Data ultima modifica: 2025-09-07
+    
+    Body JSON:
+    {
+        "session_id": "session_001",
+        "conversation_text": "Testo della conversazione...",
+        "etichetta_corretta": "PRENOTAZIONE_VISITA", 
+        "categoria": "CARDIOLOGIA",
+        "tenant_id": 1,
+        "note_utente": "L'utente aveva fretta e voleva una visita urgente, per questo è prenotazione"
+    }
+    
+    Returns:
+    {
+        "success": true,
+        "esempio_id": 123,
+        "message": "Esempio LLM creato con successo",
+        "details": {...}
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'Dati JSON richiesti'}), 400
+        
+        # Validazione campi obbligatori
+        required_fields = ['session_id', 'conversation_text', 'etichetta_corretta', 'tenant_id']
+        missing_fields = [field for field in required_fields if not data.get(field)]
+        
+        if missing_fields:
+            return jsonify({
+                'error': f'Campi obbligatori mancanti: {", ".join(missing_fields)}'
+            }), 400
+        
+        session_id = data['session_id']
+        conversation_text = data['conversation_text']
+        etichetta_corretta = data['etichetta_corretta']
+        categoria = data.get('categoria')
+        note_utente = data.get('note_utente')  # Note dall'interfaccia React
+        tenant_id = data['tenant_id']
+        
+        print(f"📚 [API ESEMPI] Aggiunta caso come esempio LLM")
+        print(f"   🆔 Session: {session_id}")
+        print(f"   🏷️ Etichetta: {etichetta_corretta}")
+        print(f"   🏢 Tenant ID: {tenant_id}")
+        if note_utente:
+            print(f"   📋 Note: {note_utente[:100]}{'...' if len(note_utente) > 100 else ''}")
+        
+        # Carica tenant
+        try:
+            from Utils.tenant_manager import TenantManager
+        except ImportError:
+            from Utils.mock_tenant_manager import TenantManager
+        tenant_manager = TenantManager()
+        tenant = tenant_manager.get_tenant_by_id(tenant_id)
+        
+        if not tenant:
+            return jsonify({
+                'error': f'Tenant con ID {tenant_id} non trovato'
+            }), 404
+        
+        # Inizializza pipeline per il tenant specifico
+        from Pipeline.end_to_end_pipeline import EndToEndPipeline
+        pipeline = EndToEndPipeline(
+            config_path="config.yaml",
+            tenant=tenant
+        )
+        
+        # Chiama il nuovo metodo
+        result = pipeline.aggiungi_caso_come_esempio_llm(
+            session_id=session_id,
+            conversation_text=conversation_text,
+            etichetta_corretta=etichetta_corretta,
+            categoria=categoria,
+            note_utente=note_utente
+        )
+        
+        if result['success']:
+            print(f"   ✅ Esempio creato: ID {result['esempio_id']}")
+            return jsonify(result), 200
+        else:
+            print(f"   ❌ Errore: {result['message']}")
+            return jsonify(result), 400
+        
+    except Exception as e:
+        error_msg = f"Errore nell'aggiunta esempio LLM: {str(e)}"
+        print(f"❌ [API ESEMPI ERROR] {error_msg}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'details': {'exception': str(e)}
+        }), 500
+
+
+@app.route('/api/training/manual-retrain', methods=['POST'])
+def manual_retrain_model():
+    """
+    Riaddestra manualmente il modello ML usando i dati corretti dalla review umana.
+    
+    Scopo: Endpoint per riaddestramento on-demand del modello
+    Input: JSON con tenant_id e opzioni
+    Output: Risultato del riaddestramento con metriche
+    Data ultima modifica: 2025-09-07
+    
+    Body JSON:
+    {
+        "tenant_id": 1,
+        "force": false
+    }
+    
+    Returns:
+    {
+        "success": true,
+        "accuracy": 0.85,
+        "message": "Riaddestramento completato",
+        "training_stats": {...}
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'Dati JSON richiesti'}), 400
+        
+        tenant_id = data.get('tenant_id')
+        force = data.get('force', False)
+        
+        if not tenant_id:
+            return jsonify({'error': 'tenant_id obbligatorio'}), 400
+        
+        print(f"🔄 [API RIADDESTRAMENTO] Riaddestramento manuale modello")
+        print(f"   🏢 Tenant ID: {tenant_id}")
+        print(f"   ⚡ Force mode: {force}")
+        
+        # Carica tenant
+        try:
+            from Utils.tenant_manager import TenantManager
+        except ImportError:
+            from Utils.mock_tenant_manager import TenantManager
+        tenant_manager = TenantManager()
+        tenant = tenant_manager.get_tenant_by_id(tenant_id)
+        
+        if not tenant:
+            return jsonify({
+                'error': f'Tenant con ID {tenant_id} non trovato'
+            }), 404
+        
+        # Inizializza pipeline per il tenant specifico
+        from Pipeline.end_to_end_pipeline import EndToEndPipeline
+        pipeline = EndToEndPipeline(
+            config_path="config.yaml",
+            tenant=tenant
+        )
+        
+        # Esegui riaddestramento
+        result = pipeline.manual_retrain_model(force=force)
+        
+        if result['success']:
+            accuracy = result['accuracy']
+            print(f"   ✅ Riaddestramento completato - Accuracy: {accuracy:.3f}")
+            return jsonify(result), 200
+        else:
+            print(f"   ❌ Riaddestramento fallito: {result['message']}")
+            return jsonify(result), 400
+        
+    except Exception as e:
+        error_msg = f"Errore nel riaddestramento: {str(e)}"
+        print(f"❌ [API RIADDESTRAMENTO ERROR] {error_msg}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'error': error_msg,
+            'details': {'exception': str(e)}
+        }), 500
+
+
+@app.route('/api/training/status/<int:tenant_id>', methods=['GET'])
+def get_training_status(tenant_id):
+    """
+    Ottiene lo status del training per un tenant specifico.
+    
+    Scopo: Verifica stato e statistiche del modello attuale
+    Input: tenant_id nell'URL
+    Output: Informazioni sullo stato del training
+    Data ultima modifica: 2025-09-07
+    
+    Returns:
+    {
+        "tenant_id": 1,
+        "model_loaded": true,
+        "last_training": "2025-01-07T10:30:00",
+        "training_samples": 150,
+        "accuracy": 0.85,
+        "pending_reviews": 5
+    }
+    """
+    try:
+        print(f"📊 [API STATUS] Stato training per tenant {tenant_id}")
+        
+        # Carica tenant
+        try:
+            from Utils.tenant_manager import TenantManager
+        except ImportError:
+            from Utils.mock_tenant_manager import TenantManager
+        tenant_manager = TenantManager()
+        tenant = tenant_manager.get_tenant_by_id(tenant_id)
+        
+        if not tenant:
+            return jsonify({
+                'error': f'Tenant con ID {tenant_id} non trovato'
+            }), 404
+        
+        # Carica informazioni MongoDB per dati review
+        from mongo_classification_reader import MongoClassificationReader
+        mongo_reader = MongoClassificationReader(tenant=tenant)
+        
+        # Conta review pending e completate
+        training_data = mongo_reader.get_reviewed_sessions_for_training(
+            include_representatives=True,
+            include_outliers=True,
+            only_human_reviewed=True
+        )
+        
+        # TODO: Implementare conteggio review pending
+        # pending_reviews = mongo_reader.count_pending_reviews()
+        pending_reviews = 0  # Placeholder
+        
+        training_samples = len(training_data) if training_data else 0
+        
+        # Verifica se il modello è caricato (in memoria)
+        # TODO: Implementare verifica modello in memoria
+        model_loaded = True  # Placeholder
+        
+        status = {
+            "tenant_id": tenant_id,
+            "tenant_name": tenant.tenant_name,
+            "model_loaded": model_loaded,
+            "last_training": datetime.now().isoformat(),  # Placeholder
+            "training_samples": training_samples,
+            "accuracy": 0.85,  # Placeholder - dovrebbe venire da metriche salvate
+            "pending_reviews": pending_reviews
+        }
+        
+        print(f"   ✅ Status recuperato: {training_samples} samples, {pending_reviews} pending")
+        return jsonify(status), 200
+        
+    except Exception as e:
+        error_msg = f"Errore nel recupero status: {str(e)}"
+        print(f"❌ [API STATUS ERROR] {error_msg}")
+        traceback.print_exc()
+        
+        return jsonify({
+            'error': error_msg,
+            'details': {'exception': str(e)}
+        }), 500
+
+
 if __name__ == "__main__":
     print("🚀 Avvio del Prompt Management API Server")
     print("📡 Server disponibile su http://localhost:5001")
@@ -552,6 +825,9 @@ if __name__ == "__main__":
     print("  DELETE /api/prompts/<prompt_id>        - Elimina prompt")
     print("  POST /api/prompts/<prompt_id>/preview  - Anteprima prompt")
     print("  GET  /api/tenants                      - Lista tenant")
+    print("  POST /api/examples/add-review-case     - 📚 Aggiungi caso come esempio LLM")
+    print("  POST /api/training/manual-retrain      - 🔄 Riaddestramento manuale")
+    print("  GET  /api/training/status/<tenant_id>  - 📊 Status training")
     print("=" * 60)
     
     app.run(host="0.0.0.0", port=5001, debug=True)

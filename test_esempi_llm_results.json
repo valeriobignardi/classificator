@@ -1,0 +1,71 @@
+[
+  {
+    "test_case": {
+      "session_id": "test_session_001",
+      "conversation_text": "Ciao, ho bisogno di prenotare una visita cardiologica urgente",
+      "etichetta_corretta": "PRENOTAZIONE_VISITA",
+      "categoria": "CARDIOLOGIA",
+      "note_utente": "L'utente ha specificato che è urgente, quindi è chiaramente una prenotazione"
+    },
+    "result": {
+      "success": true,
+      "esempio_id": 23,
+      "message": "Esempio LLM creato con successo: ID 23",
+      "details": {
+        "esempio_name": "review_caso_test_session_001_20250907_095735",
+        "categoria": "CARDIOLOGIA",
+        "engine": "LLM",
+        "esempio_type": "CONVERSATION",
+        "processing_time": 0.06985974311828613,
+        "tenant_id": "16c222a9-f293-11ef-9315-96000228e7fe",
+        "tenant_name": "Humanitas"
+      }
+    }
+  },
+  {
+    "test_case": {
+      "session_id": "test_session_002",
+      "conversation_text": "Buongiorno, volevo informazioni sui prezzi delle analisi del sangue",
+      "etichetta_corretta": "RICHIESTA_INFORMAZIONI",
+      "categoria": "ANALISI",
+      "note_utente": "Richiesta esplicita di informazioni sui prezzi, non vuole prenotare"
+    },
+    "result": {
+      "success": true,
+      "esempio_id": 24,
+      "message": "Esempio LLM creato con successo: ID 24",
+      "details": {
+        "esempio_name": "review_caso_test_session_002_20250907_095736",
+        "categoria": "ANALISI",
+        "engine": "LLM",
+        "esempio_type": "CONVERSATION",
+        "processing_time": 0.06198596954345703,
+        "tenant_id": "16c222a9-f293-11ef-9315-96000228e7fe",
+        "tenant_name": "Humanitas"
+      }
+    }
+  },
+  {
+    "test_case": {
+      "session_id": "test_session_003",
+      "conversation_text": "Il mio appuntamento di oggi è stato cancellato, quando posso riprogrammarlo?",
+      "etichetta_corretta": "GESTIONE_APPUNTAMENTI",
+      "categoria": null,
+      "note_utente": null
+    },
+    "result": {
+      "success": true,
+      "esempio_id": 25,
+      "message": "Esempio LLM creato con successo: ID 25",
+      "details": {
+        "esempio_name": "review_caso_test_session_003_20250907_095736",
+        "categoria": "GESTIONE_APPUNTAMENTI",
+        "engine": "LLM",
+        "esempio_type": "CONVERSATION",
+        "processing_time": 0.0649118423461914,
+        "tenant_id": "16c222a9-f293-11ef-9315-96000228e7fe",
+        "tenant_name": "Humanitas"
+      }
+    }
+  }
+]

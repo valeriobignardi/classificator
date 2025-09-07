@@ -2343,6 +2343,155 @@ class MongoClassificationReader:
         return "OUTLIER"
 
 
+
+# DA VERIFICARE SE VA BENE QUESTA FUNZIONE. VALERIO DEVE VEDERE
+    def get_reviewed_sessions_for_training(self, 
+                                         include_representatives: bool = True,
+                                         include_outliers: bool = True,
+                                         only_human_reviewed: bool = True) -> List[Dict[str, Any]]:
+        """
+        Recupera tutte le sessioni corrette dalla review umana per il riaddestramento ML.
+        
+        Scopo della funzione: Estrarre dati puliti da MongoDB per il training ML
+        Parametri di input: filtri per tipo di sessioni da includere
+        Parametri di output: lista sessioni con conversation_text e final_label
+        Valori di ritorno: Lista di dict con dati training-ready
+        Tracciamento aggiornamenti: 2025-09-07 - Valerio Bignardi - Nuovo per riaddestramento
+        
+        Args:
+            include_representatives: Include sessioni rappresentanti cluster
+            include_outliers: Include sessioni outlier (cluster_id = -1)
+            only_human_reviewed: Solo sessioni con review_status = 'completed'
+            
+        Returns:
+            List[Dict]: Lista sessioni per training con campi:
+            - session_id: ID sessione
+            - conversation_text: Testo conversazione
+            - final_label: Etichetta finale corretta (ML o umana)
+            - confidence: Confidenza finale
+            - cluster_id: ID cluster (-1 per outlier)
+            - is_representative: Se è rappresentante cluster
+            - review_status: Stato review umana
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-07
+        """
+        trace_all("get_reviewed_sessions_for_training", "ENTER",
+                 include_representatives=include_representatives,
+                 include_outliers=include_outliers,
+                 only_human_reviewed=only_human_reviewed)
+        
+        try:
+            if not self.client:
+                print("❌ [TRAINING DATA] Connessione MongoDB non disponibile")
+                return []
+            
+            # Costruisci filtro per query MongoDB
+            filter_query = {}
+            
+            # Filtro per stato review se richiesto
+            if only_human_reviewed:
+                filter_query["review_status"] = "completed"
+            
+            # Filtro per tipo sessioni
+            if not include_representatives and not include_outliers:
+                print("⚠️ [TRAINING DATA] Nessun tipo di sessione specificato")
+                return []
+            elif include_representatives and include_outliers:
+                # Include tutto (rappresentanti + outlier)
+                pass  # Nessun filtro aggiuntivo
+            elif include_representatives and not include_outliers:
+                # Solo rappresentanti (cluster_id != -1 e is_representative = true)
+                filter_query["$and"] = [
+                    {"cluster_id": {"$ne": -1}},
+                    {"is_representative": True}
+                ]
+            elif include_outliers and not include_representatives:
+                # Solo outlier (cluster_id = -1)
+                filter_query["cluster_id"] = -1
+            
+            print(f"🔍 [TRAINING DATA] Query filtro: {filter_query}")
+            
+            # Esegui query con proiezione ottimizzata
+            collection = self.db[self.collection_name]
+            
+            projection = {
+                "session_id": 1,
+                "conversation_text": 1,
+                "classification": 1,
+                "human_label": 1,
+                "confidence": 1,
+                "cluster_id": 1,
+                "is_representative": 1,
+                "review_status": 1,
+                "timestamp": 1,
+                "_id": 0
+            }
+            
+            cursor = collection.find(filter_query, projection)
+            sessions = list(cursor)
+            
+            print(f"📊 [TRAINING DATA] Trovate {len(sessions)} sessioni raw")
+            
+            # Processa risultati per formato training
+            training_data = []
+            
+            for session in sessions:
+                # Determina etichetta finale (umana se disponibile, altrimenti ML)
+                final_label = session.get('human_label') or session.get('classification')
+                
+                if not final_label:
+                    print(f"⚠️ [TRAINING DATA] Sessione {session.get('session_id')} senza etichetta, skip")
+                    continue
+                
+                conversation_text = session.get('conversation_text', '')
+                if not conversation_text or len(conversation_text.strip()) == 0:
+                    print(f"⚠️ [TRAINING DATA] Sessione {session.get('session_id')} senza testo, skip")
+                    continue
+                
+                training_record = {
+                    'session_id': session.get('session_id'),
+                    'conversation_text': conversation_text,
+                    'final_label': final_label,
+                    'confidence': session.get('confidence', 0.5),
+                    'cluster_id': session.get('cluster_id', -1),
+                    'is_representative': session.get('is_representative', False),
+                    'review_status': session.get('review_status', 'pending'),
+                    'timestamp': session.get('timestamp')
+                }
+                
+                training_data.append(training_record)
+            
+            # Statistiche finali
+            representatives_count = sum(1 for d in training_data if d['is_representative'])
+            outliers_count = sum(1 for d in training_data if d['cluster_id'] == -1)
+            human_reviewed_count = sum(1 for d in training_data if d['review_status'] == 'completed')
+            
+            print(f"✅ [TRAINING DATA] Dati training preparati:")
+            print(f"   📊 Totale sessioni: {len(training_data)}")
+            print(f"   👥 Rappresentanti: {representatives_count}")
+            print(f"   🔍 Outliers: {outliers_count}")
+            print(f"   👤 Human reviewed: {human_reviewed_count}")
+            print(f"   🏷️ Etichette uniche: {len(set(d['final_label'] for d in training_data))}")
+            
+            trace_all("get_reviewed_sessions_for_training", "EXIT",
+                     total_sessions=len(training_data),
+                     representatives=representatives_count,
+                     outliers=outliers_count,
+                     human_reviewed=human_reviewed_count)
+            
+            return training_data
+            
+        except Exception as e:
+            error_msg = f"Errore recupero dati training: {str(e)}"
+            print(f"❌ [TRAINING DATA] {error_msg}")
+            import traceback
+            traceback.print_exc()
+            
+            trace_all("get_reviewed_sessions_for_training", "ERROR", error_message=error_msg)
+            return []
+
+
 def main():
     """
     Test del MongoDB Classification Reader

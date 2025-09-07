@@ -1,0 +1,45 @@
+{
+  "metadata": {
+    "created_at": "2025-09-07T10:33:49.154245",
+    "tenant_slug": "humanitas",
+    "tenant_name": "Humanitas",
+    "total_records": 2,
+    "source": "llm_only_primo_avvio",
+    "confidence_forced": 0.5,
+    "needs_human_review": true,
+    "version": "1.0",
+    "last_human_update": "2025-09-07T10:33:49.203995"
+  },
+  "training_records": [
+    {
+      "unique_id": "humanitas_20250907_103349_000000",
+      "session_id": "test_001",
+      "conversation_text": "Vorrei prenotare una visita cardiologica urgente",
+      "predicted_label": "PRENOTAZIONE_VISITA",
+      "confidence": 0.5,
+      "cluster_id": 1,
+      "is_representative": true,
+      "human_reviewed": true,
+      "human_corrected_label": "EMERGENZA_MEDICA",
+      "needs_review": true,
+      "embeddings_included": true,
+      "created_at": "2025-09-07T10:33:49.154255",
+      "last_updated": "2025-09-07T10:33:49.203991"
+    },
+    {
+      "unique_id": "humanitas_20250907_103349_000001",
+      "session_id": "test_002",
+      "conversation_text": "Quanto costa una risonanza magnetica?",
+      "predicted_label": "RICHIESTA_INFORMAZIONI",
+      "confidence": 0.5,
+      "cluster_id": 2,
+      "is_representative": true,
+      "human_reviewed": false,
+      "human_corrected_label": null,
+      "needs_review": true,
+      "embeddings_included": true,
+      "created_at": "2025-09-07T10:33:49.154260",
+      "last_updated": null
+    }
+  ]
+}

@@ -3150,16 +3150,36 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 print(f"🤖 [OpenAI] User prompt length: {len(user_content)} chars")
                 print(f"🤖 [OpenAI] Calling {self.model_name} with {len(classification_tools)} tools")
             
-            # 🔧 NUOVO: Chiama OpenAI con function tools (non solo response_format)
-            response = sync_chat_completion(
-                service=self.openai_service,
-                model=self.model_name,
-                messages=messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                tools=classification_tools,  # 🔑 AGGIUNTA: Function tools per OpenAI
-                tool_choice="auto"  # Permette al modello di scegliere quando usare tools
-            )
+            # 🔧 NUOVO: Chiama OpenAI con function tools usando metodo asincrono per parallelismo
+            import asyncio
+            
+            async def call_openai_async():
+                return await self.openai_service.chat_completion(
+                    model=self.model_name,
+                    messages=messages,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                    tools=classification_tools,  # 🔑 AGGIUNTA: Function tools per OpenAI
+                    tool_choice="auto"  # Permette al modello di scegliere quando usare tools
+                )
+            
+            # Esegui la chiamata asincrona in modo sincrono per compatibilità
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Se siamo già in un loop asincrono, usiamo un thread
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(asyncio.run, call_openai_async())
+                        response = future.result()
+                else:
+                    response = loop.run_until_complete(call_openai_async())
+            except RuntimeError:
+                # Nessun loop esistente, creane uno nuovo
+                response = asyncio.run(call_openai_async())
+            
+            if self.enable_logging:
+                print(f"✅ [OpenAI] Risposta ricevuta usando metodo asincrono per parallelismo")
             
             # Estrae contenuto dalla risposta OpenAI con function call
             if 'choices' not in response or not response['choices']:
@@ -3252,6 +3272,468 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             
             raise
     
+    async def _call_openai_api_batch(self, conversations: List[str]) -> List[Dict[str, Any]]:
+        """
+        Chiama API OpenAI in batch per classificazione parallela di più conversazioni
+        Utilizza il metodo batch_chat_completions dell'OpenAIService per ottimizzare le prestazioni
+        
+        Args:
+            conversations: Lista di testi di conversazioni da classificare
+            
+        Returns:
+            Lista di dizionari con predicted_label, confidence, motivation per ogni conversazione
+            
+        Data ultima modifica: 2025-01-31
+        """
+        trace_all(
+            '_call_openai_api_batch', 
+            'ENTER',
+            called_from="classify_multiple_conversations",
+            batch_size=len(conversations),
+            tenant_id=self.tenant_id,
+            model_name=self.model_name,
+            openai_service_available=self.openai_service is not None
+        )
+        
+        if not self.openai_service:
+            raise ValueError("Servizio OpenAI non inizializzato")
+        
+        if not conversations:
+            return []
+        
+        # 🔄 CARICAMENTO TOOLS DAL DATABASE (stesso sistema di _call_openai_api_structured)
+        classification_tools = []
+        
+        if self.prompt_manager and self.tool_manager:
+            try:
+                # 1. Recupera gli ID dei tool dal prompt "intelligent_classifier_system"
+                resolved_tenant_id = self.prompt_manager._resolve_tenant_id(self.tenant_id)
+                tool_ids = self.prompt_manager.get_prompt_tools(
+                    tenant_id=resolved_tenant_id,
+                    prompt_name="intelligent_classifier_system",
+                    engine="LLM"
+                )
+                
+                # 2. Per ogni tool ID, recupera il tool completo dal database
+                for tool_id in tool_ids:
+                    try:
+                        # tool_id deve essere un numero intero
+                        if not isinstance(tool_id, int):
+                            if isinstance(tool_id, str) and tool_id.isdigit():
+                                tool_id = int(tool_id)
+                            else:
+                                continue
+                        
+                        db_tool = self.tool_manager.get_tool_by_id(tool_id)
+                        
+                        if db_tool:
+                            # Estrai i parametri corretti dal function_schema
+                            function_schema = db_tool['function_schema']
+                            
+                            if isinstance(function_schema, dict) and 'function' in function_schema:
+                                parameters = function_schema['function']['parameters']
+                            else:
+                                parameters = function_schema
+                            
+                            # Costruisce il tool per OpenAI
+                            classification_tool = {
+                                "type": "function", 
+                                "function": {
+                                    "name": db_tool['tool_name'],
+                                    "description": db_tool['description'],
+                                    "parameters": parameters
+                                }
+                            }
+                            
+                            # Aggiorna l'enum dei domain_labels nel tool
+                            if (self.domain_labels and 
+                                'properties' in classification_tool['function']['parameters'] and
+                                'predicted_label' in classification_tool['function']['parameters']['properties'] and
+                                'enum' in classification_tool['function']['parameters']['properties']['predicted_label']):
+                                
+                                classification_tool['function']['parameters']['properties']['predicted_label']['enum'] = list(self.domain_labels)
+                            
+                            classification_tools.append(classification_tool)
+                        
+                    except Exception as tool_error:
+                        if self.enable_logging:
+                            print(f"❌ [OpenAI Batch] Errore caricamento tool {tool_id}: {tool_error}")
+                        continue
+                        
+            except Exception as e:
+                if self.enable_logging:
+                    print(f"❌ [OpenAI Batch] Errore recupero tools dal database: {e}")
+        
+        # Verifica che ci sia almeno un tool disponibile
+        if not classification_tools:
+            raise ValueError(
+                "❌ ERRORE CRITICO OpenAI Batch: Nessun tool di classificazione disponibile dal database."
+            )
+        
+        # 🆕 VALIDAZIONE TOOLS usando helper dell'OpenAIService
+        valid_tools = []
+        for tool in classification_tools:
+            if self.openai_service.validate_tool_schema(tool):
+                valid_tools.append(tool)
+            else:
+                if self.enable_logging:
+                    print(f"❌ [OpenAI Batch] Tool '{tool.get('function', {}).get('name', 'unknown')}' non valido!")
+        
+        if not valid_tools:
+            raise ValueError("❌ ERRORE CRITICO OpenAI Batch: Nessun tool valido dopo validazione schema")
+        
+        classification_tools = valid_tools
+        
+        # 🚀 PREPARAZIONE BATCH REQUESTS
+        batch_requests = []
+        
+        for i, conversation_text in enumerate(conversations):
+            try:
+                # 🔄 USA STESSA FUNZIONE DI OLLAMA: _build_classification_prompt
+                full_prompt = self._build_classification_prompt(conversation_text, context=None)
+                
+                # 🔧 ESTRAZIONE system e user dal prompt ChatML di Ollama
+                system_content, user_content = self._extract_system_user_from_chatmL_prompt(full_prompt)
+                
+                # Messaggi per chat completion con function tools
+                messages = [
+                    {"role": "system", "content": system_content},
+                    {"role": "user", "content": user_content}
+                ]
+                
+                # Richiesta per il batch
+                request = {
+                    "model": self.model_name,
+                    "messages": messages,
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens,
+                    "tools": classification_tools,
+                    "tool_choice": "auto"
+                }
+                
+                batch_requests.append(request)
+                
+            except Exception as e:
+                if self.enable_logging:
+                    print(f"❌ [OpenAI Batch] Errore preparazione richiesta {i}: {e}")
+                raise
+        
+        if self.enable_logging:
+            print(f"🚀 [OpenAI Batch] Preparate {len(batch_requests)} richieste per batch processing")
+        
+        try:
+            # 🔥 CHIAMATA BATCH PARALLELA usando OpenAIService.batch_chat_completions
+            batch_responses = await self.openai_service.batch_chat_completions(batch_requests)
+            
+            if self.enable_logging:
+                print(f"✅ [OpenAI Batch] Ricevute {len(batch_responses)} risposte dal batch processing")
+            
+            # 🔄 PROCESSING DELLE RISPOSTE
+            results = []
+            
+            for i, response in enumerate(batch_responses):
+                try:
+                    # Gestisce errori specifici di singole richieste
+                    if 'error' in response:
+                        if self.enable_logging:
+                            print(f"❌ [OpenAI Batch] Errore richiesta {i}: {response['error']}")
+                        # Fallback per errore singolo
+                        fallback_result = {
+                            'predicted_label': 'altro',
+                            'confidence': 0.1,
+                            'motivation': f"Errore batch processing: {response['error']}"
+                        }
+                        results.append(fallback_result)
+                        continue
+                    
+                    # Estrae contenuto dalla risposta OpenAI con function call
+                    if 'choices' not in response or not response['choices']:
+                        raise ValueError(f"Risposta OpenAI vuota o malformata per richiesta {i}")
+                    
+                    # 🆕 USA i metodi helper dell'OpenAIService per gestire tool calls
+                    tool_calls = self.openai_service.extract_tool_calls(response)
+                    
+                    structured_result = None
+                    
+                    if tool_calls:
+                        # Verifica che sia il tool call giusto
+                        for tool_call in tool_calls:
+                            if (tool_call.get('function', {}).get('name') == 'classify_conversation' and 
+                                'arguments' in tool_call['function']):
+                                
+                                # Parse dei function call arguments
+                                if isinstance(tool_call['function']['arguments'], str):
+                                    structured_result = json.loads(tool_call['function']['arguments'])
+                                else:
+                                    structured_result = tool_call['function']['arguments']
+                                break
+                    
+                    if not structured_result:
+                        # Fallback: Se non c'è function call, prova parsing del contenuto
+                        message = response['choices'][0]['message']
+                        if 'content' in message and message['content']:
+                            content = message['content'].strip()
+                            try:
+                                structured_result = json.loads(content)
+                            except json.JSONDecodeError:
+                                structured_result = self._extract_json_from_openai_response(content)
+                        else:
+                            raise ValueError(f"Risposta OpenAI senza tool_calls né content per richiesta {i}")
+                    
+                    # Valida struttura risposta
+                    required_fields = ['predicted_label', 'confidence', 'motivation']
+                    for field in required_fields:
+                        if field not in structured_result:
+                            raise ValueError(f"Campo richiesto '{field}' mancante nella risposta {i}")
+                    
+                    # Normalizza confidence come float
+                    if isinstance(structured_result['confidence'], str):
+                        conf_str = structured_result['confidence'].replace('%', '')
+                        structured_result['confidence'] = float(conf_str) / 100.0
+                    elif isinstance(structured_result['confidence'], (int, float)):
+                        conf_val = float(structured_result['confidence'])
+                        if conf_val > 1.0:
+                            structured_result['confidence'] = conf_val / 100.0
+                        else:
+                            structured_result['confidence'] = conf_val
+                    
+                    results.append(structured_result)
+                    
+                except Exception as e:
+                    if self.enable_logging:
+                        print(f"❌ [OpenAI Batch] Errore processing risposta {i}: {e}")
+                    
+                    # Fallback per errore singolo
+                    fallback_result = {
+                        'predicted_label': 'altro',
+                        'confidence': 0.1,
+                        'motivation': f"Errore processing risposta: {str(e)}"
+                    }
+                    results.append(fallback_result)
+            
+            if self.enable_logging:
+                print(f"✅ [OpenAI Batch] Processing completato: {len(results)} risultati")
+            
+            trace_all(
+                '_call_openai_api_batch',
+                'EXIT',
+                called_from="classify_multiple_conversations",
+                batch_size=len(conversations),
+                results_count=len(results),
+                tools_used=len(classification_tools),
+                exit_reason="SUCCESS"
+            )
+            
+            return results
+            
+        except Exception as e:
+            if self.enable_logging:
+                print(f"❌ [OpenAI Batch] Errore durante batch processing: {e}")
+            
+            trace_all(
+                '_call_openai_api_batch',
+                'ERROR',
+                called_from="classify_multiple_conversations",
+                error_type=type(e).__name__,
+                error_message=str(e),
+                batch_size=len(conversations),
+                tools_loaded=len(classification_tools)
+            )
+            
+            raise
+
+    def classify_multiple_conversations_optimized(self, 
+                                                conversations: List[str],
+                                                context: Optional[str] = None) -> List[ClassificationResult]:
+        """
+        Classifica multiple conversazioni utilizzando batch processing ottimizzato per OpenAI
+        
+        Scopo della funzione:
+        - Determina automaticamente se usare batch processing o chiamate singole
+        - Utilizza classification_batch_size dal config per ottimizzare le performance
+        - Mantiene compatibilità con chiamate singole per Ollama
+        
+        Parametri di input e output:
+        - conversations: List[str] - Lista di testi di conversazioni da classificare
+        - context: Optional[str] - Contesto aggiuntivo opzionale
+        
+        Valori di ritorno:
+        - List[ClassificationResult]: Lista di risultati di classificazione
+        
+        Tracciamento aggiornamenti:
+        - 2025-01-31: Creazione con supporto automatico batch/single processing
+        
+        Args:
+            conversations: Lista di conversazioni da classificare
+            context: Contesto aggiuntivo opzionale
+            
+        Returns:
+            Lista di ClassificationResult con dettagli completi
+        """
+        trace_all("classify_multiple_conversations_optimized", "ENTER", 
+                 called_from="pipeline_or_external",
+                 conversations_count=len(conversations),
+                 tenant_id=self.tenant_id,
+                 model_name=self.model_name,
+                 engine_type=getattr(self, 'engine_type', 'unknown'))
+        
+        if not conversations:
+            return []
+        
+        # 🔧 LETTURA CONFIGURAZIONE BATCH SIZE dal config
+        batch_size = 1  # Default: chiamate singole
+        
+        # Carica batch_size dal config se disponibile
+        try:
+            config = self._load_config()
+            if config and 'pipeline' in config and 'classification_batch_size' in config['pipeline']:
+                batch_size = config['pipeline']['classification_batch_size']
+                
+                # Validazione range (1-200 come specificato dall'utente)
+                if not isinstance(batch_size, int) or batch_size < 1 or batch_size > 200:
+                    if self.enable_logging:
+                        print(f"⚠️ [Batch] Batch size non valido: {batch_size}, uso default 32")
+                    batch_size = 32
+                else:
+                    if self.enable_logging:
+                        print(f"📊 [Batch] Configurazione caricata: batch_size = {batch_size}")
+            
+        except Exception as e:
+            if self.enable_logging:
+                print(f"⚠️ [Batch] Errore caricamento config, uso batch_size=32: {e}")
+            batch_size = 32
+        
+        # 🎯 STRATEGIA BATCH: Solo per OpenAI, chiamate singole per Ollama
+        use_batch_processing = (
+            self.engine_type == 'openai' and  # Solo per OpenAI
+            len(conversations) > 1 and        # Più di una conversazione
+            batch_size > 1                    # Batch size configurato > 1
+        )
+        
+        if self.enable_logging:
+            print(f"🚀 [Batch] Strategia: {'BATCH' if use_batch_processing else 'SINGLE'} "
+                  f"(engine: {getattr(self, 'engine_type', 'unknown')}, "
+                  f"conversations: {len(conversations)}, batch_size: {batch_size})")
+        
+        results = []
+        
+        if use_batch_processing:
+            # 🚀 BATCH PROCESSING per OpenAI con parallelismo
+            try:
+                if self.enable_logging:
+                    print(f"🔥 [OpenAI Batch] Avvio batch processing per {len(conversations)} conversazioni")
+                
+                # Dividi in chunks se necessario
+                chunks = [conversations[i:i + batch_size] for i in range(0, len(conversations), batch_size)]
+                
+                for chunk_idx, chunk in enumerate(chunks):
+                    if self.enable_logging:
+                        print(f"📦 [OpenAI Batch] Processing chunk {chunk_idx + 1}/{len(chunks)} "
+                              f"({len(chunk)} conversazioni)")
+                    
+                    # Chiamata batch asincrona
+                    import asyncio
+                    
+                    async def process_chunk_async():
+                        return await self._call_openai_api_batch(chunk)
+                    
+                    # Esecuzione asincrona del chunk
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            # Se siamo già in un loop asincrono, usiamo un thread
+                            import concurrent.futures
+                            with concurrent.futures.ThreadPoolExecutor() as executor:
+                                future = executor.submit(asyncio.run, process_chunk_async())
+                                chunk_results = future.result()
+                        else:
+                            chunk_results = loop.run_until_complete(process_chunk_async())
+                    except RuntimeError:
+                        # Nessun loop esistente, creane uno nuovo
+                        chunk_results = asyncio.run(process_chunk_async())
+                    
+                    # Converte risultati dict in ClassificationResult
+                    for result_dict in chunk_results:
+                        classification_result = ClassificationResult(
+                            predicted_label=result_dict['predicted_label'],
+                            confidence=result_dict['confidence'],
+                            motivation=result_dict['motivation'],
+                            method='openai_batch',
+                            response_time=0.0,  # TODO: tracciare tempo se necessario
+                            cache_hit=False,
+                            embedding_similarity=None
+                        )
+                        results.append(classification_result)
+                
+                if self.enable_logging:
+                    print(f"✅ [OpenAI Batch] Completato batch processing: {len(results)} risultati")
+                
+            except Exception as e:
+                if self.enable_logging:
+                    print(f"❌ [OpenAI Batch] Errore batch processing, fallback a chiamate singole: {e}")
+                
+                # Fallback a chiamate singole in caso di errore batch
+                use_batch_processing = False
+        
+        if not use_batch_processing:
+            # 🔄 CHIAMATE SINGOLE (per Ollama o fallback OpenAI)
+            if self.enable_logging:
+                print(f"🔁 [Single] Processing {len(conversations)} conversazioni con chiamate singole")
+            
+            for i, conversation_text in enumerate(conversations):
+                try:
+                    if self.enable_logging and i % 10 == 0:  # Log ogni 10 conversazioni
+                        print(f"🔄 [Single] Processing conversazione {i + 1}/{len(conversations)}")
+                    
+                    result = self.classify_with_motivation(conversation_text, context)
+                    results.append(result)
+                    
+                except Exception as e:
+                    if self.enable_logging:
+                        print(f"❌ [Single] Errore conversazione {i}: {e}")
+                    
+                    # Fallback result per errore singolo
+                    fallback_result = ClassificationResult(
+                        predicted_label='altro',
+                        confidence=0.1,
+                        motivation=f"Errore classificazione: {str(e)}",
+                        method='fallback_error',
+                        response_time=0.0,
+                        cache_hit=False,
+                        embedding_similarity=None
+                    )
+                    results.append(fallback_result)
+        
+        if self.enable_logging:
+            print(f"✅ [Batch/Single] Classificazione completata: {len(results)} risultati totali")
+        
+        trace_all("classify_multiple_conversations_optimized", "EXIT", 
+                 called_from="pipeline_or_external",
+                 conversations_count=len(conversations),
+                 results_count=len(results),
+                 processing_mode='batch' if use_batch_processing else 'single',
+                 batch_size_used=batch_size,
+                 exit_reason="SUCCESS")
+        
+        return results
+    
+    def _load_config(self) -> Optional[Dict]:
+        """
+        Carica configurazione da config.yaml per batch processing
+        
+        Returns:
+            Dict con configurazione o None se errore
+        """
+        try:
+            config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    return yaml.safe_load(f)
+        except Exception as e:
+            if self.enable_logging:
+                print(f"⚠️ [Config] Errore caricamento config.yaml: {e}")
+        return None
+
     def _extract_json_from_openai_response(self, content: str) -> Dict[str, Any]:
         """
         Estrae JSON da risposta OpenAI potenzialmente malformata

@@ -6336,16 +6336,54 @@ class EndToEndPipeline:
                                         suggested_labels: Dict[int, str],
                                         base_confidence: float = 0.5) -> List[Dict[str, Any]]:
         """
-        Classifica sessioni in batch usando solo LLM (primo avvio)
+        Classifica sessioni in batch usando LLM con batch processing ottimizzato
         
-        Scopo: Classificazione batch senza modello ML
+        Scopo: Classificazione batch usando LLM reale con batch processing per OpenAI
         Input: session_texts, cluster_ids, suggested_labels, base_confidence
         Output: Lista risultati classificazione
-        Data ultima modifica: 2025-09-07
+        Data ultima modifica: 2025-01-31
         """
         results = []
         
-        print(f"   🔄 Classificazione solo LLM per {len(session_texts)} sessioni...")
+        print(f"   🔄 Classificazione LLM ottimizzata per {len(session_texts)} sessioni...")
+        
+        # 🔧 NUOVO: Usa LLM reale con batch processing ottimizzato
+        if (self.ensemble_classifier and 
+            self.ensemble_classifier.llm_classifier and 
+            hasattr(self.ensemble_classifier.llm_classifier, 'classify_multiple_conversations_optimized')):
+            
+            try:
+                print(f"   🚀 Avvio classificazione LLM batch ottimizzata...")
+                
+                # Usa il nuovo metodo di batch processing ottimizzato
+                llm_results = self.ensemble_classifier.llm_classifier.classify_multiple_conversations_optimized(
+                    conversations=session_texts,
+                    context=None
+                )
+                
+                print(f"   ✅ Completata classificazione LLM: {len(llm_results)} risultati")
+                
+                # Converte risultati ClassificationResult in formato dict
+                for i, llm_result in enumerate(llm_results):
+                    cluster_id = cluster_ids[i] if i < len(cluster_ids) else None
+                    
+                    results.append({
+                        'classification': llm_result.predicted_label,
+                        'confidence': llm_result.confidence,
+                        'method': f'llm_batch_{llm_result.method}',
+                        'motivation': getattr(llm_result, 'motivation', ''),
+                        'cluster_id': cluster_id,
+                        'suggested_label': suggested_labels.get(cluster_id, 'ALTRO') if cluster_id else 'ALTRO'
+                    })
+                
+                return results
+                
+            except Exception as e:
+                print(f"   ❌ Errore classificazione LLM batch, fallback a metodo precedente: {e}")
+                # Fallback al metodo precedente in caso di errore
+        
+        # 🔄 FALLBACK: Metodo precedente (suggested labels)
+        print(f"   🔄 Fallback a suggested labels per {len(session_texts)} sessioni...")
         
         for i, text in enumerate(session_texts):
             cluster_id = cluster_ids[i]
@@ -6353,15 +6391,16 @@ class EndToEndPipeline:
             # Usa suggested label come classification di base
             suggested_label = suggested_labels.get(cluster_id, 'ALTRO')
             
-            # Per primo avvio, usa sempre suggested label con confidence bassa
-            # In futuro si può implementare classificazione LLM reale
+            # Per primo avvio o fallback, usa sempre suggested label con confidence bassa
             classification = suggested_label
             confidence = base_confidence
             
             results.append({
                 'classification': classification,
                 'confidence': confidence,
-                'method': 'llm_only_first_run'
+                'method': 'llm_fallback_suggested_labels',
+                'cluster_id': cluster_id,
+                'suggested_label': suggested_label
             })
         
         return results

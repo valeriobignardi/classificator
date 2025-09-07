@@ -68,6 +68,9 @@ export interface LLMParameters {
     timeout: number;
     url: string;
   };
+  openai?: {
+    parallel_calls_max?: number;
+  };
 }
 
 export interface TenantLLMConfig {

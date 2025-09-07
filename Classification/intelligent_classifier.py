@@ -839,6 +839,7 @@ class IntelligentClassifier:
             generation_config = llm_config.get('generation', {})
             tokenization_config = llm_config.get('tokenization', {})
             connection_config = llm_config.get('ollama', {})
+            openai_config = llm_config.get('openai', {})
             
             # Configurazione tenant-specific
             tenant_configs = self.config.get('tenant_configs', {})
@@ -852,6 +853,7 @@ class IntelligentClassifier:
                 tenant_generation = tenant_llm_params.get('generation', {})
                 tenant_tokenization = tenant_llm_params.get('tokenization', {})
                 tenant_connection = tenant_llm_params.get('connection', {})
+                tenant_openai = tenant_llm_params.get('openai', {})
                 
                 merged_config = {
                     'generation': {
@@ -869,6 +871,9 @@ class IntelligentClassifier:
                     'connection': {
                         'timeout': tenant_connection.get('timeout', connection_config.get('timeout', 300)),
                         'url': connection_config.get('url', 'http://localhost:11434')
+                    },
+                    'openai': {
+                        'parallel_calls_max': tenant_openai.get('parallel_calls_max', openai_config.get('max_parallel_calls', 200))
                     },
                     'source': 'tenant_specific'
                 }
@@ -894,6 +899,9 @@ class IntelligentClassifier:
                         'timeout': connection_config.get('timeout', 300),
                         'url': connection_config.get('url', 'http://localhost:11434')
                     },
+                    'openai': {
+                        'parallel_calls_max': openai_config.get('max_parallel_calls', 200)
+                    },
                     'source': 'global'
                 }
                 
@@ -903,6 +911,7 @@ class IntelligentClassifier:
                 'generation': {'max_tokens': 150, 'temperature': 0.1, 'top_k': 40, 'top_p': 0.9, 'repeat_penalty': 1.1},
                 'tokenization': {'max_tokens': 8000, 'model_name': 'cl100k_base', 'truncation_strategy': 'start'},
                 'connection': {'timeout': 300, 'url': 'http://localhost:11434'},
+                'openai': {'parallel_calls_max': 200},
                 'source': 'fallback'
             }
     

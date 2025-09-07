@@ -75,6 +75,9 @@ const LLMParametersPanel: React.FC<LLMParametersPanelProps> = ({
     connection: {
       timeout: 300,
       url: 'http://localhost:11434'
+    },
+    openai: {
+      parallel_calls_max: 200
     }
   });
 
@@ -443,6 +446,42 @@ const LLMParametersPanel: React.FC<LLMParametersPanelProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Sezione OpenAI - Solo per modelli OpenAI */}
+        {selectedModel?.provider === 'openai' && (
+          <div className="param-section openai-section">
+            <h4>🤖 OpenAI Configurazione</h4>
+            
+            <div className="param-control">
+              <label>
+                Max Chiamate Parallele: <strong>{parameters.openai?.parallel_calls_max || 200}</strong>
+                <span className="param-desc">(Numero massimo di chiamate API simultanee)</span>
+              </label>
+              <input
+                type="range"
+                min="1"
+                max="200"
+                step="1"
+                value={parameters.openai?.parallel_calls_max || 200}
+                onChange={(e) => updateParameter('openai', 'parallel_calls_max', parseInt(e.target.value))}
+                disabled={disabled}
+                className="slider"
+              />
+              <div className="range-labels">
+                <span>1</span>
+                <span>200</span>
+              </div>
+            </div>
+            
+            {selectedModel.parallel_calls_max && (
+              <div className="model-limit-info">
+                <span className="info-text">
+                  ℹ️ Limite modello: {selectedModel.parallel_calls_max} chiamate parallele
+                </span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Anteprima JSON configurazione */}
@@ -569,6 +608,30 @@ const LLMParametersPanel: React.FC<LLMParametersPanelProps> = ({
           border: 1px solid #e9ecef;
           border-radius: 6px;
           padding: 16px;
+        }
+
+        .llm-parameters-panel .param-section.openai-section {
+          background: #f0f8ff;
+          border-color: #007bff;
+          border-width: 1px;
+          box-shadow: 0 2px 4px rgba(0, 123, 255, 0.1);
+        }
+
+        .llm-parameters-panel .openai-section h4 {
+          color: #007bff;
+        }
+
+        .llm-parameters-panel .model-limit-info {
+          margin-top: 8px;
+          padding: 6px 10px;
+          background: #e7f3ff;
+          border: 1px solid #b3d9ff;
+          border-radius: 4px;
+        }
+
+        .llm-parameters-panel .info-text {
+          font-size: 0.85em;
+          color: #0056b3;
         }
 
         .llm-parameters-panel .param-section h4 {

@@ -3153,6 +3153,12 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             # 🔧 NUOVO: Chiama OpenAI con function tools usando metodo asincrono per parallelismo
             import asyncio
             
+            # 🎯 FORZA L'USO DEL TOOL SPECIFICO per il tenant corrente
+            primary_tool_name = classification_tools[0]['function']['name'] if classification_tools else 'classify_conversation'
+            
+            if self.enable_logging:
+                print(f"🎯 [OpenAI] Forzando uso del tool: {primary_tool_name}")
+            
             async def call_openai_async():
                 return await self.openai_service.chat_completion(
                     model=self.model_name,
@@ -3160,7 +3166,7 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
                     tools=classification_tools,  # 🔑 AGGIUNTA: Function tools per OpenAI
-                    tool_choice={"type": "function", "function": {"name": "classify_conversation"}}  # 🔧 FORZA sempre l'uso del tool classify_conversation
+                    tool_choice={"type": "function", "function": {"name": primary_tool_name}}  # 🔧 FORZA: Usa sempre il tool specifico del tenant
                 )
             
             # Esegui la chiamata asincrona in modo sincrono per compatibilità
@@ -3401,6 +3407,12 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         
         classification_tools = valid_tools
         
+        # 🎯 FORZA L'USO DEL TOOL SPECIFICO per il tenant corrente nel batch
+        primary_tool_name = classification_tools[0]['function']['name'] if classification_tools else 'classify_conversation'
+        
+        if self.enable_logging:
+            print(f"🎯 [OpenAI Batch] Forzando uso del tool: {primary_tool_name}")
+        
         # 🚀 PREPARAZIONE BATCH REQUESTS
         batch_requests = []
         
@@ -3425,7 +3437,7 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                     "temperature": self.temperature,
                     "max_tokens": self.max_tokens,
                     "tools": classification_tools,
-                    "tool_choice": "auto"
+                    "tool_choice": {"type": "function", "function": {"name": primary_tool_name}}  # 🔧 FORZA: Usa sempre il tool specifico del tenant
                 }
                 
                 batch_requests.append(request)
@@ -3587,66 +3599,116 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         Returns:
             Lista di ClassificationResult con dettagli completi
         """
+        # ============================================================================
+        # 🔥🔥🔥 DEBUG CAZZO CHIARISSIMO - BATCH VS SINGLE PROCESSING 🔥🔥🔥
+        # ============================================================================
+        print(f"\n{'='*80}")
+        print(f"🚨 [BATCH DEBUG] INIZIO classify_multiple_conversations_optimized")
+        print(f"🚨 [BATCH DEBUG] Tenant: {self.tenant_id}")
+        print(f"🚨 [BATCH DEBUG] Model: {self.model_name}")
+        print(f"🚨 [BATCH DEBUG] Conversazioni da processare: {len(conversations)}")
+        print(f"{'='*80}\n")
+        
         trace_all("classify_multiple_conversations_optimized", "ENTER", 
                  called_from="pipeline_or_external",
                  conversations_count=len(conversations),
                  tenant_id=self.tenant_id,
                  model_name=self.model_name,
-                 engine_type=getattr(self, 'engine_type', 'unknown'))
+                 engine_type="to_be_determined")
         
         if not conversations:
+            print(f"🚨 [BATCH DEBUG] NESSUNA CONVERSAZIONE - ESCO SUBITO")
             return []
         
         # 🔧 LETTURA CONFIGURAZIONE BATCH SIZE dal config
         batch_size = 1  # Default: chiamate singole
         
+        print(f"🚨 [BATCH DEBUG] 1. LETTURA CONFIG BATCH_SIZE...")
         # Carica batch_size dal config se disponibile
         try:
             config = self._load_config()
+            print(f"🚨 [BATCH DEBUG] Config caricato: {config is not None}")
             if config and 'pipeline' in config and 'classification_batch_size' in config['pipeline']:
                 batch_size = config['pipeline']['classification_batch_size']
+                print(f"🚨 [BATCH DEBUG] Batch size dal config: {batch_size}")
                 
                 # Validazione range (1-200 come specificato dall'utente)
                 if not isinstance(batch_size, int) or batch_size < 1 or batch_size > 200:
-                    if self.enable_logging:
-                        print(f"⚠️ [Batch] Batch size non valido: {batch_size}, uso default 32")
+                    print(f"🚨 [BATCH DEBUG] ⚠️ Batch size non valido: {batch_size}, uso default 32")
                     batch_size = 32
                 else:
-                    if self.enable_logging:
-                        print(f"📊 [Batch] Configurazione caricata: batch_size = {batch_size}")
+                    print(f"🚨 [BATCH DEBUG] ✅ Batch size valido: {batch_size}")
+            else:
+                print(f"� [BATCH DEBUG] Config non contiene classification_batch_size, uso default 32")
+                batch_size = 32
             
         except Exception as e:
-            if self.enable_logging:
-                print(f"⚠️ [Batch] Errore caricamento config, uso batch_size=32: {e}")
+            print(f"🚨 [BATCH DEBUG] ❌ Errore caricamento config: {e}")
             batch_size = 32
         
+        print(f"🚨 [BATCH DEBUG] BATCH_SIZE FINALE: {batch_size}")
+        
+        # 🎯 RILEVAMENTO AUTOMATICO ENGINE TYPE
+        print(f"\n🚨 [BATCH DEBUG] 2. RILEVAMENTO ENGINE TYPE...")
+        print(f"🚨 [BATCH DEBUG] hasattr openai_service: {hasattr(self, 'openai_service')}")
+        print(f"🚨 [BATCH DEBUG] openai_service value: {getattr(self, 'openai_service', 'NOT_SET')}")
+        print(f"🚨 [BATCH DEBUG] openai_service is not None: {getattr(self, 'openai_service', None) is not None}")
+        
+        # Determina automaticamente il tipo di engine basato sui servizi disponibili
+        if hasattr(self, 'openai_service') and self.openai_service is not None:
+            engine_type = 'openai'
+            print(f"🚨 [BATCH DEBUG] ✅ ENGINE TYPE: OPENAI")
+            print(f"🚨 [BATCH DEBUG] OpenAI Service type: {type(self.openai_service).__name__}")
+        else:
+            engine_type = 'ollama'
+            print(f"🚨 [BATCH DEBUG] ❌ ENGINE TYPE: OLLAMA (OpenAI non disponibile)")
+        
         # 🎯 STRATEGIA BATCH: Solo per OpenAI, chiamate singole per Ollama
+        print(f"\n🚨 [BATCH DEBUG] 3. DECISIONE STRATEGIA BATCH...")
+        print(f"� [BATCH DEBUG] Engine type: {engine_type}")
+        print(f"🚨 [BATCH DEBUG] Conversazioni > 1: {len(conversations) > 1} ({len(conversations)} conv)")
+        print(f"🚨 [BATCH DEBUG] Batch size > 1: {batch_size > 1} (batch_size={batch_size})")
+        
         use_batch_processing = (
-            self.engine_type == 'openai' and  # Solo per OpenAI
+            engine_type == 'openai' and      # Solo per OpenAI
             len(conversations) > 1 and        # Più di una conversazione
             batch_size > 1                    # Batch size configurato > 1
         )
         
-        if self.enable_logging:
-            print(f"🚀 [Batch] Strategia: {'BATCH' if use_batch_processing else 'SINGLE'} "
-                  f"(engine: {getattr(self, 'engine_type', 'unknown')}, "
-                  f"conversations: {len(conversations)}, batch_size: {batch_size})")
+        print(f"\n🚨 [BATCH DEBUG] ===== RISULTATO FINALE =====")
+        if use_batch_processing:
+            print(f"🔥🔥� [BATCH DEBUG] STRATEGIA: BATCH PROCESSING ATTIVATO! 🔥🔥🔥")
+        else:
+            print(f"❌❌❌ [BATCH DEBUG] STRATEGIA: CHIAMATE SINGOLE (NO BATCH) ❌❌❌")
+        print(f"🚨 [BATCH DEBUG] Engine: {engine_type}")
+        print(f"🚨 [BATCH DEBUG] Conversazioni: {len(conversations)}")
+        print(f"🚨 [BATCH DEBUG] Batch size: {batch_size}")
+        print(f"🚨 [BATCH DEBUG] Use batch: {use_batch_processing}")
+        print(f"{'='*80}\n")
+        
+        # 📊 TRACE AGGIUNTIVO dopo determinazione strategia
+        trace_all("classify_multiple_conversations_optimized", "STRATEGY_DETERMINED", 
+                 called_from="pipeline_or_external",
+                 conversations_count=len(conversations),
+                 engine_type=engine_type,
+                 use_batch_processing=use_batch_processing,
+                 batch_size=batch_size)
         
         results = []
         
         if use_batch_processing:
             # 🚀 BATCH PROCESSING per OpenAI con parallelismo
+            print(f"\n🔥🔥🔥 [BATCH DEBUG] ENTRANDO IN BATCH PROCESSING! 🔥🔥🔥")
             try:
-                if self.enable_logging:
-                    print(f"🔥 [OpenAI Batch] Avvio batch processing per {len(conversations)} conversazioni")
+                print(f"🔥 [OpenAI Batch] Avvio batch processing per {len(conversations)} conversazioni")
                 
                 # Dividi in chunks se necessario
                 chunks = [conversations[i:i + batch_size] for i in range(0, len(conversations), batch_size)]
+                print(f"🔥 [OpenAI Batch] Diviso in {len(chunks)} chunks con batch_size={batch_size}")
                 
                 for chunk_idx, chunk in enumerate(chunks):
-                    if self.enable_logging:
-                        print(f"📦 [OpenAI Batch] Processing chunk {chunk_idx + 1}/{len(chunks)} "
-                              f"({len(chunk)} conversazioni)")
+                    print(f"📦 [OpenAI Batch] Processing chunk {chunk_idx + 1}/{len(chunks)} "
+                          f"({len(chunk)} conversazioni)")
                     
                     # Chiamata batch asincrona
                     import asyncio
@@ -3668,6 +3730,8 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                     except RuntimeError:
                         # Nessun loop esistente, creane uno nuovo
                         chunk_results = asyncio.run(process_chunk_async())
+                    
+                    print(f"✅ [OpenAI Batch] Chunk {chunk_idx + 1} completato: {len(chunk_results)} risultati")
                     
                     # Converte risultati dict in ClassificationResult
                     for result_dict in chunk_results:
@@ -3694,20 +3758,20 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         
         if not use_batch_processing:
             # 🔄 CHIAMATE SINGOLE (per Ollama o fallback OpenAI)
-            if self.enable_logging:
-                print(f"🔁 [Single] Processing {len(conversations)} conversazioni con chiamate singole")
+            print(f"\n❌❌❌ [SINGLE DEBUG] ENTRANDO IN SINGLE PROCESSING! ❌❌❌")
+            print(f"🔁 [Single] Processing {len(conversations)} conversazioni con chiamate singole")
+            print(f"🔁 [Single] Engine: {engine_type}")
             
             for i, conversation_text in enumerate(conversations):
                 try:
-                    if self.enable_logging and i % 10 == 0:  # Log ogni 10 conversazioni
-                        print(f"🔄 [Single] Processing conversazione {i + 1}/{len(conversations)}")
+                    print(f"🔄 [Single] Processing conversazione {i + 1}/{len(conversations)}")
                     
                     result = self.classify_with_motivation(conversation_text, context)
                     results.append(result)
+                    print(f"✅ [Single] Conversazione {i + 1} completata: {result.predicted_label}")
                     
                 except Exception as e:
-                    if self.enable_logging:
-                        print(f"❌ [Single] Errore conversazione {i}: {e}")
+                    print(f"❌ [Single] Errore conversazione {i}: {e}")
                     
                     # Fallback result per errore singolo
                     fallback_result = ClassificationResult(
@@ -3721,8 +3785,12 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                     )
                     results.append(fallback_result)
         
-        if self.enable_logging:
-            print(f"✅ [Batch/Single] Classificazione completata: {len(results)} risultati totali")
+        print(f"\n{'='*80}")
+        print(f"🚨 [BATCH DEBUG] FINE classify_multiple_conversations_optimized")
+        print(f"🚨 [BATCH DEBUG] Strategia usata: {'BATCH' if use_batch_processing else 'SINGLE'}")
+        print(f"🚨 [BATCH DEBUG] Risultati totali: {len(results)}")
+        print(f"🚨 [BATCH DEBUG] Engine type: {engine_type}")
+        print(f"{'='*80}\n")
         
         trace_all("classify_multiple_conversations_optimized", "EXIT", 
                  called_from="pipeline_or_external",
@@ -6770,19 +6838,6 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 'error': error_msg
             }
 
-# Funzioni di utilità per compatibilità
-def create_intelligent_classifier(embedder=None, semantic_memory=None, **kwargs) -> IntelligentClassifier:
-    """
-    Factory function per creare il classificatore con supporto embedding
-    
-    Args:
-        embedder: Embedder per calcoli semantici (opzionale)
-        semantic_memory: Gestore memoria semantica (opzionale)
-        **kwargs: Altri parametri per IntelligentClassifier
-    """
-    return IntelligentClassifier(embedder=embedder, semantic_memory=semantic_memory, **kwargs)
-
-
     def reload_model_configuration(self, force_from_database: bool = True) -> Dict[str, Any]:
         """
         Ricarica configurazione modello LLM dal database/configurazione
@@ -6805,8 +6860,6 @@ def create_intelligent_classifier(embedder=None, semantic_memory=None, **kwargs)
             try:
                 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'AIConfiguration'))
                 from ai_configuration_service import AIConfigurationService
-import os
-from datetime import datetime
                 ai_service = AIConfigurationService(use_database=True)
             except ImportError as e:
                 print(f"⚠️ AIConfigurationService non disponibile: {e}")
@@ -6918,25 +6971,18 @@ from datetime import datetime
                 'success': False,
                 'error': f'Test modello fallito: {str(e)}'
             }
+
+# Funzioni di utilità per compatibilità
+def create_intelligent_classifier(embedder=None, semantic_memory=None, **kwargs) -> IntelligentClassifier:
+    """
+    Factory function per creare il classificatore con supporto embedding
     
-    def get_current_model_info(self) -> Dict[str, Any]:
-        """
-        Ottiene informazioni sul modello correntemente in uso
-        
-        Returns:
-            Informazioni dettagliate sul modello corrente
-        """
-        return {
-            'current_model': self.model_name,
-            'base_model': self.base_model_name,
-            'client_name': self.client_name,
-            'ollama_url': self.ollama_url,
-            'temperature': self.temperature,
-            'max_tokens': self.max_tokens,
-            'is_available': self.is_available(),
-            'cache_enabled': self.enable_cache,
-            'finetuning_enabled': self.enable_finetuning
-        }
+    Args:
+        embedder: Embedder per calcoli semantici (opzionale)
+        semantic_memory: Gestore memoria semantica (opzionale)
+        **kwargs: Altri parametri per IntelligentClassifier
+    """
+    return IntelligentClassifier(embedder=embedder, semantic_memory=semantic_memory, **kwargs)
 
 
 def test_intelligent_classifier() -> None:

@@ -548,80 +548,38 @@ class HierarchicalAdaptiveClusterer:
                         break
                 
                 try:
-                    if self.llm_classifier and hasattr(self.llm_classifier, 'classify_conversation'):
-                        # METODO PRIMARIO: classify_conversation
-                        # Il metodo classify_conversation ritorna un dizionario
-                        llm_result = self.llm_classifier.classify_conversation(rep_text)
-                        prediction = llm_result['predicted_label']
-                        confidence = llm_result['confidence']
-                        motivation = llm_result['motivation']
-                        self.llm_usage_stats['classify_conversation_calls'] += 1
-                        
-                        prediction_data = {
-                            'label': prediction,
-                            'confidence': confidence,
-                            'motivation': motivation,
-                            'method_used': 'classify_conversation',
-                            'text_preview': rep_text[:50] + "..." if len(rep_text) > 50 else rep_text
-                        }
-                        rep_predictions.append(prediction_data)
-                        
-                        # Memorizza classificazione nella cache se session_id trovato
-                        if rep_session_id:
-                            self.session_classifications[rep_session_id] = prediction_data
-                        
-                        print(f"     🎯 Rep {i+1}: '{prediction}' (conf: {confidence:.3f}) via classify_conversation")
-                        
-                    elif self.llm_classifier and hasattr(self.llm_classifier, 'predict_with_ensemble'):
-                        # METODO SECONDARIO: predict_with_ensemble
-                        result = self.llm_classifier.predict_with_ensemble(rep_text, return_details=True)
-                        self.llm_usage_stats['predict_with_ensemble_calls'] += 1
-                        
-                        prediction_data = {
-                            'label': result['predicted_label'],
-                            'confidence': result['confidence'],
-                            'motivation': result.get('llm_motivation', 'Ensemble prediction'),
-                            'method_used': 'predict_with_ensemble',
-                            'text_preview': rep_text[:50] + "..." if len(rep_text) > 50 else rep_text
-                        }
-                        rep_predictions.append(prediction_data)
-                        
-                        # Memorizza classificazione nella cache se session_id trovato
-                        if rep_session_id:
-                            self.session_classifications[rep_session_id] = prediction_data
-                        
-                        print(f"     🔄 Rep {i+1}: '{result['predicted_label']}' (conf: {result['confidence']:.3f}) via ensemble")
-                        
-                    else:
-                        # FALLBACK: Nessun LLM disponibile o metodi non riconosciuti
-                        self.llm_usage_stats['fallback_calls'] += 1
-                        fallback_reason = "No LLM" if not self.llm_classifier else "No recognized methods"
-                        
-                        rep_predictions.append({
-                            'label': 'altro',
-                            'confidence': 0.5,
-                            'motivation': f'LLM fallback: {fallback_reason}',
-                            'method_used': 'fallback',
-                            'text_preview': rep_text[:50] + "..." if len(rep_text) > 50 else rep_text
-                        })
-                        
-                        print(f"     ⚠️ Rep {i+1}: 'altro' (conf: 0.5) - FALLBACK ({fallback_reason})")
-                        
+                    # 🚫 RIMOSSO: Chiamate LLM durante clustering BERTopic
+                    # Le classificazioni saranno fatte DOPO il clustering con batch processing ottimizzato
+                    
+                    # FALLBACK TEMPORANEO: Etichetta provvisoria per completare il clustering
+                    self.llm_usage_stats['fallback_calls'] += 1
+                    fallback_reason = "Clustering_phase_no_LLM"
+                    
+                    rep_predictions.append({
+                        'label': 'clustering_temp',
+                        'confidence': 0.5,
+                        'motivation': f'Clustering phase - LLM classification deferred',
+                        'method_used': 'clustering_fallback',
+                        'text_preview': rep_text[:50] + "..." if len(rep_text) > 50 else rep_text
+                    })
+                    
+                    print(f"     ⚠️ Rep {i+1}: 'clustering_temp' (conf: 0.5) - Classificazione differita post-clustering")
+                    
                 except Exception as e:
-                    # ERRORE: Gestione eccezioni
+                    # ERRORE: Gestione eccezioni durante clustering
                     self.llm_usage_stats['error_calls'] += 1
                     error_msg = str(e)
                     
                     rep_predictions.append({
-                        'label': 'altro',
+                        'label': 'clustering_error',
                         'confidence': 0.3,
-                        'motivation': f'Errore LLM: {error_msg}',
+                        'motivation': f'Errore clustering: {error_msg}',
                         'method_used': 'error_fallback',
                         'text_preview': rep_text[:50] + "..." if len(rep_text) > 50 else rep_text
                     })
                     
-                    print(f"     ❌ Rep {i+1}: 'altro' (conf: 0.3) - ERRORE: {error_msg}")
-                    self.logger.warning(f"Errore classificazione LLM regione {region_id}: {e}")
+                    print(f"     ❌ Rep {i+1}: 'clustering_error' (conf: 0.3) - ERRORE: {error_msg}")
+                    self.logger.warning(f"Errore durante fase clustering regione {region_id}: {e}")
             
             # Calcola distribuzione di etichette per la regione
             label_distribution = self._calculate_region_label_distribution(rep_predictions)

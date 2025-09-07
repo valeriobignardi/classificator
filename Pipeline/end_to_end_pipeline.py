@@ -4384,9 +4384,17 @@ class EndToEndPipeline:
                     **sessioni[session_id]
                 })
             
-            # Seleziona rappresentanti per cluster validi (non outlier)
+            # Seleziona rappresentanti per cluster validi E outliers
+            outliers_for_classification = []
+            
             for cluster_id, sessions in cluster_sessions.items():
-                if cluster_id == -1:  # Salta outlier per ora
+                if cluster_id == -1:  # Gestione speciale outliers
+                    # Per outliers, ogni sessione è un "rappresentante" da classificare
+                    max_outliers = min(20, len(sessions))  # Limita outliers a max 20 per performance
+                    outliers_for_classification = sessions[:max_outliers]
+                    representatives[cluster_id] = outliers_for_classification
+                    suggested_labels[cluster_id] = 'altro'  # Label di default per outliers
+                    print(f"   🔍 Outliers: {len(sessions)} totali, {len(outliers_for_classification)} selezionati per classificazione")
                     continue
                     
                 # Seleziona max 3 rappresentanti per cluster
@@ -4406,64 +4414,145 @@ class EndToEndPipeline:
             print(f"📊 [FASE 5: CLASSIFICAZIONE] Target: {total_representatives} rappresentanti")
             print(f"🎯 [FASE 5: CLASSIFICAZIONE] Ottimizzazione: {total_representatives} invece di {len(sessioni)} sessioni totali")
             
-            rep_count = 0
-            success_count = 0
-            error_count = 0
+            # 🆕 LOGICA BATCH PROCESSING per OpenAI
+            llm_classifier = getattr(self.ensemble_classifier, 'llm_classifier', None)
+            use_batch_processing = (
+                llm_classifier and 
+                hasattr(llm_classifier, 'is_openai_model') and 
+                llm_classifier.is_openai_model and
+                hasattr(llm_classifier, 'classify_multiple_conversations_optimized') and
+                total_representatives >= 3  # Minimo per batch processing
+            )
             
-            for cluster_id, reps in representatives.items():
-                cluster_predictions = []
+            if use_batch_processing:
+                print(f"🚀 [BATCH PROCESSING] Usando batch processing OpenAI per {total_representatives} rappresentanti")
                 
-                print(f"📋 [FASE 5: CLASSIFICAZIONE] Cluster {cluster_id}: {len(reps)} rappresentanti")
+                # Prepara tutti i testi dei rappresentanti per batch processing
+                all_rep_texts = []
+                rep_mapping = []  # Mappa indice -> (cluster_id, rep_index, rep_data)
                 
-                for rep in reps:
-                    rep_count += 1
-                    rep_text = rep['testo_completo']
+                for cluster_id, reps in representatives.items():
+                    for rep_idx, rep in enumerate(reps):
+                        all_rep_texts.append(rep['testo_completo'])
+                        rep_mapping.append((cluster_id, rep_idx, rep))
+                
+                print(f"📦 [BATCH PROCESSING] Preparati {len(all_rep_texts)} testi per batch OpenAI")
+                
+                # Esegui batch processing
+                try:
+                    batch_results = llm_classifier.classify_multiple_conversations_optimized(
+                        conversations=all_rep_texts,
+                        context=None
+                    )
                     
-                    # Classifica il rappresentante con ensemble ML+LLM
-                    try:
-                        # 🚀 OTTIMIZZAZIONE: Usa features ML cached se disponibili
-                        cached_features = self._get_cached_ml_features(rep['session_id'])
-                        if cached_features is not None:
-                            print(f"   ✅ Usando features cached per rappresentante {rep['session_id']}")
-                        
-                        prediction = self.ensemble_classifier.predict_with_ensemble(
-                            rep_text,
-                            return_details=True,
-                            embedder=self.embedder,
-                            ml_features_precalculated=cached_features
-                        )
-                        prediction['representative_session_id'] = rep['session_id']
-                        prediction['cluster_id'] = cluster_id
-                        cluster_predictions.append(prediction)
-                        success_count += 1
-                        
-                        if rep_count % 10 == 0 or rep_count == total_representatives:  # Progress ogni 10 reps
-                            percent = (rep_count / total_representatives) * 100
-                            print(f"⚡ [FASE 5: CLASSIFICAZIONE] Progress: {rep_count}/{total_representatives} ({percent:.1f}%)")
-                        
-                    except Exception as e:
-                        error_count += 1
-                        print(f"⚠️ [FASE 5: CLASSIFICAZIONE] Errore rep {rep['session_id']}: {e}")
-                        # Fallback con bassa confidenza
-                        cluster_predictions.append({
-                            'predicted_label': 'altro',
-                            'confidence': 0.3,
-                            'ensemble_confidence': 0.3,
-                            'method': 'REP_FALLBACK',
-                            'representative_session_id': rep['session_id'],
-                            'cluster_id': cluster_id,
-                            'llm_prediction': None,
-                            'ml_prediction': {'predicted_label': 'altro', 'confidence': 0.3}
-                        })
+                    print(f"✅ [BATCH PROCESSING] Ricevuti {len(batch_results)} risultati da OpenAI")
+                    
+                    # Mappa i risultati batch ai cluster
+                    success_count = 0
+                    error_count = 0
+                    
+                    for i, (cluster_id, rep_idx, rep) in enumerate(rep_mapping):
+                        if i < len(batch_results):
+                            batch_result = batch_results[i]
+                            
+                            # Crea predizione in formato compatibile
+                            prediction = {
+                                'predicted_label': batch_result.predicted_label,
+                                'confidence': batch_result.confidence,
+                                'ensemble_confidence': batch_result.confidence,
+                                'method': f'BATCH_{batch_result.method}',
+                                'llm_prediction': {
+                                    'predicted_label': batch_result.predicted_label,
+                                    'confidence': batch_result.confidence,
+                                    'motivation': getattr(batch_result, 'motivation', 'Batch classification')
+                                },
+                                'ml_prediction': None,  # Solo LLM nel batch
+                                'representative_session_id': rep['session_id'],
+                                'cluster_id': cluster_id
+                            }
+                            
+                            if cluster_id not in representative_predictions:
+                                representative_predictions[cluster_id] = []
+                            representative_predictions[cluster_id].append(prediction)
+                            success_count += 1
+                        else:
+                            error_count += 1
+                            print(f"⚠️ [BATCH PROCESSING] Risultato mancante per rep {i}")
+                    
+                    classification_time = time.time() - start_time
+                    print(f"✅ [BATCH PROCESSING] Completato in {classification_time:.2f}s")
+                    print(f"📊 [BATCH PROCESSING] Risultati:")
+                    print(f"   ✅ Successi: {success_count}/{total_representatives}")
+                    print(f"   ❌ Errori: {error_count}")
+                    print(f"   ⚡ Throughput: {success_count/classification_time:.1f} classificazioni/secondo")
+                    
+                except Exception as e:
+                    print(f"❌ [BATCH PROCESSING] Errore batch processing: {e}")
+                    print(f"� [BATCH PROCESSING] Fallback a classificazione individuale")
+                    use_batch_processing = False
+            
+            # Fallback a classificazione individuale se batch non disponibile o fallito
+            if not use_batch_processing:
+                print(f"🔄 [CLASSIFICAZIONE INDIVIDUALE] Usando classificazione tradizionale")
                 
-                representative_predictions[cluster_id] = cluster_predictions
+                rep_count = 0
+                success_count = 0
+                error_count = 0
                 
-            classification_time = time.time() - start_time
-            print(f"✅ [FASE 5: CLASSIFICAZIONE] Completata in {classification_time:.2f}s")
-            print(f"📊 [FASE 5: CLASSIFICAZIONE] Risultati:")
-            print(f"   ✅ Successi: {success_count}/{total_representatives}")
-            print(f"   ❌ Errori: {error_count}")
-            print(f"   ⚡ Throughput: {success_count/classification_time:.1f} classificazioni/secondo")
+                for cluster_id, reps in representatives.items():
+                    cluster_predictions = []
+                    
+                    print(f"📋 [CLASSIFICAZIONE INDIVIDUALE] Cluster {cluster_id}: {len(reps)} rappresentanti")
+                    
+                    for rep in reps:
+                        rep_count += 1
+                        rep_text = rep['testo_completo']
+                        
+                        # Classifica il rappresentante con ensemble ML+LLM
+                        try:
+                            # 🚀 OTTIMIZZAZIONE: Usa features ML cached se disponibili
+                            cached_features = self._get_cached_ml_features(rep['session_id'])
+                            if cached_features is not None:
+                                print(f"   ✅ Usando features cached per rappresentante {rep['session_id']}")
+                            
+                            prediction = self.ensemble_classifier.predict_with_ensemble(
+                                rep_text,
+                                return_details=True,
+                                embedder=self.embedder,
+                                ml_features_precalculated=cached_features
+                            )
+                            prediction['representative_session_id'] = rep['session_id']
+                            prediction['cluster_id'] = cluster_id
+                            cluster_predictions.append(prediction)
+                            success_count += 1
+                            
+                            if rep_count % 10 == 0 or rep_count == total_representatives:  # Progress ogni 10 reps
+                                percent = (rep_count / total_representatives) * 100
+                                print(f"⚡ [CLASSIFICAZIONE INDIVIDUALE] Progress: {rep_count}/{total_representatives} ({percent:.1f}%)")
+                            
+                        except Exception as e:
+                            error_count += 1
+                            print(f"⚠️ [CLASSIFICAZIONE INDIVIDUALE] Errore rep {rep['session_id']}: {e}")
+                            # Fallback con bassa confidenza
+                            cluster_predictions.append({
+                                'predicted_label': 'altro',
+                                'confidence': 0.3,
+                                'ensemble_confidence': 0.3,
+                                'method': 'REP_FALLBACK',
+                                'representative_session_id': rep['session_id'],
+                                'cluster_id': cluster_id,
+                                'llm_prediction': None,
+                                'ml_prediction': {'predicted_label': 'altro', 'confidence': 0.3}
+                            })
+                    
+                    representative_predictions[cluster_id] = cluster_predictions
+                    
+                classification_time = time.time() - start_time
+                print(f"✅ [CLASSIFICAZIONE INDIVIDUALE] Completata in {classification_time:.2f}s")
+                print(f"📊 [CLASSIFICAZIONE INDIVIDUALE] Risultati:")
+                print(f"   ✅ Successi: {success_count}/{total_representatives}")
+                print(f"   ❌ Errori: {error_count}")
+                print(f"   ⚡ Throughput: {success_count/classification_time:.1f} classificazioni/secondo")
             
             # STEP 4: Propagazione etichette ai cluster
             start_time = time.time()

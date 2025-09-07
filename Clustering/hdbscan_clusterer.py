@@ -687,7 +687,7 @@ class HDBSCANClusterer:
                 "min_cluster_size": self.min_cluster_size,
                 "min_samples": self.min_samples,
                 "gpu_enabled": self.gpu_enabled,
-                "umap_enabled": self.umap_enabled
+                "umap_enabled": self.use_umap
             }
         )
         

@@ -1,0 +1,59 @@
+{
+  "timestamp": "2025-09-07T02:45:59.865893",
+  "case_analysis": {
+    "case_id": "68bcec2b34ea2bca071d45be",
+    "found_in_collections": [
+      "humanitas_015007d9-d413-11ef-86a5-96000228e7fe"
+    ],
+    "details": {
+      "humanitas_015007d9-d413-11ef-86a5-96000228e7fe": [
+        {
+          "_id": "68bcec2b34ea2bca071d45be",
+          "session_id": "0008ef4f-c2f4-4f5e-933e-646574f3638c",
+          "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+          "classification": "ALTRO",
+          "classification_method": "OUTLIER_FALLBACK",
+          "classification_type": "OUTLIER",
+          "classified_at": "2025-09-07T02:21:31.440777",
+          "classified_by": "post_training_pipeline",
+          "confidence": 0.3,
+          "confidence_disagreement": 0.0,
+          "created_at": "2025-09-07T02:21:31.440777",
+          "disagreement": false,
+          "disagreement_score": 0.0,
+          "human_reviewed": false,
+          "marked_for_review_at": "2025-09-07T02:21:31.440789",
+          "metadata": {
+            "cluster_id": -1,
+            "is_representative": false,
+            "representative": false,
+            "outlier": true,
+            "propagated": false
+          },
+          "motivazione": "Auto-classificato post-training con confidenza 0.300",
+          "notes": "Classificazione post-training automatica (confidenza 0.300)",
+          "predicted_label": "ALTRO",
+          "review_reason": "outlier_low_confidence_0.300_threshold_0.95",
+          "review_status": "pending",
+          "session_type": "outlier",
+          "tenant_name": "Humanitas",
+          "tenant_slug": "humanitas",
+          "testo_completo": "[UTENTE] copia fattura [ASSISTENTE] Puoi spiegarmi meglio la tua richiesta? Intendi sapere come ottenere una copia della fattura? [UTENTE] abvere copia fattura [ASSISTENTE] Per ottenere una copia della fattura, ti consiglio di accedere al portale [Humanitas con te](https://www.humanitasconte.it). Se hai difficoltà tecniche o necessiti di supporto, puoi contattare l’assistenza dedicata compilando il modulo di contatto disponibile alla pagina [Help](https://prenota.humanitas.it/Help). \n\nSe hai bisogno di ulteriori informazioni, sono qui per aiutarti!",
+          "updated_at": "2025-09-07T02:21:31.440832"
+        }
+      ]
+    },
+    "status": "unknown"
+  },
+  "representatives_stats": {
+    "total_count": 0,
+    "by_tenant": [],
+    "by_label": []
+  },
+  "na_problem_analysis": {
+    "review_queue_stats": {},
+    "na_classifications": {},
+    "missing_models": {},
+    "recommendations": []
+  }
+}

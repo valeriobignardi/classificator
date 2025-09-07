@@ -729,21 +729,22 @@ class ApiService {
   }
 
   /**
-   * Ottiene modelli LLM disponibili
+   * Ottiene modelli LLM disponibili (Ollama + OpenAI)
+   * CORREZIONE: Usa nuova API unificata che include modelli OpenAI
    * @param tenantId ID del tenant
-   * @returns Lista modelli LLM
+   * @returns Lista modelli LLM con supporto OpenAI e chiamate parallele
    */
   async getLLMModels(tenantId: string): Promise<any> {
-    console.log('🧠 [DEBUG] ApiService.getLLMModels() - Avvio richiesta');
+    console.log('🧠 [DEBUG] ApiService.getLLMModels() - Avvio richiesta (API unificata)');
     console.log('🧠 [DEBUG] Tenant:', tenantId);
     
-    const url = `${API_BASE_URL}/ai-config/${tenantId}/llm-models`;
+    const url = `${API_BASE_URL}/llm/models/${tenantId}`;
     console.log('🧠 [DEBUG] URL chiamata:', url);
 
     try {
       const response = await axios.get(url);
       console.log('✅ [DEBUG] Modelli LLM ricevuti:', response.status);
-      console.log('✅ [DEBUG] Dati modelli:', response.data);
+      console.log('✅ [DEBUG] Dati modelli (include OpenAI):', response.data);
       
       return response.data;
     } catch (error) {

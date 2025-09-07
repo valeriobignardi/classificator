@@ -75,9 +75,19 @@ interface EmbeddingEngine {
 
 interface LLMModel {
   name: string;
-  description: string;
-  size: string;
-  category: string;
+  display_name: string;
+  provider: string;  // 'ollama' | 'openai'
+  max_input_tokens: number;
+  max_output_tokens: number;
+  context_limit: number;
+  requires_raw_mode: boolean;
+  parallel_calls_max?: number;
+  rate_limit_per_minute?: number;
+  rate_limit_per_day?: number;
+  // Campi legacy per compatibilità
+  description?: string;
+  size?: string;
+  category?: string;
   installed?: boolean;
   recommended?: boolean;
   modified_at?: string;
@@ -192,11 +202,17 @@ const AIConfigurationManager: React.FC<{ open: boolean }> = ({ open }) => {
         setEmbeddingEngines(embeddingResponse.engines);
       }
 
-      // Carica modelli LLM disponibili
+      // Carica modelli LLM disponibili (nuova API unificata)
       try {
         const llmResponse = await apiService.getLLMModels(tenantId);
         if (llmResponse.success) {
-          setLlmModels(llmResponse.models || {});
+          // Nuova API restituisce array piatto invece di struttura annidata
+          console.log('✅ Modelli LLM caricati (nuova API):', llmResponse.models);
+          console.log('🔍 Struttura primo modello:', llmResponse.models[0]);
+          setLlmModels({ 
+            models: llmResponse.models || [],
+            success: true 
+          });
         }
       } catch (llmError) {
         console.warn('Errore caricamento modelli LLM:', llmError);
@@ -607,67 +623,93 @@ const AIConfigurationManager: React.FC<{ open: boolean }> = ({ open }) => {
                     </Alert>
                   )}
 
-                  {/* Status Ollama */}
+                  {/* Status Multi-Provider */}
                   {llmModels && (
                     <Box sx={{ mb: 2 }}>
-                      <Typography variant="body2" component="span">
-                        <strong>Stato Ollama:</strong> {
-                          llmModels.models?.ollama_status?.connected ? 
-                          <Chip icon={<CheckCircleIcon />} label="Connesso" color="success" size="small" /> :
-                          <Chip icon={<ErrorIcon />} label="Disconnesso" color="error" size="small" />
-                        }
+                      <Typography variant="body2" component="div" sx={{ mb: 1 }}>
+                        <strong>Modelli Disponibili:</strong>
                       </Typography>
-                      {llmModels.models?.ollama_status?.models_count && (
-                        <Typography variant="body2" color="textSecondary" component="div" sx={{ mt: 0.5 }}>
-                          {llmModels.models.ollama_status.models_count} modelli installati
-                        </Typography>
+                      
+                      {/* Conta modelli OpenAI */}
+                      {llmModels.models?.filter((m: any) => m.provider === 'openai').length > 0 && (
+                        <Chip 
+                          icon={<StarIcon />} 
+                          label={`🤖 ${llmModels.models.filter((m: any) => m.provider === 'openai').length} OpenAI`} 
+                          color="primary" 
+                          size="small" 
+                          sx={{ mr: 1, mb: 0.5 }}
+                        />
                       )}
+                      
+                      {/* Conta modelli Ollama */}
+                      {llmModels.models?.filter((m: any) => m.provider === 'ollama').length > 0 && (
+                        <Chip 
+                          icon={<CheckCircleIcon />} 
+                          label={`🦙 ${llmModels.models.filter((m: any) => m.provider === 'ollama').length} Ollama`} 
+                          color="success" 
+                          size="small" 
+                          sx={{ mr: 1, mb: 0.5 }}
+                        />
+                      )}
+                      
+                      <Typography variant="body2" color="textSecondary" component="div" sx={{ mt: 0.5 }}>
+                        Totale: {llmModels.models?.length || 0} modelli configurati
+                      </Typography>
                     </Box>
                   )}
 
                   <FormControl fullWidth sx={{ mb: 2 }}>
                     <InputLabel>Seleziona Modello LLM</InputLabel>
                     <Select
-                      value={selectedLlmModel && llmModels?.models?.ollama_available?.some((model: LLMModel) => model.name === selectedLlmModel) ? selectedLlmModel : ''}
-                      onChange={(e) => setSelectedLlmModel(e.target.value)}
-                      disabled={llmModelLoading || !llmModels?.models?.ollama_status?.connected}
+                      value={selectedLlmModel || ''}
+                      onChange={(e) => {
+                        console.log('🔄 Modello selezionato:', e.target.value);
+                        setSelectedLlmModel(e.target.value);
+                      }}
+                      disabled={llmModelLoading || !llmModels?.success}
                     >
-                      {/* Modelli raccomandati */}
-                      {(llmModels?.models?.ollama_recommended || []).map((model: LLMModel) => (
+                      {/* Lista semplificata senza separatori complessi */}
+                      {llmModels?.models?.map((model: any) => (
                         <MenuItem key={model.name} value={model.name}>
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            {model.recommended && <StarIcon color="warning" fontSize="small" />}
-                            {model.name} - {model.description}
-                            <Chip label={model.category} size="small" />
+                            {model.provider === 'openai' ? (
+                              <>
+                                <StarIcon color="primary" fontSize="small" />
+                                <strong>{model.display_name}</strong>
+                                <Chip label="🤖 OpenAI" size="small" color="primary" />
+                                <Chip label={`⚡ ${model.parallel_calls_max}`} size="small" />
+                                <Chip label={`${Math.round(model.context_limit/1000)}K`} size="small" />
+                              </>
+                            ) : (
+                              <>
+                                <CheckCircleIcon color="success" fontSize="small" />
+                                <span>{model.display_name || model.name}</span>
+                                <Chip label="🦙 Ollama" size="small" color="success" />
+                                <Chip label={`${Math.round(model.context_limit/1000)}K`} size="small" />
+                              </>
+                            )}
                           </Box>
                         </MenuItem>
-                      ))}
-                      
-                      {/* Separatore se ci sono modelli installati */}
-                      {(llmModels?.models?.ollama_available || []).length > 0 && (
-                        <MenuItem disabled>
-                          <Divider />
-                          Modelli Installati
-                        </MenuItem>
-                      )}
-                      
-                      {/* Modelli effettivamente installati */}
-                      {(llmModels?.models?.ollama_available || []).map((model: LLMModel) => (
-                        <MenuItem key={model.name} value={model.name}>
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <CheckCircleIcon color="success" fontSize="small" />
-                            {model.name}
-                            <Chip label={model.size} size="small" />
-                            <Chip label={model.category} size="small" />
-                          </Box>
-                        </MenuItem>
-                      ))}
+                      )) || []}
                     </Select>
                   </FormControl>
 
-                  {selectedLlmModel && (
+                  {selectedLlmModel && llmModels?.models && (
                     <Alert severity="success" sx={{ mb: 2 }}>
-                      Modello selezionato: <strong>{selectedLlmModel}</strong>
+                      <strong>Modello selezionato:</strong> {selectedLlmModel}
+                      {(() => {
+                        const model = llmModels.models.find((m: any) => m.name === selectedLlmModel);
+                        if (model?.provider === 'openai' && model?.parallel_calls_max) {
+                          return (
+                            <Box sx={{ mt: 1 }}>
+                              🤖 OpenAI • ⚡ {model.parallel_calls_max} chiamate parallele • 📊 {(model.context_limit/1000).toFixed(0)}K token
+                            </Box>
+                          );
+                        } else if (model?.provider === 'ollama') {
+                          return <Box sx={{ mt: 1 }}>🦙 Modello locale Ollama</Box>;
+                        }
+                        return null;
+                      })()}
                     </Alert>
                   )}
 
@@ -678,7 +720,7 @@ const AIConfigurationManager: React.FC<{ open: boolean }> = ({ open }) => {
                     disabled={
                       !selectedLlmModel || 
                       llmModelLoading || 
-                      !llmModels?.models?.ollama_status?.connected ||
+                      !llmModels?.success ||
                       (configuration ? selectedLlmModel === configuration.llm_model?.current : false)
                     }
                     startIcon={llmModelLoading ? <CircularProgress size={20} /> : <SettingsIcon />}

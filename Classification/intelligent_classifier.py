@@ -71,6 +71,16 @@ try:
 except ImportError:
     Tenant = None
     TENANT_AVAILABLE = False
+
+# Import OpenAI Service per supporto GPT-4o
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Services'))
+try:
+    from openai_service import OpenAIService, sync_chat_completion
+    OPENAI_SERVICE_AVAILABLE = True
+except ImportError:
+    OpenAIService = None
+    sync_chat_completion = None
+    OPENAI_SERVICE_AVAILABLE = False
 try:
     from tokenization_utils import TokenizationManager
     TOKENIZATION_AVAILABLE = True
@@ -704,6 +714,77 @@ class IntelligentClassifier:
         
         self.logger.info(f"IntelligentClassifier inizializzato - Model: {model_name}, URL: {ollama_url}")
         self.logger.info(f"Embedding features: {self.enable_embeddings}, Validation: {self.enable_embedding_validation}")
+        
+        # 🤖 NUOVO: Inizializzazione servizio OpenAI per modelli GPT
+        self.openai_service = None
+        if OPENAI_SERVICE_AVAILABLE:
+            try:
+                # Determina se il modello corrente è OpenAI
+                self.is_openai_model = self._is_openai_model(self.model_name)
+                
+                if self.is_openai_model:
+                    # Inizializza servizio OpenAI con configurazione da config.yaml
+                    openai_config = self.config.get('llm', {}).get('openai', {})
+                    self.openai_service = OpenAIService(
+                        max_parallel_calls=openai_config.get('max_parallel_calls', 200),
+                        rate_limit_per_minute=openai_config.get('rate_limit_per_minute', 10000),
+                        base_url=openai_config.get('api_base', 'https://api.openai.com/v1')
+                    )
+                    if enable_logging:
+                        print(f"🤖 [OpenAI] Servizio inizializzato per modello: {self.model_name}")
+                        print(f"🤖 [OpenAI] Max parallel calls: {openai_config.get('max_parallel_calls', 200)}")
+                else:
+                    if enable_logging:
+                        print(f"🔧 [Ollama] Modello rilevato: {self.model_name}")
+                        
+            except Exception as e:
+                if enable_logging:
+                    print(f"⚠️ [OpenAI] Servizio non disponibile: {e}")
+                self.openai_service = None
+                self.is_openai_model = False
+        else:
+            self.is_openai_model = False
+            if enable_logging:
+                print("⚠️ [OpenAI] Service non disponibile - usando solo Ollama")
+    
+    def _is_openai_model(self, model_name: str) -> bool:
+        """
+        Determina se il modello specificato è un modello OpenAI
+        
+        Args:
+            model_name: Nome del modello da verificare
+            
+        Returns:
+            True se è un modello OpenAI, False altrimenti
+            
+        Data ultima modifica: 2025-01-31
+        """
+        if not model_name:
+            return False
+            
+        # Lista modelli OpenAI supportati
+        openai_models = ['gpt-4o', 'gpt-4', 'gpt-3.5-turbo', 'gpt-4-turbo']
+        
+        # Verifica diretta nel nome
+        if model_name in openai_models:
+            return True
+            
+        # Verifica anche nella configurazione modelli
+        try:
+            available_models = self.config.get('llm', {}).get('models', {}).get('available', [])
+            for model_config in available_models:
+                if isinstance(model_config, dict):
+                    if (model_config.get('name') == model_name and 
+                        model_config.get('provider') == 'openai'):
+                        return True
+                elif isinstance(model_config, str) and model_config == model_name:
+                    # Fallback per modelli senza provider specificato
+                    return model_name.startswith('gpt-')
+        except Exception as e:
+            print(f"⚠️ Errore verifica modello OpenAI: {e}")
+            
+        # Fallback: verifica se il nome inizia con 'gpt-'
+        return model_name.startswith('gpt-')
     
     def _setup_logger(self) -> logging.Logger:
         """Setup del logger con configurazione appropriata"""
@@ -827,10 +908,10 @@ class IntelligentClassifier:
     
     def is_available(self) -> bool:
         """
-        Verifica se il servizio Ollama è disponibile
+        Verifica se il servizio LLM è disponibile (Ollama o OpenAI)
         
         Scopo della funzione:
-        - Verificare la disponibilità del servizio Ollama
+        - Verificare la disponibilità del servizio LLM (Ollama o OpenAI)
         - Validare che il modello specifico sia disponibile
         - Implementare cache per ottimizzare le verifiche ripetute
         
@@ -838,10 +919,11 @@ class IntelligentClassifier:
         - self: istanza corrente del classificatore
         
         Valori di ritorno:
-        - bool: True se Ollama e il modello sono disponibili, False altrimenti
+        - bool: True se il servizio LLM e il modello sono disponibili, False altrimenti
         
         Tracciamento aggiornamenti:
         - 2025-09-06: Aggiunto tracing completo ENTER/EXIT/ERROR
+        - 2025-09-07: Aggiunto supporto OpenAI per modelli GPT-4o
         
         Returns:
             True se il servizio è disponibile, False altrimenti
@@ -852,6 +934,7 @@ class IntelligentClassifier:
                  called_from="external_api_check",
                  ollama_url=self.ollama_url,
                  model_name=self.model_name,
+                 is_openai_model=getattr(self, 'is_openai_model', False),
                  has_cache=bool(self._last_availability_check),
                  cache_duration=self._availability_cache_duration)
         
@@ -871,57 +954,84 @@ class IntelligentClassifier:
             return self._is_available
         
         try:
-            # Test di connessione al server Ollama
-            response = self.session.get(
-                f"{self.ollama_url}/api/tags",
-                timeout=5
-            )
-            
-            if response.status_code == 200:
-                # Verifica che il modello sia disponibile
-                tags_data = response.json()
-                available_models = [model['name'] for model in tags_data.get('models', [])]
-                
-                self._is_available = self.model_name in available_models
-                
-                # Se il modello non viene trovato, prova con :latest
-                if not self._is_available and not self.model_name.endswith(':latest'):
-                    model_with_latest = f"{self.model_name}:latest"
-                    if model_with_latest in available_models:
-                        self.logger.info(f"🔄 Modello trovato con suffisso :latest: {model_with_latest}")
-                        self.model_name = model_with_latest
-                        self._is_available = True
-                
-                if not self._is_available:
-                    self.logger.warning(f"Modello {self.model_name} non trovato. Disponibili: {available_models}")
-                else:
-                    self.logger.debug(f"Servizio Ollama disponibile con modello {self.model_name}")
+            # 🤖 NUOVO: Gestione OpenAI vs Ollama
+            if getattr(self, 'is_openai_model', False):
+                # Verifica disponibilità OpenAI
+                if hasattr(self, 'openai_service') and self.openai_service:
+                    # Per OpenAI, assumiamo sempre disponibile se il servizio è inizializzato
+                    # (la verifica reale avviene al momento della chiamata API)
+                    self._is_available = True
+                    self.logger.debug(f"🤖 Servizio OpenAI disponibile per modello {self.model_name}")
                     
-                # 🔍 TRACING EXIT - Success
-                trace_all("is_available", "EXIT", 
-                         called_from="external_api_check",
-                         result=self._is_available,
-                         source="OLLAMA_API",
-                         status_code=response.status_code,
-                         available_models_count=len(available_models),
-                         model_found=self._is_available,
-                         exit_reason="SUCCESS")
-                
+                    # 🔍 TRACING EXIT - OpenAI Success
+                    trace_all("is_available", "EXIT", 
+                             called_from="external_api_check",
+                             result=True,
+                             source="OPENAI_SERVICE",
+                             model_name=self.model_name,
+                             exit_reason="OPENAI_AVAILABLE")
+                else:
+                    self._is_available = False
+                    self.logger.warning(f"🤖 Servizio OpenAI non inizializzato per modello {self.model_name}")
+                    
+                    # 🔍 TRACING EXIT - OpenAI Fail
+                    trace_all("is_available", "EXIT", 
+                             called_from="external_api_check",
+                             result=False,
+                             source="OPENAI_SERVICE",
+                             exit_reason="OPENAI_SERVICE_MISSING")
             else:
-                self._is_available = False
-                self.logger.warning(f"Ollama non disponibile - Status: {response.status_code}")
+                # Logica originale per Ollama
+                response = self.session.get(
+                    f"{self.ollama_url}/api/tags",
+                    timeout=5
+                )
                 
-                # 🔍 TRACING EXIT - Bad Status
-                trace_all("is_available", "EXIT", 
-                         called_from="external_api_check",
-                         result=False,
-                         source="OLLAMA_API",
-                         status_code=response.status_code,
-                         exit_reason="BAD_STATUS_CODE")
+                if response.status_code == 200:
+                    # Verifica che il modello sia disponibile
+                    tags_data = response.json()
+                    available_models = [model['name'] for model in tags_data.get('models', [])]
+                    
+                    self._is_available = self.model_name in available_models
+                    
+                    # Se il modello non viene trovato, prova con :latest
+                    if not self._is_available and not self.model_name.endswith(':latest'):
+                        model_with_latest = f"{self.model_name}:latest"
+                        if model_with_latest in available_models:
+                            self.logger.info(f"🔄 Modello trovato con suffisso :latest: {model_with_latest}")
+                            self.model_name = model_with_latest
+                            self._is_available = True
+                    
+                    if not self._is_available:
+                        self.logger.warning(f"Modello {self.model_name} non trovato. Disponibili: {available_models}")
+                    else:
+                        self.logger.debug(f"Servizio Ollama disponibile con modello {self.model_name}")
+                        
+                    # 🔍 TRACING EXIT - Success
+                    trace_all("is_available", "EXIT", 
+                             called_from="external_api_check",
+                             result=self._is_available,
+                             source="OLLAMA_API",
+                             status_code=response.status_code,
+                             available_models_count=len(available_models),
+                             model_found=self._is_available,
+                             exit_reason="SUCCESS")
+                    
+                else:
+                    self._is_available = False
+                    self.logger.warning(f"Ollama non disponibile - Status: {response.status_code}")
+                    
+                    # 🔍 TRACING EXIT - Bad Status
+                    trace_all("is_available", "EXIT", 
+                             called_from="external_api_check",
+                             result=False,
+                             source="OLLAMA_API",
+                             status_code=response.status_code,
+                             exit_reason="BAD_STATUS_CODE")
         
         except Exception as e:
             self._is_available = False
-            self.logger.warning(f"Errore nella verifica disponibilità Ollama: {e}")
+            self.logger.warning(f"Errore nella verifica disponibilità LLM: {e}")
             
             # 🔍 TRACING ERROR
             trace_all("is_available", "ERROR", 
@@ -2719,6 +2829,232 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         
         return previous_row[-1]
     
+    def _call_openai_api_structured(self, conversation_text: str) -> Dict[str, Any]:
+        """
+        Chiama API OpenAI per classificazione strutturata con supporto parallelismo
+        
+        Args:
+            conversation_text: Testo della conversazione da classificare
+            
+        Returns:
+            Dict con predicted_label, confidence, motivation
+            
+        Data ultima modifica: 2025-01-31
+        """
+        trace_all(
+            'ENTER', 
+            '_call_openai_api_structured', 
+            {
+                'conversation_length': len(conversation_text),
+                'tenant_id': self.tenant_id,
+                'model_name': self.model_name,
+                'openai_service_available': self.openai_service is not None
+            }
+        )
+        
+        if not self.openai_service:
+            raise ValueError("Servizio OpenAI non inizializzato")
+        
+        try:
+            # Costruisce prompt per OpenAI con esempi del dominio
+            system_prompt = self._build_openai_system_prompt()
+            user_prompt = self._build_openai_user_prompt(conversation_text)
+            
+            # Messaggi per chat completion
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+            
+            if self.enable_logging:
+                print(f"🤖 [OpenAI] Calling {self.model_name} for classification")
+                print(f"🤖 [OpenAI] Conversation length: {len(conversation_text)} chars")
+            
+            # Chiama OpenAI con wrapper sincrono
+            response = sync_chat_completion(
+                service=self.openai_service,
+                model=self.model_name,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                response_format={"type": "json_object"}  # Forza risposta JSON
+            )
+            
+            # Estrae contenuto dalla risposta OpenAI
+            if 'choices' not in response or not response['choices']:
+                raise ValueError("Risposta OpenAI vuota o malformata")
+            
+            content = response['choices'][0]['message']['content']
+            
+            # Parse JSON dalla risposta
+            try:
+                structured_result = json.loads(content)
+            except json.JSONDecodeError as e:
+                # Fallback con parsing robusto
+                print(f"⚠️ [OpenAI] JSON malformato, tentativo parsing: {e}")
+                structured_result = self._extract_json_from_openai_response(content)
+            
+            # Valida struttura risposta
+            required_fields = ['predicted_label', 'confidence', 'motivation']
+            for field in required_fields:
+                if field not in structured_result:
+                    raise ValueError(f"Campo richiesto '{field}' mancante nella risposta OpenAI")
+            
+            # Normalizza confidence come float
+            if isinstance(structured_result['confidence'], str):
+                # Remove % sign if present
+                conf_str = structured_result['confidence'].replace('%', '')
+                structured_result['confidence'] = float(conf_str) / 100.0
+            elif isinstance(structured_result['confidence'], (int, float)):
+                conf_val = float(structured_result['confidence'])
+                # Normalize to 0-1 range if it's 0-100
+                if conf_val > 1.0:
+                    structured_result['confidence'] = conf_val / 100.0
+                else:
+                    structured_result['confidence'] = conf_val
+            
+            if self.enable_logging:
+                print(f"✅ [OpenAI] Classification successful: {structured_result['predicted_label']} (conf: {structured_result['confidence']:.3f})")
+            
+            trace_all(
+                'SUCCESS',
+                '_call_openai_api_structured',
+                {
+                    'predicted_label': structured_result['predicted_label'],
+                    'confidence': structured_result['confidence'],
+                    'tokens_used': response.get('usage', {}).get('total_tokens', 0)
+                }
+            )
+            
+            return structured_result
+            
+        except Exception as e:
+            if self.enable_logging:
+                print(f"❌ [OpenAI] Errore durante classificazione: {e}")
+            
+            trace_all(
+                'ERROR',
+                '_call_openai_api_structured',
+                {'error': str(e)}
+            )
+            
+            raise
+    
+    def _build_openai_system_prompt(self) -> str:
+        """
+        Costruisce system prompt per OpenAI con istruzioni di classificazione
+        
+        Returns:
+            Prompt di sistema per GPT
+            
+        Data ultima modifica: 2025-01-31
+        """
+        domain_labels_str = ', '.join(sorted(self.domain_labels)) if self.domain_labels else "altro"
+        
+        system_prompt = f"""Sei un assistente AI specializzato nella classificazione di conversazioni ospedaliere.
+
+Il tuo compito è classificare conversazioni tra pazienti e operatori sanitari in una delle seguenti categorie:
+{domain_labels_str}
+
+REGOLE IMPORTANTI:
+1. Rispondi SEMPRE in formato JSON valido
+2. Usa SOLO le etichette fornite nell'elenco sopra
+3. Se nessuna categoria si adatta bene, usa "altro"
+4. La confidence deve essere un numero tra 0.0 e 1.0
+5. Fornisci una breve motivazione della tua scelta
+
+FORMATO RISPOSTA RICHIESTO:
+{{"predicted_label": "etichetta_scelta", "confidence": 0.85, "motivation": "Breve spiegazione del perché hai scelto questa etichetta"}}
+
+ESEMPI:
+- Conversazione su prenotazione visita → "prenotazione_visita"
+- Richiesta informazioni generali → "info_generali"  
+- Problema tecnico o errore → "problema_tecnico"
+- Conversazione non classificabile → "altro"
+"""
+        return system_prompt
+    
+    def _build_openai_user_prompt(self, conversation_text: str) -> str:
+        """
+        Costruisce user prompt per OpenAI con la conversazione da classificare
+        
+        Args:
+            conversation_text: Testo della conversazione
+            
+        Returns:
+            Prompt utente per GPT
+            
+        Data ultima modifica: 2025-01-31
+        """
+        return f"""Classifica la seguente conversazione ospedaliera:
+
+CONVERSAZIONE:
+{conversation_text}
+
+Rispondi in formato JSON con predicted_label, confidence e motivation."""
+    
+    def _extract_json_from_openai_response(self, content: str) -> Dict[str, Any]:
+        """
+        Estrae JSON da risposta OpenAI potenzialmente malformata
+        
+        Args:
+            content: Contenuto della risposta OpenAI
+            
+        Returns:
+            Dizionario estratto dalla risposta
+            
+        Data ultima modifica: 2025-01-31
+        """
+        # Pattern per trovare JSON nella risposta
+        json_patterns = [
+            r'\{[^{}]*"predicted_label"[^{}]*\}',
+            r'\{.*?"predicted_label".*?\}',
+            r'\{.*\}'
+        ]
+        
+        for pattern in json_patterns:
+            matches = re.findall(pattern, content, re.DOTALL)
+            for match in matches:
+                try:
+                    result = json.loads(match)
+                    if 'predicted_label' in result:
+                        # Aggiungi campi mancanti con valori di default
+                        if 'confidence' not in result:
+                            result['confidence'] = 0.5
+                        if 'motivation' not in result:
+                            result['motivation'] = "Classificazione estratta da risposta parziale"
+                        return result
+                except json.JSONDecodeError:
+                    continue
+        
+        # Fallback finale: cerca informazioni con regex
+        label_match = re.search(r'"predicted_label":\s*"([^"]+)"', content)
+        confidence_match = re.search(r'"confidence":\s*([0-9.]+)', content)
+        motivation_match = re.search(r'"motivation":\s*"([^"]+)"', content)
+        
+        return {
+            'predicted_label': label_match.group(1) if label_match else 'altro',
+            'confidence': float(confidence_match.group(1)) if confidence_match else 0.5,
+            'motivation': motivation_match.group(1) if motivation_match else 'Estratto da risposta malformata'
+        }
+    
+    def _call_llm_api_structured(self, conversation_text: str) -> Dict[str, Any]:
+        """
+        Metodo unificato per chiamate strutturate LLM (delega a Ollama o OpenAI)
+        
+        Args:
+            conversation_text: Testo della conversazione da classificare
+            
+        Returns:
+            Dict con predicted_label, confidence, motivation
+            
+        Data ultima modifica: 2025-01-31
+        """
+        if self.is_openai_model and self.openai_service:
+            return self._call_openai_api_structured(conversation_text)
+        else:
+            return self._call_ollama_api_structured(conversation_text)
+    
     def _call_ollama_api_structured(self, conversation_text: str) -> Dict[str, Any]:
         """
         IMPLEMENTAZIONE DEFINITIVA: Usa Function Tools di Ollama/Mistral
@@ -3277,14 +3613,57 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                     self.logger.debug(f"Errore parsing YAML-like: {e}")
                     pass
                 
-                # Fallback estremo
+                # 🔧 FALLBACK INTELLIGENTE: Estrae classificazione nascosta nel testo
                 if self.enable_logging:
-                    print(f"🔥 DEBUG PARSING - FALLBACK ESTREMO attivato")
-                fallback_result = {
-                    "predicted_label": "altro",
-                    "confidence": 0.2,
-                    "motivation": f"Risposta non strutturata: {content[:100]}"
-                }
+                    print(f"🔥 DEBUG PARSING - FALLBACK INTELLIGENTE attivato")
+                
+                # Cerca pattern di classificazione nascosta nel content
+                import re
+                
+                # Pattern 1: Predicted_label: "LABEL"
+                label_pattern = re.search(r'Predicted_label:\s*["\']([^"\']+)["\']', content, re.IGNORECASE)
+                # Pattern 2: "predicted_label": "LABEL" 
+                json_pattern = re.search(r'"predicted_label":\s*["\']([^"\']+)["\']', content, re.IGNORECASE)
+                
+                extracted_label = None
+                extracted_confidence = 0.2
+                
+                if label_pattern:
+                    extracted_label = label_pattern.group(1)
+                    if self.enable_logging:
+                        print(f"🔧 FALLBACK - Label estratta da pattern 1: {extracted_label}")
+                elif json_pattern:
+                    extracted_label = json_pattern.group(1)
+                    if self.enable_logging:
+                        print(f"🔧 FALLBACK - Label estratta da pattern 2: {extracted_label}")
+                
+                # Cerca confidence se disponibile
+                conf_pattern = re.search(r'[Cc]onfidence:\s*([0-9.]+)', content)
+                if conf_pattern:
+                    try:
+                        extracted_confidence = float(conf_pattern.group(1))
+                        if self.enable_logging:
+                            print(f"🔧 FALLBACK - Confidence estratta: {extracted_confidence}")
+                    except ValueError:
+                        pass
+                
+                # Valida che la label estratta sia nelle domain_labels
+                if extracted_label and extracted_label.upper() in [dl.upper() for dl in self.domain_labels]:
+                    if self.enable_logging:
+                        print(f"🔧 FALLBACK - Label validata: {extracted_label}")
+                    fallback_result = {
+                        "predicted_label": extracted_label,
+                        "confidence": extracted_confidence,
+                        "motivation": f"Estratta da risposta non strutturata: {extracted_label}"
+                    }
+                else:
+                    if self.enable_logging:
+                        print(f"🔥 DEBUG PARSING - FALLBACK ESTREMO attivato (nessuna label valida estratta)")
+                    fallback_result = {
+                        "predicted_label": "altro",
+                        "confidence": 0.2,
+                        "motivation": f"Risposta non strutturata: {content[:100]}"
+                    }
                 trace_all(
                     'EXIT', 
                     '_call_ollama_api_structured', 
@@ -3593,7 +3972,7 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             # �🚀 NUOVO: Usa Structured Outputs invece del parsing manuale
             raw_response = None  # 🔧 FIX: Inizializza raw_response per evitare errore
             try:
-                structured_result = self._call_ollama_api_structured(conversation_text)
+                structured_result = self._call_llm_api_structured(conversation_text)
                 
                 # 🐛 DEBUG: Stampa in console la risposta come richiesto
                 print(f"🔍 STRUCTURED RESPONSE DEBUG: {structured_result}")

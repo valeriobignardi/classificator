@@ -34,10 +34,14 @@ const API_BASE_URL = process.env.NODE_ENV === 'development'
 export interface LLMModel {
   name: string;
   display_name: string;
+  provider?: string;  // 'ollama' | 'openai'
   max_input_tokens: number;
   max_output_tokens: number;
   context_limit: number;
   requires_raw_mode: boolean;
+  parallel_calls_max?: number;
+  rate_limit_per_minute?: number;
+  rate_limit_per_day?: number;
   default_generation?: {
     max_tokens: number;
     temperature: number;

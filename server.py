@@ -1711,9 +1711,9 @@ def supervised_training(client_name: str):
                 
             else:
                 # Fallback a parametri default
-                confidence_threshold = 0.7
+                confidence_threshold = 0.95
                 disagreement_threshold = 0.3
-                max_sessions = 500
+                max_sessions = 300
                 
                 print(f"⚠️ Nessuna soglia trovata nel database per tenant {tenant_id}, uso defaults")
                 
@@ -1723,10 +1723,10 @@ def supervised_training(client_name: str):
         except Exception as e:
             print(f"❌ Errore caricamento soglie dal database: {e}")
             # Fallback a parametri default
-            confidence_threshold = 0.7
+            confidence_threshold = 0.95
             disagreement_threshold = 0.3
-            max_sessions = 500
-        
+            max_sessions = 300
+
         
         # Ottieni la pipeline per questo cliente
         pipeline = classification_service.get_pipeline(client_name) # 

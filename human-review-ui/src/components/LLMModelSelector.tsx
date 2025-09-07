@@ -174,8 +174,10 @@ const LLMModelSelector: React.FC<LLMModelSelectorProps> = ({
           <option value="">-- Seleziona Modello --</option>
           {models.map((model) => (
             <option key={model.name} value={model.name}>
-              {model.display_name} 
+              {model.display_name}
+              {model.provider === 'openai' ? ' 🤖 (OpenAI)' : ''}
               {model.requires_raw_mode ? ' (Raw Mode)' : ''}
+              {model.parallel_calls_max ? ` [Max ${model.parallel_calls_max} calls]` : ''}
             </option>
           ))}
         </select>
@@ -188,6 +190,13 @@ const LLMModelSelector: React.FC<LLMModelSelectorProps> = ({
           </div>
           
           <div className="info-grid">
+            <div className="info-item">
+              <span className="label">Provider:</span>
+              <span className={`value provider-${selectedModel.provider || 'ollama'}`}>
+                {selectedModel.provider === 'openai' ? '🤖 OpenAI' : '🦙 Ollama'}
+              </span>
+            </div>
+            
             <div className="info-item">
               <span className="label">Context Limit:</span>
               <span className="value">{formatContextLimit(selectedModel.context_limit)}</span>
@@ -202,6 +211,22 @@ const LLMModelSelector: React.FC<LLMModelSelectorProps> = ({
               <span className="label">Max Output Tokens:</span>
               <span className="value">{selectedModel.max_output_tokens.toLocaleString()}</span>
             </div>
+            
+            {selectedModel.provider === 'openai' && selectedModel.parallel_calls_max && (
+              <div className="info-item">
+                <span className="label">Max Parallel Calls:</span>
+                <span className="value parallel-calls">⚡ {selectedModel.parallel_calls_max}</span>
+              </div>
+            )}
+            
+            {selectedModel.provider === 'openai' && selectedModel.rate_limit_per_minute && (
+              <div className="info-item">
+                <span className="label">Rate Limit:</span>
+                <span className="value rate-limit">
+                  📊 {selectedModel.rate_limit_per_minute.toLocaleString()}/min
+                </span>
+              </div>
+            )}
             
             <div className="info-item">
               <span className="label">Raw Mode:</span>
@@ -314,6 +339,26 @@ const LLMModelSelector: React.FC<LLMModelSelectorProps> = ({
 
         .llm-model-selector .value.optional {
           color: #28a745;
+        }
+
+        .llm-model-selector .value.provider-openai {
+          color: #0066cc;
+          font-weight: 600;
+        }
+
+        .llm-model-selector .value.provider-ollama {
+          color: #ff6b35;
+          font-weight: 600;
+        }
+
+        .llm-model-selector .value.parallel-calls {
+          color: #17a2b8;
+          font-weight: 600;
+        }
+
+        .llm-model-selector .value.rate-limit {
+          color: #6610f2;
+          font-weight: 600;
         }
 
         .llm-model-selector .default-params h5 {

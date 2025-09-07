@@ -2685,7 +2685,10 @@ class EndToEndPipeline:
                                    batch_size: int = 32,
                                    use_ensemble: bool = True,
                                    optimize_clusters: bool = True,
-                                   force_review: bool = False) -> Dict[str, Any]:
+                                   force_review: bool = False,
+                                   embeddings: Optional[np.ndarray] = None,
+                                   cluster_labels: Optional[np.ndarray] = None,
+                                   cluster_info: Optional[Dict] = None) -> Dict[str, Any]:
         """
         Classifica le sessioni usando l'ensemble classifier e salva i risultati nel database MongoDB
         
@@ -2700,7 +2703,11 @@ class EndToEndPipeline:
             sessioni: Sessioni da classificare
             batch_size: Dimensione del batch per la classificazione
             use_ensemble: Se True, usa l'ensemble classifier (SEMPRE True in produzione)
-            optimize_clusters: Se True, usa clustering ottimizzato (SEMPRE True in produzione)  
+            optimize_clusters: Se True, usa clustering ottimizzato (SEMPRE True in produzione)
+            force_review: Se True, forza riclassificazione completa
+            embeddings: Embeddings precomputati (opzionale, evita duplicazione clustering)
+            cluster_labels: Labels cluster precomputati (opzionale, evita duplicazione clustering)
+            cluster_info: Info cluster precomputate (opzionale, evita duplicazione clustering)  
             force_review: Se True, cancella MongoDB e riprocessa tutto da capo
             
         Returns:
@@ -2857,7 +2864,10 @@ class EndToEndPipeline:
             print(f"   📊 Input session_ids: {len(session_ids)}")
             print(f"   📊 Input session_texts: {len(session_texts)}")
             
-            predictions = self._classifica_ottimizzata_cluster(sessioni, session_ids, session_texts, batch_size)
+            predictions = self._classifica_ottimizzata_cluster(
+                sessioni, session_ids, session_texts, batch_size,
+                embeddings=embeddings, cluster_labels=cluster_labels, cluster_info=cluster_info
+            )
             
             # 🚨 DEBUG SUPER CRITICO: Verifica risultato
             print(f"🚨 [SUPER DEBUG] _classifica_ottimizzata_cluster COMPLETATA!")
@@ -3949,7 +3959,7 @@ class EndToEndPipeline:
         debug_logger = logging.getLogger('training_debug')
         debug_logger.setLevel(logging.DEBUG)
         if not debug_logger.handlers:
-            fh = logging.FileHandler('/home/ubuntu/classificatore/ext.log')
+            fh = logging.FileHandler('/home/ubuntu/classificatore/logging.log') # Percorso fisso per debug avanzato
             fh.setLevel(logging.DEBUG)
             formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
             fh.setFormatter(formatter)
@@ -3983,8 +3993,8 @@ class EndToEndPipeline:
             
             if training_params:
                 # Usa parametri dal database
-                human_limit = training_params.get('max_total_sessions', 500)
-                confidence_threshold_priority = training_params.get('confidence_threshold_priority', 0.7)
+                human_limit = training_params.get('max_total_sessions', max_human_review_sessions)
+                confidence_threshold_priority = training_params.get('confidence_threshold_priority', confidence_threshold)
                 print(f"📊 [DB MYSQL] max_total_sessions: {human_limit}")
                 print(f"📊 [DB MYSQL] confidence_threshold_priority: {confidence_threshold_priority}")
             else:
@@ -3992,11 +4002,11 @@ class EndToEndPipeline:
                 with open(self.config_path, 'r', encoding='utf-8') as file:
                     config = yaml.safe_load(file)
                 
-                supervised_config = config.get('supervised_training', {})
-                human_review_config = supervised_config.get('human_review', {})
+                supervised_config = config.get('supervised_training', {}) # Sezione supervisione avanzata get config 
+                human_review_config = supervised_config.get('human_review', {}) # Sezione review umana get config 
                 
-                human_limit = human_review_config.get('max_total_sessions', 500)
-                confidence_threshold_priority = human_review_config.get('confidence_threshold_priority', 0.7)
+                human_limit = human_review_config.get('max_total_sessions', max_human_review_sessions)
+                confidence_threshold_priority = human_review_config.get('confidence_threshold_priority',confidence_threshold_priority)
                 print(f"📊 [CONFIG YAML] max_total_sessions: {human_limit}")
                 print(f"📊 [CONFIG YAML] confidence_threshold_priority: {confidence_threshold_priority}")
             
@@ -4005,7 +4015,6 @@ class EndToEndPipeline:
                 human_limit = max_human_review_sessions
             elif limit is not None:
                 human_limit = limit  # Retrocompatibilità
-                print(f"⚠️ ATTENZIONE: Parametro 'limit' è deprecato. Ora indica max sessioni per review umana.")
                 
         except Exception as e:
             print(f"⚠️ Errore lettura config: {e}")
@@ -4021,8 +4030,6 @@ class EndToEndPipeline:
         print(f"🚨 [DEBUG] esegui_training_interattivo() CHIAMATA CONFERMATA")
         print(f"🚨 [DEBUG] Funzione: esegui_training_interattivo")
         print(f"🚨 [DEBUG] Parametri ricevuti:")
-        print(f"   - giorni_indietro: {giorni_indietro}")
-        print(f"   - limit: {limit}")
         print(f"   - max_human_review_sessions: {max_human_review_sessions}")
         print(f"   - confidence_threshold: {confidence_threshold}")
         print(f"   - force_review: {force_review}")
@@ -4057,12 +4064,17 @@ class EndToEndPipeline:
             debug_logger.info(f"📊 AVVIO FASE 2 - Clustering completo")
             embeddings, cluster_labels, representatives, suggested_labels = self.esegui_clustering(sessioni)
             
+            # Genera cluster_info dai cluster_labels per evitare duplicazione
+            session_texts = [sessioni[sid]['testo_completo'] for sid in sessioni.keys()]
+            cluster_info = self._generate_cluster_info_from_labels(cluster_labels, session_texts)
+            
             n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
             n_outliers = sum(1 for label in cluster_labels if label == -1)
             print(f"✅ Clustering completo: {n_clusters} cluster, {n_outliers} outlier")
             print(f"🚨 [DEBUG] FASE 2 COMPLETATA - Clustering")
             print(f"🚨 [DEBUG] Cluster trovati: {n_clusters}, Outlier: {n_outliers}")
             print(f"🚨 [DEBUG] Rappresentanti totali: {len(representatives)}")
+            print(f"🚨 [DEBUG] Cluster info generato: {len(cluster_info)} cluster")
             
             debug_logger.info(f"📊 FASE 2 COMPLETATA - Clustering")
             debug_logger.info(f"   Cluster trovati: {n_clusters}, Outlier: {n_outliers}")
@@ -4077,6 +4089,7 @@ class EndToEndPipeline:
                 force_review=force_review,
                 disagreement_threshold=disagreement_threshold
             )
+            trace_all("I rappresentanti selezionati sono: ", "DEBUG", selected_keys=list(limited_representatives.keys()))
             
             print(f"✅ Selezione completata:")
             print(f"  📋 Cluster originali: {len(representatives)}")
@@ -4104,7 +4117,10 @@ class EndToEndPipeline:
                 batch_size=32,
                 use_ensemble=True,
                 optimize_clusters=True,
-                force_review=False
+                force_review=False,
+                embeddings=embeddings,
+                cluster_labels=cluster_labels,
+                cluster_info=cluster_info
             )
             
             print(f"✅ Classificazione ensemble completa:")
@@ -4238,6 +4254,7 @@ class EndToEndPipeline:
                 min_cluster_size = 2  # Fisso, non configurabile
             else:
                 # Fallback a config.yaml
+                print (f"⚠️ Parametri selezione rappresentanti non trovati nel DB, leggo da config.yaml")
                 with open(self.config_path, 'r', encoding='utf-8') as file:
                     config = yaml.safe_load(file)
                 
@@ -4844,10 +4861,13 @@ class EndToEndPipeline:
                                       sessioni: Dict[str, Dict], 
                                       session_ids: List[str],
                                       session_texts: List[str],
+                                      embeddings: Optional[np.ndarray] = None,
+                                      cluster_labels: Optional[np.ndarray] = None,
+                                      cluster_info: Optional[Dict] = None,
                                       batch_size: int = 32) -> List[Dict[str, Any]]:
         """
         Classificazione ottimizzata basata su cluster:
-        1. Re-esegue clustering delle sessioni 
+        1. USA clustering già fatto (parametri passati) 
         2. Seleziona rappresentanti per ogni cluster
         3. Classifica SOLO i rappresentanti con ML+LLM 
         4. Propaga automaticamente etichette a tutte le sessioni del cluster
@@ -4857,6 +4877,9 @@ class EndToEndPipeline:
             sessioni: Dizionario delle sessioni {session_id: session_data}
             session_ids: Lista degli ID sessioni in ordine
             session_texts: Lista dei testi corrispondenti
+            embeddings: Embeddings già calcolati (RICHIESTO)
+            cluster_labels: Labels clustering già calcolati (RICHIESTO)
+            cluster_info: Info cluster già calcolate (RICHIESTO)
             batch_size: Dimensione batch per ottimizzazione
             
         Returns:
@@ -4881,70 +4904,19 @@ class EndToEndPipeline:
         
         print(f"🎯 CLASSIFICAZIONE OTTIMIZZATA PER CLUSTER")
         print(f"   📊 Sessioni totali: {len(sessioni)}")
+        print(f"   🧩 Clustering già fatto: {embeddings is not None and cluster_labels is not None}")
+        
+        # Valida parametri obbligatori
+        if embeddings is None or cluster_labels is None or cluster_info is None:
+            raise ValueError("_classifica_ottimizzata_cluster richiede embeddings, cluster_labels e cluster_info")
+        
+        print(f"✅ USO CLUSTERING ESISTENTE (evita duplicazione)")
+        print(f"   📊 Embeddings shape: {embeddings.shape}")
+        print(f"   🏷️  Labels count: {len(cluster_labels)}")
+        print(f"   🧩 Cluster info: {len(cluster_info)} cluster")
         
         try:
-            # STEP 1: Re-clustering delle sessioni correnti (riutilizzando BERTopic esistente)
-            print(f"🔄 STEP 1: Re-clustering sessioni per classificazione ottimizzata...")
-            
-            # ✅ OTTIMIZZAZIONE: Riutilizza BERTopic provider dall'ensemble invece di riaddestramento
-            bertopic_provider = getattr(self.ensemble_classifier, 'bertopic_provider', None)
-            if bertopic_provider is not None:
-                print(f"   ✅ Riutilizzo BERTopic provider esistente dall'ensemble")
-                # Genera solo embedding e clustering semplice senza riaddestramento BERTopic
-                testi = [sessioni[sid]['testo_completo'] for sid in session_ids]
-                embeddings = self._get_embedder().encode(testi, session_ids=session_ids)
-                
-                # 🐛 DEBUG CRITICO: Clustering semplice con HDBSCAN sui puri embeddings
-                print(f"🐛 [DEBUG CRITICO] Chiamata clusterer.fit_predict con {embeddings.shape} embeddings")
-                print(f"🐛 [DEBUG CRITICO] Clusterer type: {type(self.clusterer)}")
-                try:
-                    cluster_labels = self.clusterer.fit_predict(embeddings)
-                    print(f"🐛 [DEBUG CRITICO] SUCCESS - fit_predict completato, labels shape: {cluster_labels.shape}")
-                except Exception as cluster_error:
-                    print(f"🚨 [DEBUG CRITICO] ERRORE in clusterer.fit_predict: {cluster_error}")
-                    print(f"🚨 [DEBUG CRITICO] Tipo errore: {type(cluster_error)}")
-                    import traceback
-                    print(f"🚨 [DEBUG CRITICO] Stack trace:")
-                    traceback.print_exc()
-                    raise  # Rilancia l'errore per attivare il fallback
-                
-                cluster_info = self._generate_cluster_info_from_labels(cluster_labels, session_texts)
-                
-                # 🆕 SALVA EMBEDDING PROCESSATI (post-UMAP se applicato) per salvataggio MongoDB
-                # Ora otteniamo gli embedding finali dal clusterer invece degli originali
-                final_embeddings = getattr(self.clusterer, 'final_embeddings', embeddings)
-                if hasattr(self.clusterer, 'final_embeddings') and self.clusterer.final_embeddings is not None:
-                    print(f"✅ [DEBUG EMBED] Usando embedding processati dal clusterer: {final_embeddings.shape}")
-                    if hasattr(self.clusterer, 'umap_info') and self.clusterer.umap_info.get('applied'):
-                        print(f"   📏 UMAP applicato: {self.clusterer.umap_info['input_shape']} → {self.clusterer.umap_info['output_shape']}")
-                else:
-                    print(f"⚠️ [DEBUG EMBED] Fallback a embedding originali: {final_embeddings.shape}")
-                
-                # Salva dati per visualizzazione statistiche finali
-                self._last_embeddings = final_embeddings  # 🆕 Usa embedding processati
-                self._last_cluster_labels = cluster_labels
-                self._last_cluster_info = cluster_info
-                
-            else:
-                print(f"   ⚠️ Nessun BERTopic provider nell'ensemble, fallback a clustering completo")
-                embeddings, cluster_labels, representatives, suggested_labels = self.esegui_clustering(sessioni)
-                cluster_info = self._generate_cluster_info_from_labels(cluster_labels, session_texts)
-                
-                # 🆕 SALVA EMBEDDING PROCESSATI anche per il clustering completo
-                # In esegui_clustering(), gli embeddings sono già processati dal clusterer
-                final_embeddings = getattr(self.clusterer, 'final_embeddings', embeddings)
-                if hasattr(self.clusterer, 'final_embeddings') and self.clusterer.final_embeddings is not None:
-                    print(f"✅ [DEBUG EMBED] Clustering completo - usando embedding processati: {final_embeddings.shape}")
-                    if hasattr(self.clusterer, 'umap_info') and self.clusterer.umap_info.get('applied'):
-                        print(f"   📏 UMAP applicato: {self.clusterer.umap_info['input_shape']} → {self.clusterer.umap_info['output_shape']}")
-                else:
-                    print(f"⚠️ [DEBUG EMBED] Clustering completo - fallback a embedding originali: {final_embeddings.shape}")
-                
-                # Salva dati per visualizzazione statistiche finali
-                self._last_embeddings = final_embeddings  # 🆕 Usa embedding processati
-                self._last_cluster_labels = cluster_labels
-                self._last_cluster_info = cluster_info
-                
+            # Usa clustering fornito come parametri
             n_clusters = len([l for l in cluster_labels if l != -1])
             n_outliers = sum(1 for l in cluster_labels if l == -1)
             

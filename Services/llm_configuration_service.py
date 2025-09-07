@@ -146,12 +146,26 @@ class LLMConfigurationService:
             models_info = []
             for model in available_models:
                 if isinstance(model, dict):
-                    models_info.append(model)
+                    # Modello con configurazione completa
+                    model_info = {
+                        'name': model.get('name'),
+                        'display_name': model.get('display_name', model.get('name')),
+                        'provider': model.get('provider', 'ollama'),
+                        'max_input_tokens': model.get('max_input_tokens', 8000),
+                        'max_output_tokens': model.get('max_output_tokens', 4000),
+                        'context_limit': model.get('context_limit', 8192),
+                        'requires_raw_mode': model.get('requires_raw_mode', False),
+                        'parallel_calls_max': model.get('parallel_calls_max'),
+                        'rate_limit_per_minute': model.get('rate_limit_per_minute'),
+                        'rate_limit_per_day': model.get('rate_limit_per_day')
+                    }
+                    models_info.append(model_info)
                 else:
-                    # Backward compatibility
+                    # Backward compatibility - modello come stringa
                     models_info.append({
                         'name': model,
                         'display_name': model,
+                        'provider': 'ollama',
                         'max_input_tokens': 8000,
                         'max_output_tokens': 4000,
                         'context_limit': 8192,

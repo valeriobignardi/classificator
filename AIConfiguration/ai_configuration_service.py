@@ -614,7 +614,8 @@ class AIConfigurationService:
     
     def set_llm_model(self, tenant_id: str, model_name: str) -> Dict[str, Any]:
         """
-        Imposta modello LLM per tenant
+        Imposta modello LLM per tenant (supporta Ollama + OpenAI)
+        AGGIORNATO: Usa LLMConfigurationService per supporto multi-provider
         
         Args:
             tenant_id: ID del tenant
@@ -624,27 +625,55 @@ class AIConfigurationService:
             Risultato dell'operazione
         """
         try:
-            # Verifica modello disponibile
-            available_models = self.get_available_llm_models()
+            # NUOVA LOGICA: Usa LLMConfigurationService per supporto multi-provider
+            from Services.llm_configuration_service import LLMConfigurationService
+            llm_service = LLMConfigurationService()
             
-            if not available_models['success']:
-                return available_models
+            # Ottieni modelli disponibili (Ollama + OpenAI)
+            available_models = llm_service.get_available_models(tenant_id)
             
-            # Verifica che il modello sia installato
-            installed_models = [m['name'] for m in available_models['models']['ollama_available']]
-            
-            if model_name not in installed_models:
+            if not available_models:
                 return {
                     'success': False,
-                    'error': f'Modello {model_name} non installato in Ollama',
-                    'available_models': installed_models,
-                    'suggestion': f'Esegui: ollama pull {model_name}'
+                    'error': 'Nessun modello LLM disponibile',
+                    'suggestion': 'Verifica configurazione Ollama e OpenAI'
                 }
             
-            # Test modello prima di impostare
-            test_result = self._test_llm_model(model_name)
-            if not test_result['success']:
-                return test_result
+            # Verifica che il modello sia disponibile
+            model_names = [m.get('name') for m in available_models]
+            
+            if model_name not in model_names:
+                return {
+                    'success': False,
+                    'error': f'Modello {model_name} non disponibile',
+                    'available_models': model_names,
+                    'suggestion': f'Modelli disponibili: {", ".join(model_names[:3])}...'
+                }
+            
+            # Trova il modello per determinare il provider
+            selected_model = next((m for m in available_models if m.get('name') == model_name), None)
+            if not selected_model:
+                return {
+                    'success': False,
+                    'error': f'Errore recupero informazioni modello {model_name}'
+                }
+            
+            provider = selected_model.get('provider', 'ollama')
+            
+            # Test modello solo per Ollama (OpenAI viene testato durante l'uso)
+            if provider == 'ollama':
+                test_result = self._test_llm_model(model_name)
+                if not test_result['success']:
+                    return test_result
+            else:
+                # Per OpenAI, crea un test result di successo
+                test_result = {
+                    'success': True,
+                    'message': f'Modello OpenAI {model_name} configurato',
+                    'provider': 'openai',
+                    'parallel_calls_max': selected_model.get('parallel_calls_max'),
+                    'rate_limit_per_minute': selected_model.get('rate_limit_per_minute')
+                }
             
             # Salva configurazione tenant
             if tenant_id not in self.tenant_configs:

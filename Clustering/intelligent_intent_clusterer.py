@@ -408,6 +408,36 @@ class IntelligentIntentClusterer:
         """
         print(f"🧠 Avvio clustering intelligente OTTIMIZZATO di {len(texts)} conversazioni...")
         
+        # 🆕 Setup debug logging per suggested_labels
+        debug_logger = logging.getLogger('suggested_labels_debug')
+        debug_logger.setLevel(logging.DEBUG)
+        
+        # Rimuovi handler esistenti per evitare duplicazioni
+        for handler in debug_logger.handlers[:]:
+            debug_logger.removeHandler(handler)
+        
+        # Setup file handler per suggested_labels.log
+        log_file_path = '/home/ubuntu/classificatore/suggested_labels.log'
+        file_handler = logging.FileHandler(log_file_path, mode='a', encoding='utf-8')
+        file_handler.setLevel(logging.DEBUG)
+        
+        # Setup console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.DEBUG)
+        
+        # Formato del log
+        formatter = logging.Formatter('%(asctime)s - %(message)s')
+        file_handler.setFormatter(formatter)
+        console_handler.setFormatter(formatter)
+        
+        debug_logger.addHandler(file_handler)
+        debug_logger.addHandler(console_handler)
+        
+        debug_logger.info("=" * 80)
+        debug_logger.info("🚀 INIZIO CLUSTERING INTELLIGENTE - ANALISI RAPPRESENTANTI E OUTLIER")
+        debug_logger.info(f"📊 Dataset: {len(texts)} conversazioni")
+        debug_logger.info("=" * 80)
+        
         # FASE 1: Clustering semantico con HDBSCAN (parametri più restrittivi)
         print(f"📊 Fase 1: Clustering semantico con HDBSCAN...")
         
@@ -479,8 +509,26 @@ class IntelligentIntentClusterer:
         
         # FASE 3: Analisi LLM SOLO sui rappresentanti (molto più veloce!)
         print(f"🤖 Fase 3: Analisi LLM di {len(representative_texts)} rappresentanti...")
+        debug_logger.info(f"🤖 FASE 3: Analisi LLM di {len(representative_texts)} rappresentanti")
+        
         if representative_texts:
             llm_results = self.extract_intents_with_llm(representative_texts)
+            
+            # 🆕 DEBUG: Log dettagliato per ogni rappresentante
+            debug_logger.info("📋 RISULTATI CLASSIFICAZIONE RAPPRESENTANTI:")
+            debug_logger.info("-" * 60)
+            
+            # Mappa risultati ai cluster per debug
+            result_idx = 0
+            for cluster_id, rep_info in cluster_to_rep_idx.items():
+                debug_logger.info(f"🏷️  CLUSTER {cluster_id}:")
+                cluster_results = llm_results[rep_info['start']:rep_info['start'] + rep_info['count']]
+                
+                for i, (rep_idx, result) in enumerate(zip(rep_info['indices'], cluster_results)):
+                    debug_logger.info(f"Caso: {rep_idx} - Rappresentante del Cluster n° {cluster_id}: {result['intent']}")
+                    print(f"   🔍 Caso {rep_idx} (Cluster {cluster_id}): '{result['intent']}' (conf: {result['confidence']:.3f})")
+                    result_idx += 1
+                debug_logger.info("")
         else:
             llm_results = []
         
@@ -515,27 +563,43 @@ class IntelligentIntentClusterer:
                       f"conf: {consensus_result['confidence']:.3f}, "
                       f"consenso: {consensus_result['stats']['agreement_ratio']:.2f})")
         
-        # FASE 5: Gestione outliers (analisi individuale per alta precisione)
+        # FASE 5: Gestione outliers come rappresentanti individuali
         outlier_indices = [i for i, label in enumerate(cluster_labels) if label == -1]
         if outlier_indices:
-            print(f"🔍 Fase 5: Analisi individuale di {len(outlier_indices)} outliers...")
+            print(f"🔍 Fase 5: Analisi individuale di {len(outlier_indices)} outliers come rappresentanti...")
+            debug_logger.info(f"🔍 FASE 5: Analisi individuale di {len(outlier_indices)} outliers")
+            debug_logger.info("📋 RISULTATI CLASSIFICAZIONE OUTLIER:")
+            debug_logger.info("-" * 60)
             
-            # Analizza outliers individualmente (necessario per alta precisione)
+            # 🆕 MODIFICA: Tratta ogni outlier come rappresentante individuale
             outlier_texts = [texts[i] for i in outlier_indices]
             outlier_llm_results = self.extract_intents_with_llm(outlier_texts)
             
-            # Raggruppa outliers con intent simili e alta confidenza
+            # Debug dettagliato per ogni outlier
+            for outlier_idx, llm_result in zip(outlier_indices, outlier_llm_results):
+                debug_logger.info(f"Caso: {outlier_idx} - Outlier: {llm_result['intent']}")
+                print(f"   🔍 Caso {outlier_idx} (Outlier): '{llm_result['intent']}' (conf: {llm_result['confidence']:.3f})")
+            
+            debug_logger.info("")
+            
+            # 🆕 MODIFICA: Raggruppa outliers per intent solo se hanno alta confidenza
             outlier_groups = defaultdict(list)
-            for i, (outlier_idx, llm_result) in enumerate(zip(outlier_indices, outlier_llm_results)):
+            for outlier_idx, llm_result in zip(outlier_indices, outlier_llm_results):
                 intent = llm_result['intent']
                 confidence = llm_result['confidence']
                 
                 # Solo outliers con alta confidenza vengono raggruppati
-                if confidence >= 0.8:  # Soglia alta per outliers
+                if confidence >= 0.7:  # Soglia ridotta da 0.8 a 0.7
                     outlier_groups[intent].append((outlier_idx, llm_result))
+                else:
+                    # Outlier a bassa confidenza restano outlier
+                    print(f"   ⚠️ Outlier {outlier_idx} a bassa confidenza ({confidence:.3f}) resta classificato come outlier")
             
-            # Crea nuovi cluster per outliers raggruppati
+            # Crea nuovi cluster per outliers raggruppati con stesso intent
             next_cluster_id = max(cluster_labels) + 1 if len(cluster_labels) > 0 else 0
+            
+            debug_logger.info("🆕 RAGGRUPPAMENTO OUTLIER PER INTENT:")
+            debug_logger.info("-" * 60)
             
             for intent, outlier_data in outlier_groups.items():
                 if len(outlier_data) >= 2:  # Minimo 2 outliers per formare un cluster
@@ -554,11 +618,41 @@ class IntelligentIntentClusterer:
                         'intent_string': intent,
                         'classification_method': 'llm_outlier_grouped',
                         'confidence': avg_confidence,
-                        'reasoning': f'Outliers raggruppati per intent {intent}'
+                        'reasoning': f'Outliers raggruppati per intent {intent}',
+                        'outlier_representatives': [data[1] for data in outlier_data]  # 🆕 Salva tutti i rappresentanti outlier
                     }
                     
+                    debug_logger.info(f"🆕 Nuovo cluster {next_cluster_id} da outlier: '{intent}' ({len(indices)} casi, conf: {avg_confidence:.3f})")
                     print(f"   🆕 Nuovo cluster {next_cluster_id}: '{intent}' ({len(indices)} ex-outliers, conf: {avg_confidence:.3f})")
+                    
                     next_cluster_id += 1
+                else:
+                    # Outlier singolo con alta confidenza: mantieni come outlier ma salva classificazione
+                    for outlier_idx, llm_result in outlier_data:
+                        debug_logger.info(f"🔍 Outlier singolo {outlier_idx}: '{intent}' (conf: {llm_result['confidence']:.3f}) - mantiene status outlier")
+            
+            # 🆕 SALVA INFO OUTLIER: Crea cluster_info per outlier rimasti
+            remaining_outliers = [i for i, label in enumerate(cluster_labels) if label == -1]
+            if remaining_outliers:
+                # Trova le loro classificazioni
+                outlier_classifications = {}
+                for outlier_idx, llm_result in zip(outlier_indices, outlier_llm_results):
+                    if outlier_idx in remaining_outliers:
+                        outlier_classifications[outlier_idx] = llm_result
+                
+                cluster_info[-1] = {
+                    'intent': 'outlier_mixed',
+                    'sub_cluster': 0,
+                    'size': len(remaining_outliers),
+                    'indices': remaining_outliers,
+                    'intent_string': 'Outlier (Misti)',
+                    'classification_method': 'llm_outlier_individual',
+                    'confidence': 0.5,
+                    'reasoning': 'Outliers individuali a bassa confidenza o intent unici',
+                    'individual_classifications': outlier_classifications  # 🆕 Salva classificazioni individuali
+                }
+                
+                debug_logger.info(f"🔍 Outlier rimanenti: {len(remaining_outliers)} casi mantengono status outlier")
         
         # Statistiche finali
         final_n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
@@ -578,6 +672,21 @@ class IntelligentIntentClusterer:
         print(f"   🤖 Chiamate LLM totali: {total_llm_calls} (vs {len(texts)} dell'approccio naive)")
         print(f"   ⚡ Efficienza: {((len(texts) - total_llm_calls) / len(texts) * 100):.1f}% di riduzione chiamate LLM")
         print(f"   🎯 Confidenza media: {avg_confidence:.3f}")
+        
+        # 🆕 LOGGING FINALE
+        debug_logger.info("=" * 80)
+        debug_logger.info("✅ CLUSTERING INTELLIGENTE COMPLETATO")
+        debug_logger.info(f"📊 Cluster finali: {final_n_clusters}")
+        debug_logger.info(f"🔍 Outliers rimanenti: {final_n_outliers}")
+        debug_logger.info(f"🤖 Chiamate LLM totali: {total_llm_calls}")
+        debug_logger.info(f"⚡ Efficienza: {((len(texts) - total_llm_calls) / len(texts) * 100):.1f}% riduzione chiamate LLM")
+        debug_logger.info(f"🎯 Confidenza media: {avg_confidence:.3f}")
+        debug_logger.info("=" * 80)
+        
+        # Cleanup handlers per evitare memory leak
+        for handler in debug_logger.handlers[:]:
+            debug_logger.removeHandler(handler)
+            handler.close()
         
         return cluster_labels, cluster_info
     

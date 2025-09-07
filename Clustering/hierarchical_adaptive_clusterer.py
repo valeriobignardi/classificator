@@ -21,6 +21,128 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'EmbeddingEngine'))
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'LLMClassifier'))
 
+def trace_all(function_name: str, action: str = "ENTER", called_from: str = None, **kwargs):
+    """
+    Sistema di tracing completo per tracciare il flusso del clustering gerarchico
+    
+    Scopo della funzione: Tracciare ingresso, uscita ed errori di tutte le funzioni
+    Parametri di input: function_name, action, called_from, **kwargs (parametri da tracciare)
+    Parametri di output: None (scrive su file)
+    Valori di ritorno: None
+    Tracciamento aggiornamenti: 2025-09-07 - Valerio Bignardi - Sistema tracing clustering gerarchico
+    
+    Args:
+        function_name (str): Nome della funzione da tracciare
+        action (str): "ENTER", "EXIT", "ERROR"
+        called_from (str): Nome della funzione chiamante (per tracciare chiamate annidate)
+        **kwargs: Parametri da tracciare (input, return_value, exception, etc.)
+        
+    Autore: Valerio Bignardi
+    Data: 2025-09-07
+    """
+    import yaml
+    import os
+    from datetime import datetime
+    import json
+    
+    try:
+        # Carica configurazione tracing dal config.yaml
+        config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
+        if not os.path.exists(config_path):
+            return  # Tracing disabilitato se config non esiste
+            
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+            
+        tracing_config = config.get('tracing', {})
+        if not tracing_config.get('enabled', False):
+            return  # Tracing disabilitato
+            
+        # Configurazioni tracing
+        log_file = tracing_config.get('log_file', 'tracing.log')
+        include_parameters = tracing_config.get('include_parameters', True)
+        include_return_values = tracing_config.get('include_return_values', True)
+        include_exceptions = tracing_config.get('include_exceptions', True)
+        max_file_size_mb = tracing_config.get('max_file_size_mb', 100)
+        
+        # Path assoluto per il file di log
+        log_path = os.path.join(os.path.dirname(__file__), '..', log_file)
+        
+        # Rotazione file se troppo grande
+        if os.path.exists(log_path):
+            file_size_mb = os.path.getsize(log_path) / (1024 * 1024)
+            if file_size_mb > max_file_size_mb:
+                backup_path = f"{log_path}.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                os.rename(log_path, backup_path)
+        
+        # Timestamp formattato
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        
+        # Costruisci messaggio di tracing con called_from
+        if called_from:
+            message_parts = [f"[{timestamp}]", f"{action:>5}", "->", f"{called_from}::{function_name}"]
+        else:
+            message_parts = [f"[{timestamp}]", f"{action:>5}", "->", function_name]
+        
+        # Aggiungi parametri se richiesto
+        if action == "ENTER" and include_parameters and kwargs:
+            params_str = []
+            for key, value in kwargs.items():
+                try:
+                    # Converti i parametri in stringa gestendo oggetti complessi
+                    if isinstance(value, (dict, list)):
+                        if len(str(value)) > 200:
+                            value_str = f"{type(value).__name__}(size={len(value)})"
+                        else:
+                            value_str = json.dumps(value, default=str, ensure_ascii=False)[:200]
+                    elif hasattr(value, '__len__') and len(str(value)) > 200:
+                        value_str = f"{type(value).__name__}(len={len(value)})"
+                    else:
+                        value_str = str(value)[:200]
+                    params_str.append(f"{key}={value_str}")
+                except Exception:
+                    params_str.append(f"{key}=<{type(value).__name__}>")
+            
+            if params_str:
+                message_parts.append(f"({', '.join(params_str)})")
+        
+        # Aggiungi valore di ritorno se richiesto
+        elif action == "EXIT" and include_return_values and 'return_value' in kwargs:
+            try:
+                return_val = kwargs['return_value']
+                if isinstance(return_val, (dict, list)):
+                    if len(str(return_val)) > 300:
+                        return_str = f"{type(return_val).__name__}(size={len(return_val)})"
+                    else:
+                        return_str = json.dumps(return_val, default=str, ensure_ascii=False)[:300]
+                elif hasattr(return_val, '__len__') and len(str(return_val)) > 300:
+                    return_str = f"{type(return_val).__name__}(len={len(return_val)})"
+                else:
+                    return_str = str(return_val)[:300]
+                message_parts.append(f"RETURN: {return_str}")
+            except Exception:
+                message_parts.append(f"RETURN: <{type(kwargs['return_value']).__name__}>")
+        
+        # Aggiungi eccezione se richiesto
+        elif action == "ERROR" and include_exceptions and 'exception' in kwargs:
+            try:
+                exc = kwargs['exception']
+                exc_str = f"{type(exc).__name__}: {str(exc)}"[:500]
+                message_parts.append(f"EXCEPTION: {exc_str}")
+            except Exception:
+                message_parts.append(f"EXCEPTION: <{type(kwargs['exception']).__name__}>")
+        
+        # Scrivi nel file di log
+        log_message = " ".join(message_parts) + "\n"
+        
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(log_message)
+            
+    except Exception as e:
+        # Fallback silenzioso se il tracing fallisce
+        # Non vogliamo che errori di tracing interrompano la pipeline
+        pass
+
 @dataclass
 class ConfidenceRegion:
     """Rappresenta una regione di confidenza nel clustering gerarchico"""
@@ -66,6 +188,13 @@ class HierarchicalAdaptiveClusterer:
             boundary_threshold: Soglia per regioni boundary (bassa confidenza)
             max_hierarchy_depth: Profondità massima della gerarchia
         """
+        trace_all("__init__", "ENTER", 
+                 config_path=config_path, 
+                 llm_classifier=type(llm_classifier).__name__ if llm_classifier else None,
+                 confidence_threshold=confidence_threshold,
+                 boundary_threshold=boundary_threshold,
+                 max_hierarchy_depth=max_hierarchy_depth)
+        
         if config_path is None:
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
         
@@ -91,6 +220,8 @@ class HierarchicalAdaptiveClusterer:
         self.next_region_id = 0
         self.total_iterations = 0
         self.conflicts_resolved = 0
+        
+        trace_all("__init__", "EXIT")
         self.regions_split = 0
         self.regions_merged = 0
         
@@ -156,6 +287,8 @@ class HierarchicalAdaptiveClusterer:
     
     def load_config(self):
         """Carica configurazione aggiuntiva se disponibile"""
+        trace_all("load_config", "ENTER", config_path=self.config_path)
+        
         try:
             with open(self.config_path, 'r', encoding='utf-8') as file:
                 config = yaml.safe_load(file)
@@ -189,8 +322,13 @@ class HierarchicalAdaptiveClusterer:
                 'label_penalty': 0.2
             })
             
+            trace_all("load_config", "EXIT", config_loaded=True)
+            
         except Exception as e:
             self.logger.warning(f"Errore caricamento config gerarchico: {e}")
+            
+            trace_all("load_config", "ERROR", exception=e)
+            
             # Usa valori di default
             self.min_region_size = 3
             self.max_boundary_ratio = 0.4
@@ -210,6 +348,8 @@ class HierarchicalAdaptiveClusterer:
                 'uncertainty': 0.4,
                 'label_penalty': 0.2
             }
+            
+            trace_all("load_config", "EXIT", config_loaded=False)
     
     def initial_clustering(self, 
                           texts: List[str], 
@@ -226,6 +366,11 @@ class HierarchicalAdaptiveClusterer:
         Returns:
             Tuple (regioni_create, membership_iniziali)
         """
+        trace_all("initial_clustering", "ENTER",
+                 texts_count=len(texts),
+                 embeddings_shape=embeddings.shape,
+                 session_ids_count=len(session_ids))
+        
         print(f"🌱 Fase 1: Clustering iniziale di {len(texts)} sessioni...")
         
         # 1. Clustering HDBSCAN tradizionale per identificare core regions
@@ -290,6 +435,11 @@ class HierarchicalAdaptiveClusterer:
             )
         
         print(f"   ✅ Clustering iniziale completato: {len(self.regions)} regioni create")
+        
+        trace_all("initial_clustering", "EXIT",
+                 regions_created=len(self.regions),
+                 memberships_created=len(self.session_memberships))
+        
         return self.regions.copy(), self.session_memberships.copy()
     
     def _create_boundary_regions_for_outliers(self, 
@@ -364,6 +514,11 @@ class HierarchicalAdaptiveClusterer:
         Returns:
             Dict {region_id: {label: probability}}
         """
+        trace_all("classify_regions_with_llm", "ENTER",
+                 texts_count=len(texts),
+                 session_ids_count=len(session_ids),
+                 regions_count=len(self.regions))
+        
         print(f"🧠 Fase 2: Classificazione LLM delle regioni...")
         
         region_labels = {}
@@ -479,6 +634,9 @@ class HierarchicalAdaptiveClusterer:
             main_label = max(label_distribution.items(), key=lambda x: x[1])
             print(f"     ✅ Regione {region_id}: '{main_label[0]}' (conf: {main_label[1]:.3f})")
         
+        trace_all("classify_regions_with_llm", "EXIT",
+                 region_labels_count=len(region_labels))
+        
         return region_labels
     
     def _select_region_representatives(self, 
@@ -548,6 +706,8 @@ class HierarchicalAdaptiveClusterer:
         Returns:
             Dict {region_id: conflict_info}
         """
+        trace_all("detect_label_conflicts", "ENTER", regions_count=len(self.regions))
+        
         print(f"⚠️ Fase 3: Rilevamento conflitti nelle regioni...")
         
         conflicts = {}
@@ -600,6 +760,9 @@ class HierarchicalAdaptiveClusterer:
                       f"severità={conflict_info['conflict_severity']:.3f}")
         
         print(f"   📊 Rilevati {len(conflicts)} conflitti su {len(self.regions)} regioni")
+        
+        trace_all("detect_label_conflicts", "EXIT", conflicts_detected=len(conflicts))
+        
         return conflicts
     
     def _calculate_entropy(self, distribution: Dict[str, float]) -> float:
@@ -650,6 +813,11 @@ class HierarchicalAdaptiveClusterer:
         Returns:
             Statistiche della risoluzione
         """
+        trace_all("resolve_conflicts_hierarchically", "ENTER",
+                 conflicts_count=len(conflicts),
+                 embeddings_shape=embeddings.shape,
+                 session_ids_count=len(session_ids),
+                 texts_count=len(texts))
         print(f"🔧 Fase 4: Risoluzione gerarchica di {len(conflicts)} conflitti...")
         
         resolution_stats = {
@@ -699,6 +867,9 @@ class HierarchicalAdaptiveClusterer:
         resolution_stats['regions_merged'] = merge_stats['regions_merged']
         
         print(f"   ✅ Risoluzione completata: {resolution_stats}")
+        
+        trace_all("resolve_conflicts_hierarchically", "EXIT", resolution_stats=resolution_stats)
+        
         return resolution_stats
     
     def _split_region_hierarchically(self, 
@@ -1436,6 +1607,12 @@ class HierarchicalAdaptiveClusterer:
         Returns:
             Tuple (session_memberships, cluster_info)
         """
+        trace_all("cluster_hierarchically", "ENTER",
+                 texts_count=len(texts),
+                 embeddings_shape=embeddings.shape,
+                 session_ids_count=len(session_ids),
+                 max_iterations=max_iterations)
+        
         print(f"🌳 AVVIO CLUSTERING GERARCHICO ADATTIVO")
         print(f"📊 Dataset: {len(texts)} sessioni, max {max_iterations} iterazioni")
         print("=" * 60)
@@ -1501,6 +1678,13 @@ class HierarchicalAdaptiveClusterer:
         print(f"🌳 Regioni finali: {len(self.regions)} (core: {sum(1 for r in self.regions.values() if r.region_type == 'core')})")
         print(f"🔧 Conflitti risolti: {self.conflicts_resolved}")
         print(f"📊 Efficienza: {len(texts)/duration:.1f} sessioni/sec")
+        
+        trace_all("cluster_hierarchically", "EXIT", 
+                 session_memberships_count=len(self.session_memberships),
+                 cluster_info_count=len(cluster_info),
+                 duration=duration,
+                 iterations=iteration,
+                 conflicts_resolved=self.conflicts_resolved)
         
         return self.session_memberships, cluster_info
     

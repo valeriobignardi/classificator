@@ -7,6 +7,7 @@ Aggiornamenti:
 - 26/08/2025: Aggiunto supporto GPU clustering con cuML HDBSCAN
 - 26/08/2025: Fallback automatico su CPU se GPU non disponibile
 - 26/08/2025: Configurazione GPU tramite config.yaml
+- 07/09/2025: Aggiunto sistema di tracing completo
 """
 
 import sys
@@ -15,6 +16,128 @@ from typing import Dict, List, Tuple, Optional, Union, Any
 import numpy as np
 import time
 import yaml
+
+def trace_all(function_name: str, action: str = "ENTER", called_from: str = None, **kwargs):
+    """
+    Sistema di tracing completo per tracciare il flusso del clustering HDBSCAN
+    
+    Scopo della funzione: Tracciare ingresso, uscita ed errori di tutte le funzioni
+    Parametri di input: function_name, action, called_from, **kwargs (parametri da tracciare)
+    Parametri di output: None (scrive su file)
+    Valori di ritorno: None
+    Tracciamento aggiornamenti: 2025-09-07 - Valerio Bignardi - Sistema tracing HDBSCAN
+    
+    Args:
+        function_name (str): Nome della funzione da tracciare
+        action (str): "ENTER", "EXIT", "ERROR"
+        called_from (str): Nome della funzione chiamante (per tracciare chiamate annidate)
+        **kwargs: Parametri da tracciare (input, return_value, exception, etc.)
+        
+    Autore: Valerio Bignardi
+    Data: 2025-09-07
+    """
+    import yaml
+    import os
+    from datetime import datetime
+    import json
+    
+    try:
+        # Carica configurazione tracing dal config.yaml
+        config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
+        if not os.path.exists(config_path):
+            return  # Tracing disabilitato se config non esiste
+            
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+            
+        tracing_config = config.get('tracing', {})
+        if not tracing_config.get('enabled', False):
+            return  # Tracing disabilitato
+            
+        # Configurazioni tracing
+        log_file = tracing_config.get('log_file', 'tracing.log')
+        include_parameters = tracing_config.get('include_parameters', True)
+        include_return_values = tracing_config.get('include_return_values', True)
+        include_exceptions = tracing_config.get('include_exceptions', True)
+        max_file_size_mb = tracing_config.get('max_file_size_mb', 100)
+        
+        # Path assoluto per il file di log
+        log_path = os.path.join(os.path.dirname(__file__), '..', log_file)
+        
+        # Rotazione file se troppo grande
+        if os.path.exists(log_path):
+            file_size_mb = os.path.getsize(log_path) / (1024 * 1024)
+            if file_size_mb > max_file_size_mb:
+                backup_path = f"{log_path}.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                os.rename(log_path, backup_path)
+        
+        # Timestamp formattato
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        
+        # Costruisci messaggio di tracing con called_from
+        if called_from:
+            message_parts = [f"[{timestamp}]", f"{action:>5}", "->", f"{called_from}::{function_name}"]
+        else:
+            message_parts = [f"[{timestamp}]", f"{action:>5}", "->", function_name]
+        
+        # Aggiungi parametri se richiesto
+        if action == "ENTER" and include_parameters and kwargs:
+            params_str = []
+            for key, value in kwargs.items():
+                try:
+                    # Converti i parametri in stringa gestendo oggetti complessi
+                    if isinstance(value, (dict, list)):
+                        if len(str(value)) > 200:
+                            value_str = f"{type(value).__name__}(size={len(value)})"
+                        else:
+                            value_str = json.dumps(value, default=str, ensure_ascii=False)[:200]
+                    elif hasattr(value, '__len__') and len(str(value)) > 200:
+                        value_str = f"{type(value).__name__}(len={len(value)})"
+                    else:
+                        value_str = str(value)[:200]
+                    params_str.append(f"{key}={value_str}")
+                except Exception:
+                    params_str.append(f"{key}=<{type(value).__name__}>")
+            
+            if params_str:
+                message_parts.append(f"({', '.join(params_str)})")
+        
+        # Aggiungi valore di ritorno se richiesto
+        elif action == "EXIT" and include_return_values and 'return_value' in kwargs:
+            try:
+                return_val = kwargs['return_value']
+                if isinstance(return_val, (dict, list)):
+                    if len(str(return_val)) > 300:
+                        return_str = f"{type(return_val).__name__}(size={len(return_val)})"
+                    else:
+                        return_str = json.dumps(return_val, default=str, ensure_ascii=False)[:300]
+                elif hasattr(return_val, '__len__') and len(str(return_val)) > 300:
+                    return_str = f"{type(return_val).__name__}(len={len(return_val)})"
+                else:
+                    return_str = str(return_val)[:300]
+                message_parts.append(f"RETURN: {return_str}")
+            except Exception:
+                message_parts.append(f"RETURN: <{type(kwargs['return_value']).__name__}>")
+        
+        # Aggiungi eccezione se richiesto
+        elif action == "ERROR" and include_exceptions and 'exception' in kwargs:
+            try:
+                exc = kwargs['exception']
+                exc_str = f"{type(exc).__name__}: {str(exc)}"[:500]
+                message_parts.append(f"EXCEPTION: {exc_str}")
+            except Exception:
+                message_parts.append(f"EXCEPTION: <{type(kwargs['exception']).__name__}>")
+        
+        # Scrivi nel file di log
+        log_message = " ".join(message_parts) + "\n"
+        
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(log_message)
+            
+    except Exception as e:
+        # Fallback silenzioso se il tracing fallisce
+        # Non vogliamo che errori di tracing interrompano la pipeline
+        pass
 
 # Import standard CPU clustering
 import hdbscan
@@ -101,6 +224,13 @@ class HDBSCANClusterer:
             
         Ultima modifica: 02 Settembre 2025 - Supporto parametri React
         """
+        trace_all("__init__", "ENTER",
+                 min_cluster_size=min_cluster_size,
+                 min_samples=min_samples,
+                 cluster_selection_epsilon=cluster_selection_epsilon,
+                 metric=metric,
+                 use_umap=use_umap,
+                 tenant=type(tenant).__name__ if tenant else None)
         # Salva riferimento tenant per caricamento config React
         self.tenant = tenant
         
@@ -210,6 +340,19 @@ class HDBSCANClusterer:
         print(f"   cluster_selection_method: {self.cluster_selection_method}")
         print(f"   alpha: {self.alpha}")
         print(f"   allow_single_cluster: {self.allow_single_cluster}")
+        
+        trace_all(
+            component="HDBSCANClusterer",
+            action="EXIT",
+            function="__init__",
+            message="HDBSCANClusterer inizializzato con successo",
+            details={
+                "min_cluster_size": self.min_cluster_size,
+                "min_samples": self.min_samples,
+                "umap_enabled": self.use_umap,
+                "gpu_enabled": self.gpu_enabled
+            }
+        )
     
     def _load_config(self, config_path: str) -> Dict:
         """
@@ -301,6 +444,20 @@ class HDBSCANClusterer:
         Data creazione: 27 Agosto 2025
         Ultimo aggiornamento: 28 Agosto 2025 - Aggiunto supporto predizioni incrementali
         """
+        trace_all(
+            component="HDBSCANClusterer",
+            action="ENTER",
+            function="_apply_umap_reduction",
+            message="Inizio riduzione dimensionale UMAP",
+            details={
+                "input_shape": embeddings.shape,
+                "fit_new": fit_new,
+                "umap_enabled": self.use_umap,
+                "umap_available": UMAP_AVAILABLE,
+                "target_components": self.umap_n_components
+            }
+        )
+        
         print(f"🔍 [DEBUG UMAP] Controllo condizioni applicazione UMAP...")
         print(f"   ✅ self.use_umap = {self.use_umap}")
         print(f"   ✅ UMAP_AVAILABLE = {UMAP_AVAILABLE}")
@@ -427,16 +584,49 @@ class HDBSCANClusterer:
             }
             
             print(f"📋 [DEBUG UMAP] Info riduzione salvate nel clusterer")
+            
+            trace_all(
+                component="HDBSCANClusterer",
+                action="EXIT",
+                function="_apply_umap_reduction",
+                message="Riduzione UMAP completata con successo",
+                details={
+                    "applied": True,
+                    "original_shape": embeddings.shape,
+                    "reduced_shape": embeddings_reduced.shape,
+                    "reduction_time": umap_info['reduction_time'],
+                    "reduction_factor": umap_info['reduction_factor']
+                },
+                return_value=f"Reduced embeddings {embeddings_reduced.shape}, UMAP info"
+            )
+            
             return embeddings_reduced, umap_info
             
         except Exception as e:
             print(f"❌ [DEBUG UMAP] ERRORE durante riduzione UMAP: {e}")
             print(f"🔄 [DEBUG UMAP] Fallback: uso embeddings originali")
-            return embeddings, {
+            
+            fallback_info = {
                 'applied': False, 
                 'reason': f'UMAP failed: {str(e)}',
                 'fallback': True
             }
+            
+            trace_all(
+                component="HDBSCANClusterer",
+                action="EXIT",
+                function="_apply_umap_reduction",
+                message="Riduzione UMAP fallita - fallback a embeddings originali",
+                details={
+                    "applied": False,
+                    "error": str(e),
+                    "fallback": True,
+                    "original_shape": embeddings.shape
+                },
+                return_value=f"Original embeddings {embeddings.shape}, fallback info"
+            )
+            
+            return embeddings, fallback_info
     
     def _check_gpu_memory(self, embeddings_size_mb: float) -> bool:
         """
@@ -485,6 +675,22 @@ class HDBSCANClusterer:
             
         Ultima modifica: 26 Agosto 2025 - Aggiunto supporto GPU
         """
+        trace_all(
+            component="HDBSCANClusterer",
+            action="ENTER",
+            function="fit_predict",
+            message="Inizio clustering HDBSCAN",
+            details={
+                "n_samples": embeddings.shape[0],
+                "embedding_dim": embeddings.shape[1],
+                "embeddings_size_mb": embeddings.nbytes / (1024**2),
+                "min_cluster_size": self.min_cluster_size,
+                "min_samples": self.min_samples,
+                "gpu_enabled": self.gpu_enabled,
+                "umap_enabled": self.umap_enabled
+            }
+        )
+        
         n_samples, embedding_dim = embeddings.shape
         embeddings_size_mb = (embeddings.nbytes / (1024**2))
         
@@ -575,6 +781,23 @@ class HDBSCANClusterer:
         print(f"💾 [DEBUG FIT_PREDICT] Embedding finali salvati per accesso pipeline:")
         print(f"   📦 final_embeddings (post-UMAP): {self.final_embeddings.shape}")
         print(f"   📦 final_embeddings_normalized: {self.final_embeddings_normalized.shape}")
+        
+        trace_all(
+            component="HDBSCANClusterer",
+            action="EXIT",
+            function="fit_predict",
+            message="Clustering HDBSCAN completato",
+            details={
+                "clustering_time": clustering_time,
+                "n_clusters": n_clusters,
+                "n_outliers": n_outliers,
+                "outlier_percentage": n_outliers/len(cluster_labels)*100,
+                "device_used": "GPU" if self.gpu_used else "CPU",
+                "umap_applied": umap_info.get('applied', False),
+                "final_shape": embeddings_norm.shape
+            },
+            return_value=f"cluster_labels array with {len(cluster_labels)} labels, {n_clusters} clusters"
+        )
         
         return cluster_labels
     
@@ -744,6 +967,20 @@ class HDBSCANClusterer:
             
         Ultimo aggiornamento: 2025-08-28
         """
+        trace_all(
+            component="HDBSCANClusterer",
+            action="ENTER",
+            function="predict_new_points",
+            message="Inizio predizione incrementale",
+            details={
+                "n_new_points": len(new_embeddings),
+                "input_shape": new_embeddings.shape,
+                "fit_umap": fit_umap,
+                "has_trained_model": self.clusterer is not None,
+                "umap_enabled": self.use_umap
+            }
+        )
+        
         if self.clusterer is None:
             raise ValueError("Nessun modello HDBSCAN trained disponibile. Eseguire prima fit_predict().")
         
@@ -794,11 +1031,39 @@ class HDBSCANClusterer:
             print(f"   📊 Outlier: {sum(1 for l in predicted_labels if l == -1)} punti")
             print(f"   💪 Strength media: {prediction_strengths.mean():.3f}")
             
+            trace_all(
+                component="HDBSCANClusterer",
+                action="EXIT",
+                function="predict_new_points",
+                message="Predizione incrementale completata",
+                details={
+                    "n_predicted": len(predicted_labels),
+                    "unique_clusters": len(set(predicted_labels)),
+                    "n_outliers": sum(1 for l in predicted_labels if l == -1),
+                    "mean_strength": float(prediction_strengths.mean()),
+                    "umap_applied": hasattr(self, 'umap_reducer') and self.umap_reducer is not None
+                },
+                return_value=f"Predicted labels array with {len(predicted_labels)} predictions"
+            )
+            
             return predicted_labels, prediction_strengths
             
         except Exception as e:
             error_msg = f"Errore durante predizione incrementale: {str(e)}"
             print(f"❌ {error_msg}")
+            
+            trace_all(
+                component="HDBSCANClusterer",
+                action="EXIT",
+                function="predict_new_points",
+                message="Predizione incrementale fallita",
+                details={
+                    "error": str(e),
+                    "n_new_points": len(new_embeddings)
+                },
+                exception=e
+            )
+            
             raise RuntimeError(error_msg)
     
     def save_model_for_incremental_prediction(self, model_path: str, tenant_id: str) -> bool:

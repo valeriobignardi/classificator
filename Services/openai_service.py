@@ -165,23 +165,25 @@ class OpenAIService:
         Args:
             model: Nome modello OpenAI
             messages: Lista messaggi conversazione
-            **kwargs: Altri parametri richiesta
+            **kwargs: Altri parametri richiesta (inclusi tools)
             
         Returns:
             Stringa chiave cache
             
-        Data ultima modifica: 2025-01-31
+        Data ultima modifica: 2025-09-07 - Aggiunto supporto tools per function calling
         """
         # Crea hash dei parametri rilevanti per cache
         cache_data = {
             'model': model,
             'messages': messages,
             'temperature': kwargs.get('temperature', 0.1),
-            'max_tokens': kwargs.get('max_tokens', 150)
+            'max_tokens': kwargs.get('max_tokens', 150),
+            'tools': kwargs.get('tools'),
+            'tool_choice': kwargs.get('tool_choice')
         }
         
         import hashlib
-        cache_str = json.dumps(cache_data, sort_keys=True)
+        cache_str = json.dumps(cache_data, sort_keys=True, default=str)
         return hashlib.md5(cache_str.encode()).hexdigest()
     
     
@@ -328,10 +330,12 @@ class OpenAIService:
         top_p: float = 0.9,
         frequency_penalty: float = 0.0,
         presence_penalty: float = 0.0,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
-        Effettua chiamata chat completion OpenAI con controllo parallelismo
+        Effettua chiamata chat completion OpenAI con controllo parallelismo e supporto tools
         
         Args:
             model: Nome modello OpenAI (es. 'gpt-4o')
@@ -341,17 +345,21 @@ class OpenAIService:
             top_p: Nucleus sampling
             frequency_penalty: Penalità ripetizione frequenza
             presence_penalty: Penalità ripetizione presenza
+            tools: Lista tools/funzioni disponibili per function calling
+            tool_choice: Controllo selezione tool ("auto", "none", o specifico tool)
             **kwargs: Altri parametri OpenAI
             
         Returns:
-            Risposta API OpenAI con testo generato
+            Risposta API OpenAI con testo generato e eventuali tool calls
             
-        Data ultima modifica: 2025-01-31
+        Data ultima modifica: 2025-09-07 - Aggiunto supporto OpenAI tools/function calling
         """
         # Genera chiave cache
         cache_key = self._generate_cache_key(model, messages, 
                                            temperature=temperature, 
-                                           max_tokens=max_tokens)
+                                           max_tokens=max_tokens,
+                                           tools=tools,
+                                           tool_choice=tool_choice)
         
         # Controlla cache
         cached_response = self._get_cached_response(cache_key)
@@ -375,6 +383,14 @@ class OpenAIService:
                 'presence_penalty': presence_penalty,
                 **kwargs
             }
+            
+            # Aggiungi tools se forniti (OpenAI function calling)
+            if tools:
+                payload['tools'] = tools
+                if tool_choice:
+                    payload['tool_choice'] = tool_choice
+                else:
+                    payload['tool_choice'] = "auto"  # Default per function calling
             
             # Effettua chiamata con sessione HTTP ottimizzata
             connector = aiohttp.TCPConnector(limit=self.max_parallel_calls)
@@ -499,6 +515,187 @@ class OpenAIService:
             cache_size = len(self.response_cache)
             self.response_cache.clear()
             print(f"🗑️ [OpenAIService] Cache pulita ({cache_size} entries rimosse)")
+
+
+    def create_function_tool(
+        self,
+        name: str,
+        description: str,
+        parameters: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Crea un tool per OpenAI function calling
+        
+        Args:
+            name: Nome della funzione
+            description: Descrizione della funzione
+            parameters: Schema JSON dei parametri (JSON Schema format)
+            
+        Returns:
+            Dizionario tool formato OpenAI
+            
+        Data ultima modifica: 2025-09-07
+        """
+        return {
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": description,
+                "parameters": parameters
+            }
+        }
+
+
+    def validate_tool_schema(self, tool: Dict[str, Any]) -> bool:
+        """
+        Valida che un tool segua il formato OpenAI corretto
+        
+        Args:
+            tool: Dizionario tool da validare
+            
+        Returns:
+            True se valido, False altrimenti
+            
+        Data ultima modifica: 2025-09-07
+        """
+        required_fields = ["type", "function"]
+        if not all(field in tool for field in required_fields):
+            return False
+            
+        if tool["type"] != "function":
+            return False
+            
+        function = tool["function"]
+        function_required = ["name", "description", "parameters"]
+        if not all(field in function for field in function_required):
+            return False
+            
+        # Valida che parameters sia un schema JSON valido
+        parameters = function["parameters"]
+        if not isinstance(parameters, dict):
+            return False
+            
+        # Deve avere type e properties
+        if "type" not in parameters or "properties" not in parameters:
+            return False
+            
+        return True
+
+
+    def extract_tool_calls(self, response: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Estrae le tool calls dalla risposta OpenAI
+        
+        Args:
+            response: Risposta completa da OpenAI API
+            
+        Returns:
+            Lista di tool calls se presenti, altrimenti lista vuota
+            
+        Data ultima modifica: 2025-09-07
+        """
+        try:
+            choices = response.get("choices", [])
+            if not choices:
+                return []
+                
+            message = choices[0].get("message", {})
+            tool_calls = message.get("tool_calls", [])
+            
+            return tool_calls
+            
+        except Exception as e:
+            print(f"⚠️ [OpenAIService] Errore estrazione tool calls: {e}")
+            return []
+
+
+    def create_tool_message(
+        self,
+        tool_call_id: str,
+        content: str
+    ) -> Dict[str, Any]:
+        """
+        Crea un messaggio di risposta per tool call
+        
+        Args:
+            tool_call_id: ID del tool call da rispondere
+            content: Contenuto della risposta (solitamente JSON)
+            
+        Returns:
+            Messaggio formato per continuare la conversazione
+            
+        Data ultima modifica: 2025-09-07
+        """
+        return {
+            "tool_call_id": tool_call_id,
+            "role": "tool",
+            "content": content
+        }
+
+
+    def execute_tool_calls(
+        self,
+        tool_calls: List[Dict[str, Any]],
+        available_functions: Dict[str, callable]
+    ) -> List[Dict[str, Any]]:
+        """
+        Esegue una lista di tool calls con le funzioni disponibili
+        
+        Args:
+            tool_calls: Lista tool calls estratti dalla risposta OpenAI
+            available_functions: Dizionario nome_funzione -> funzione callable
+            
+        Returns:
+            Lista messaggi di risposta per continuare la conversazione
+            
+        Data ultima modifica: 2025-09-07
+        """
+        tool_messages = []
+        
+        for tool_call in tool_calls:
+            try:
+                function_name = tool_call["function"]["name"]
+                function_args = json.loads(tool_call["function"]["arguments"])
+                tool_call_id = tool_call["id"]
+                
+                print(f"🔧 [OpenAIService] Eseguendo tool call: {function_name}")
+                print(f"   📋 Argomenti: {function_args}")
+                
+                if function_name in available_functions:
+                    # Esegui la funzione
+                    function_response = available_functions[function_name](**function_args)
+                    
+                    # Converti la risposta in JSON se non è già una stringa
+                    if not isinstance(function_response, str):
+                        function_response = json.dumps(function_response, default=str, ensure_ascii=False)
+                    
+                    print(f"   ✅ Risultato: {function_response[:100]}...")
+                    
+                    # Crea messaggio di risposta
+                    tool_message = self.create_tool_message(tool_call_id, function_response)
+                    tool_messages.append(tool_message)
+                    
+                else:
+                    error_msg = f"Funzione '{function_name}' non disponibile"
+                    print(f"   ❌ Errore: {error_msg}")
+                    
+                    tool_message = self.create_tool_message(
+                        tool_call_id, 
+                        json.dumps({"error": error_msg})
+                    )
+                    tool_messages.append(tool_message)
+                    
+            except Exception as e:
+                error_msg = f"Errore esecuzione tool call: {str(e)}"
+                print(f"   ❌ {error_msg}")
+                
+                tool_message = self.create_tool_message(
+                    tool_call.get("id", "unknown"),
+                    json.dumps({"error": error_msg})
+                )
+                tool_messages.append(tool_message)
+        
+        return tool_messages
 
 
 # =============================================================================

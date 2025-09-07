@@ -3114,6 +3114,22 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 "Verificare che il prompt 'intelligent_classifier_system' abbia tool associati."
             )
         
+        # 🆕 VALIDAZIONE TOOLS usando helper dell'OpenAIService
+        valid_tools = []
+        for tool in classification_tools:
+            if self.openai_service.validate_tool_schema(tool):
+                valid_tools.append(tool)
+                if self.enable_logging:
+                    print(f"✅ [OpenAI] Tool '{tool['function']['name']}' validato correttamente")
+            else:
+                if self.enable_logging:
+                    print(f"❌ [OpenAI] Tool '{tool.get('function', {}).get('name', 'unknown')}' non valido!")
+        
+        if not valid_tools:
+            raise ValueError("❌ ERRORE CRITICO OpenAI: Nessun tool valido dopo validazione schema")
+        
+        classification_tools = valid_tools  # Usa solo tools validati
+        
         try:
             # 🔄 USA STESSA FUNZIONE DI OLLAMA: _build_classification_prompt
             # Questo garantisce prompt identico con esempi dinamici dal database
@@ -3149,42 +3165,43 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             if 'choices' not in response or not response['choices']:
                 raise ValueError("Risposta OpenAI vuota o malformata")
             
-            message = response['choices'][0]['message']
+            # 🆕 NUOVO: Usa i metodi helper dell'OpenAIService per gestire tool calls
+            tool_calls = self.openai_service.extract_tool_calls(response)
             
-            # Verifica se OpenAI ha fatto una function call
-            if 'tool_calls' in message and message['tool_calls']:
-                tool_call = message['tool_calls'][0]
-                
-                if (tool_call.get('function', {}).get('name') == 'classify_conversation' and 
-                    'arguments' in tool_call['function']):
-                    
-                    # Parse dei function call arguments
-                    if isinstance(tool_call['function']['arguments'], str):
-                        structured_result = json.loads(tool_call['function']['arguments'])
-                    else:
-                        structured_result = tool_call['function']['arguments']
+            if tool_calls:
+                # Verifica che sia il tool call giusto
+                for tool_call in tool_calls:
+                    if (tool_call.get('function', {}).get('name') == 'classify_conversation' and 
+                        'arguments' in tool_call['function']):
+                        
+                        # Parse dei function call arguments
+                        if isinstance(tool_call['function']['arguments'], str):
+                            structured_result = json.loads(tool_call['function']['arguments'])
+                        else:
+                            structured_result = tool_call['function']['arguments']
+                        
+                        if self.enable_logging:
+                            print(f"✅ [OpenAI] Function call received via helper: {structured_result}")
+                        
+                        break
+                else:
+                    raise ValueError(f"Function call 'classify_conversation' non trovata nei tool calls: {tool_calls}")
+            else:
+                # Fallback: Se non c'è function call, prova parsing del contenuto
+                message = response['choices'][0]['message']
+                if 'content' in message and message['content']:
+                    content = message['content'].strip()
                     
                     if self.enable_logging:
-                        print(f"✅ [OpenAI] Function call received: {structured_result}")
-                
+                        print(f"⚠️ [OpenAI] No function call detected, parsing content: {content[:100]}...")
+                    
+                    try:
+                        structured_result = json.loads(content)
+                    except json.JSONDecodeError as e:
+                        # Fallback con parsing robusto esistente
+                        structured_result = self._extract_json_from_openai_response(content)
                 else:
-                    raise ValueError(f"Function call non riconosciuta: {tool_call}")
-            
-            # Fallback: Se non c'è function call, prova parsing del contenuto
-            elif 'content' in message and message['content']:
-                content = message['content'].strip()
-                
-                if self.enable_logging:
-                    print(f"⚠️ [OpenAI] No function call, parsing content: {content[:100]}...")
-                
-                try:
-                    structured_result = json.loads(content)
-                except json.JSONDecodeError as e:
-                    # Fallback con parsing robusto esistente
-                    structured_result = self._extract_json_from_openai_response(content)
-            
-            else:
-                raise ValueError("Risposta OpenAI senza tool_calls né content")
+                    raise ValueError("Risposta OpenAI senza tool_calls né content")
             
             # Valida struttura risposta
             required_fields = ['predicted_label', 'confidence', 'motivation']

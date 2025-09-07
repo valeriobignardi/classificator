@@ -29,7 +29,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'TagDatabase'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'QualityGate'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'Utils'))
 
-from end_to_end_pipeline import EndToEndPipeline
+from end_to_end_pipeline import EndToEndPipeline, trace_all
 from tag_database_connector import TagDatabaseConnector
 from quality_gate_engine import QualityGateEngine
 from mongo_classification_reader import MongoClassificationReader
@@ -541,6 +541,7 @@ class ClassificationService:
         Returns:
             Pipeline configurata per il cliente
         """
+        print(f"trace:all - get_pipeline chiamato per client_name: {client_name}")
         # Crea lock specifico per questo cliente se non esiste ancora 
         if client_name not in self._pipeline_locks:
             with self._global_init_lock: # Lock globale per inizializzazioni critiche 
@@ -1320,6 +1321,7 @@ llm_config_service = LLMConfigurationService()
 @app.route('/', methods=['GET'])
 def home():
     """Endpoint di base per verificare che il servizio sia attivo"""
+    trace_all("home", "ENTER")
     return jsonify({
         'service': 'Humanitas Classification Service',
         'status': 'running',
@@ -1336,6 +1338,7 @@ def home():
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check del servizio"""
+    trace_all("health_check", "ENTER")
     try:
         # Test connessione database
         db = TagDatabaseConnector()
@@ -1369,6 +1372,7 @@ def classify_all_sessions(client_name: str):
              -H "Content-Type: application/json" \
              -d '{"force_reprocess": false, "force_review": false}'
     """
+    trace_all("classify_all_sessions", "ENTER", client_name=client_name)
     try:
         # Parametri opzionali dal body - gestisce sia JSON che richieste vuote
         data = {}
@@ -1447,6 +1451,7 @@ def classify_new_sessions(client_name: str):
     Esempio:
         curl -X POST http://localhost:5000/classify/new/humanitas
     """
+    trace_all("classify_new_sessions", "ENTER", client_name=client_name)
     try:
         print(f"🎯 RICHIESTA CLASSIFICAZIONE INCREMENTALE:")
         print(f"   Cliente: {client_name}")
@@ -1489,6 +1494,7 @@ def get_client_status(client_name: str):
     Esempio:
         curl http://localhost:5000/status/humanitas
     """
+    trace_all("get_client_status", "ENTER", client_name=client_name)
     try:
         # Recupera sessioni processate
         processed_sessions = classification_service.get_processed_sessions(client_name)
@@ -1617,6 +1623,7 @@ def supervised_training(client_name: str):
              -H "Content-Type: application/json" \
              -d '{"batch_size": 50, "min_confidence": 0.8}'
     """
+    trace_all("supervised_training", "ENTER", client_name=client_name)
     try:
         print(f"🎯 INIZIO TRAINING SUPERVISIONATO - Cliente: {client_name}")
         

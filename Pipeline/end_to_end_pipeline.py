@@ -1123,10 +1123,10 @@ class EndToEndPipeline:
         
         if force_reprocess:
             print(f"🔄 [FASE 4: CLUSTERING] Clustering completo da zero...")
-            result = self._esegui_clustering_completo(sessioni)
+            result = self.esegui_clustering_puro(sessioni)
         else:
             print(f"🧠 [FASE 4: CLUSTERING] Clustering incrementale (se possibile)...")
-            result = self._esegui_clustering_completo(sessioni)  # Per ora sempre completo
+            result = self.esegui_clustering_puro(sessioni)  # Per ora sempre completo
         
         # Calcola statistiche finali
         embeddings, cluster_labels, representatives, suggested_labels = result
@@ -1195,21 +1195,28 @@ class EndToEndPipeline:
         trace_all("esegui_clustering", "EXIT", return_value=result)
         return result
     
-    def _esegui_clustering_completo(self, sessioni: Dict[str, Dict]) -> tuple:
+    def esegui_clustering_puro(self, sessioni: Dict[str, Dict]) -> tuple:
         """
-        Esegue il clustering delle sessioni con approccio intelligente multi-livello:
-        1. BERTopic training anticipato su dataset completo (NUOVO)
+        Esegue solo il clustering puro delle sessioni con approccio intelligente multi-livello.
+        Responsabilità: Solo clustering, embeddings, e selezione rappresentanti.
+        NON include classificazione o salvataggio.
+        
+        1. BERTopic training anticipato su dataset completo
         2. LLM per comprensione linguaggio naturale (primario)
         3. Pattern regex per fallback veloce (secondario)  
         4. Validazione umana per casi ambigui (terziario)
         
         Args:
-            sessioni: Dizionario con le sessioni
+            sessioni: Dizionario con le sessioni da clusterizzare
             
         Returns:
             Tuple (embeddings, cluster_labels, representatives, suggested_labels)
+            
+        Autore: Valerio Bignardi
+        Data creazione: 2025-09-07
+        Ultima modifica: 2025-09-07 - Separazione responsabilità clustering puro
         """
-        trace_all("_esegui_clustering_completo", "ENTER", sessioni_count=len(sessioni))
+        trace_all("esegui_clustering_puro", "ENTER", sessioni_count=len(sessioni))
         
         # FASE 3: GENERAZIONE EMBEDDINGS
         start_time = time.time()
@@ -1519,7 +1526,7 @@ class EndToEndPipeline:
             print(f"⚠️ Impossibile salvare modello HDBSCAN")
         
         result = (embeddings, cluster_labels, representatives, suggested_labels)
-        trace_all("_esegui_clustering_completo", "EXIT", 
+        trace_all("esegui_clustering_puro", "EXIT", 
                  embeddings_shape=embeddings.shape if hasattr(embeddings, 'shape') else len(embeddings),
                  cluster_labels_count=len(cluster_labels),
                  representatives_clusters=len(representatives),
@@ -2010,66 +2017,35 @@ class EndToEndPipeline:
         """
         return self._ml_features_cache.get(session_id)
     
-    def classifica_e_salva_sessioni(self,
-                                   sessioni: Dict[str, Dict],
-                                   batch_size: int = 32,
-                                   use_ensemble: bool = True,
-                                   optimize_clusters: bool = True,
-                                   force_review: bool = False,
-                                   embeddings: Optional[np.ndarray] = None,
-                                   cluster_labels: Optional[np.ndarray] = None,
-                                   cluster_info: Optional[Dict] = None) -> Dict[str, Any]:
+    def salva_classificazioni_puro(self,
+                                 sessioni: Dict[str, Dict],
+                                 predictions: List[Dict],
+                                 use_ensemble: bool = True,
+                                 force_review: bool = False) -> Dict[str, Any]:
         """
-        Classifica le sessioni usando l'ensemble classifier e salva i risultati nel database MongoDB
-        
-        LOGICA UNIFICATA POST-TRAINING:
-        - Se force_review=True: Cancella collection MongoDB e riclassifica tutto da zero
-        - Se force_review=False: Usa logica progressiva intelligente (20%/7 giorni)
-        - SEMPRE: Ensemble LLM+ML con clustering ottimizzato
-        - SEMPRE: altro_tag_validation abilitata
-        - SEMPRE: Auto-classificazione completa (mai human review)
+        Funzione pura di salvataggio: salva solo le classificazioni nel database MongoDB.
+        Responsabilità: Solo persistenza dati, nessuna logica di classificazione.
         
         Args:
-            sessioni: Sessioni da classificare
-            batch_size: Dimensione del batch per la classificazione
-            use_ensemble: Se True, usa l'ensemble classifier (SEMPRE True in produzione)
-            optimize_clusters: Se True, usa clustering ottimizzato (SEMPRE True in produzione)
-            force_review: Se True, forza riclassificazione completa
-            embeddings: Embeddings precomputati (opzionale, evita duplicazione clustering)
-            cluster_labels: Labels cluster precomputati (opzionale, evita duplicazione clustering)
-            cluster_info: Info cluster precomputate (opzionale, evita duplicazione clustering)  
-            force_review: Se True, cancella MongoDB e riprocessa tutto da capo
+            sessioni: Dizionario delle sessioni da salvare
+            predictions: Lista delle predizioni da salvare
+            use_ensemble: Flag per statistiche ensemble
+            force_review: Se True, cancella collection MongoDB prima del salvataggio
             
         Returns:
-            Statistiche della classificazione
+            Statistiche del salvataggio
             
         Autore: Valerio Bignardi
-        Data: 2025-08-29
+        Data creazione: 2025-09-07
+        Ultima modifica: 2025-09-07 - Separazione responsabilità salvataggio puro
         """
-        trace_all("classifica_e_salva_sessioni", "ENTER",
+        trace_all("salva_classificazioni_puro", "ENTER",
                  sessioni_count=len(sessioni),
-                 batch_size=batch_size,
-                 use_ensemble=use_ensemble, 
-                 optimize_clusters=optimize_clusters,
+                 predictions_count=len(predictions),
+                 use_ensemble=use_ensemble,
                  force_review=force_review)
         
-        # 🔍 DEBUG: Import e trace della funzione
-        from Pipeline.debug_pipeline import debug_pipeline, debug_flow
-        
-        debug_pipeline("classifica_e_salva_sessioni", "ENTRY - Avvio classificazione e salvataggio", {
-            "num_sessioni": len(sessioni),
-            "batch_size": batch_size,
-            "use_ensemble": use_ensemble,
-            "optimize_clusters": optimize_clusters,
-            "force_review": force_review,
-            "tenant": self.tenant_slug
-        }, "ENTRY")
-        
-        print(f"🏷️  CLASSIFICAZIONE POST-TRAINING di {len(sessioni)} sessioni...")
-        print(f"📊 Batch size: {batch_size}")
-        print(f"🔄 Force review: {force_review}")
-        print(f"🎯 Optimize clusters: {optimize_clusters}")
-        print(f"🔗 Use ensemble: {use_ensemble}")
+        print(f"💾 SALVATAGGIO PURO di {len(predictions)} classificazioni...")
         
         # 🆕 GESTIONE FORCE_REVIEW: Pulizia MongoDB se richiesta  
         if force_review:
@@ -2090,13 +2066,179 @@ class EndToEndPipeline:
                     print(f"✅ Cancellate {deleted_count} classificazioni esistenti")
                 else:
                     print(f"⚠️ Errore nella cancellazione: {clear_result['error']}")
-                
-                # Force clustering completo
-                print(f"🔄 Force review attivato → Clustering completo forzato")
-                
+                    
             except Exception as e:
-                print(f"⚠️ Errore nella cancellazione MongoDB: {e}")
-                print(f"🔄 Continuando con la classificazione...")
+                print(f"❌ Errore durante cancellazione MongoDB: {e}")
+                # Continua comunque con la classificazione
+        
+        # Connetti al database TAG
+        print(f"💾 Connessione al database TAG...")
+        try:
+            self.tag_db.connetti()
+            print(f"✅ Connesso al database TAG")
+        except Exception as e:
+            print(f"❌ Errore connessione database TAG: {e}")
+            raise e
+        
+        # Inizializza statistiche
+        session_ids = list(sessioni.keys())
+        stats = {
+            'total_sessions': len(sessioni),
+            'high_confidence': 0,
+            'low_confidence': 0,
+            'saved_successfully': 0,
+            'save_errors': 0,
+            'classifications_by_tag': {},
+            'individual_cases_classified': 0,
+            'propagated_cases': 0,
+            'ensemble_stats': {
+                'llm_predictions': 0,
+                'ml_predictions': 0,
+                'ensemble_agreements': 0,
+                'ensemble_disagreements': 0
+            } if use_ensemble else None
+        }
+        
+        print(f"💾 Inizio salvataggio di {len(predictions)} classificazioni...")
+        
+        # Salva ogni predizione
+        for i, (session_id, prediction) in enumerate(zip(session_ids, predictions)):
+            try:
+                # Aggiorna contatori predizioni
+                if prediction.get('is_propagated'):
+                    stats['propagated_cases'] += 1
+                else:
+                    stats['individual_cases_classified'] += 1
+                
+                # Aggiorna statistiche confidence
+                confidence = prediction.get('confidence', 0.0)
+                if confidence >= self.confidence_threshold:
+                    stats['high_confidence'] += 1
+                else:
+                    stats['low_confidence'] += 1
+                
+                # Aggiorna contatori per tag
+                tag_name = prediction.get('predicted_tag', 'altro')
+                if tag_name not in stats['classifications_by_tag']:
+                    stats['classifications_by_tag'][tag_name] = 0
+                stats['classifications_by_tag'][tag_name] += 1
+                
+                # Aggiorna statistiche ensemble se disponibili
+                if use_ensemble and stats['ensemble_stats'] and 'method_used' in prediction:
+                    method = prediction['method_used']
+                    if method == 'llm':
+                        stats['ensemble_stats']['llm_predictions'] += 1
+                    elif method == 'ml_ensemble':
+                        stats['ensemble_stats']['ml_predictions'] += 1
+                    
+                    if 'ensemble_agreement' in prediction:
+                        if prediction['ensemble_agreement']:
+                            stats['ensemble_stats']['ensemble_agreements'] += 1
+                        else:
+                            stats['ensemble_stats']['ensemble_disagreements'] += 1
+                
+                # Salva la classificazione nel database
+                tag_id = self.tag_db.salva_classificazione(
+                    session_id=session_id,
+                    tag_name=tag_name,
+                    confidence=confidence,
+                    method_used=prediction.get('method_used', 'unknown'),
+                    is_human_reviewed=prediction.get('human_reviewed', False),
+                    prediction_metadata=prediction.get('metadata', {}),
+                    tenant_slug=self.tenant_slug
+                )
+                
+                if tag_id:
+                    stats['saved_successfully'] += 1
+                    
+                    # Progress ogni 100 salvati
+                    if (i + 1) % 100 == 0:
+                        print(f"   💾 Progresso: {i + 1}/{len(predictions)} salvati")
+                else:
+                    stats['save_errors'] += 1
+                    print(f"❌ Errore salvataggio session_id: {session_id}")
+                    
+            except Exception as e:
+                stats['save_errors'] += 1
+                print(f"❌ Errore salvataggio session_id {session_id}: {e}")
+        
+        # Disconnetti dal database
+        self.tag_db.disconnetti()
+        
+        # Statistiche finali
+        print(f"✅ Salvataggio completato!")
+        print(f"  💾 Salvate: {stats['saved_successfully']}/{stats['total_sessions']}")
+        print(f"  📋 Classificati individualmente: {stats['individual_cases_classified']}")
+        print(f"  🔄 Casi propagati: {stats['propagated_cases']}")
+        print(f"  🎯 Alta confidenza: {stats['high_confidence']}")
+        print(f"  ⚠️  Bassa confidenza: {stats['low_confidence']}")
+        print(f"  ❌ Errori: {stats['save_errors']}")
+        
+        if use_ensemble and stats['ensemble_stats']:
+            ens = stats['ensemble_stats']
+            print(f"  🔗 Ensemble: {ens['llm_predictions']} LLM + {ens['ml_predictions']} ML")
+            print(f"  🤝 Accordi: {ens['ensemble_agreements']}, Disaccordi: {ens['ensemble_disagreements']}")
+        
+        trace_all("salva_classificazioni_puro", "EXIT", return_value=stats)
+        return stats
+    
+    def classifica_sessioni_puro(self,
+                                 sessioni: Dict[str, Dict],
+                                 batch_size: int = 32,
+                                 use_ensemble: bool = True,
+                                 optimize_clusters: bool = True,
+                                 embeddings: Optional[np.ndarray] = None,
+                                 cluster_labels: Optional[np.ndarray] = None,
+                                 cluster_info: Optional[Dict] = None) -> List[Dict]:
+        """
+        Classifica solo le sessioni usando l'ensemble classifier.
+        Responsabilità: Solo classificazione, nessun salvataggio.
+        
+        LOGICA CLASSIFICAZIONE PURA:
+        - SEMPRE: Ensemble LLM+ML con clustering ottimizzato
+        - SEMPRE: altro_tag_validation abilitata
+        - SEMPRE: Auto-classificazione completa (mai human review)
+        - NON include salvataggio nel database
+        
+        Args:
+            sessioni: Sessioni da classificare
+            batch_size: Dimensione del batch per la classificazione
+            use_ensemble: Se True, usa l'ensemble classifier (SEMPRE True in produzione)
+            optimize_clusters: Se True, usa clustering ottimizzato (SEMPRE True in produzione)
+            embeddings: Embeddings precomputati (opzionale, evita duplicazione clustering)
+            cluster_labels: Labels cluster precomputati (opzionale, evita duplicazione clustering)
+            cluster_info: Info cluster precomputate (opzionale, evita duplicazione clustering)  
+            
+        Returns:
+            Lista delle predizioni (senza salvare nel database)
+            
+        Autore: Valerio Bignardi
+        Data creazione: 2025-09-07
+        Ultima modifica: 2025-09-07 - Separazione responsabilità classificazione pura
+        """
+        trace_all("classifica_sessioni_puro", "ENTER",
+                 sessioni_count=len(sessioni),
+                 batch_size=batch_size,
+                 use_ensemble=use_ensemble, 
+                 optimize_clusters=optimize_clusters)
+        
+        # 🔍 DEBUG: Import e trace della funzione
+        from Pipeline.debug_pipeline import debug_pipeline, debug_flow
+        
+        debug_pipeline("classifica_sessioni_puro", "ENTRY - Avvio classificazione pura", {
+            "num_sessioni": len(sessioni),
+            "batch_size": batch_size,
+            "use_ensemble": use_ensemble,
+            "optimize_clusters": optimize_clusters,
+            "tenant": self.tenant_slug
+        }, "ENTRY")
+        
+        print(f"🏷️  CLASSIFICAZIONE PURA di {len(sessioni)} sessioni...")
+        print(f"📊 Batch size: {batch_size}")
+        print(f"🎯 Optimize clusters: {optimize_clusters}")
+        print(f"🔗 Use ensemble: {use_ensemble}")
+        print(f"🎯 Optimize clusters: {optimize_clusters}")
+        print(f"🔗 Use ensemble: {use_ensemble}")
         
         # Forza sempre ensemble e clustering ottimizzato per classificazione post-training
         use_ensemble = True
@@ -2126,7 +2268,6 @@ class EndToEndPipeline:
         print(f"   🎯 optimize_clusters: {optimize_clusters} (FORZA SEMPRE)")
         print(f"   🔧 use_ensemble: {use_ensemble} (FORZA SEMPRE)")
         print(f"   📦 batch_size: {batch_size}")
-        print(f"   🔄 force_review: {force_review}")
         if len(sessioni) < 10:
             print(f"   ⚠️  ATTENZIONE: Dataset piccolo ({len(sessioni)} < 10 sessioni)")
             print(f"   ⚠️  Potrebbero esserci problemi di clustering")
@@ -2315,24 +2456,86 @@ class EndToEndPipeline:
                 total_individual_cases += 1
         
         # Salva classificazioni nel database
-        stats = {
-            'total_sessions': len(sessioni),
-            'high_confidence': 0,
-            'low_confidence': 0,
-            'saved_successfully': 0,
-            'save_errors': 0,
-            'classifications_by_tag': {},
-            'individual_cases_classified': 0,  # Solo rappresentanti e outliers
-            'propagated_cases': 0,  # Casi ereditati
-            'ensemble_stats': {
-                'llm_predictions': 0,
-                'ml_predictions': 0,
-                'ensemble_agreements': 0,
-                'ensemble_disagreements': 0
-            } if use_ensemble else None
-        }
+        print(f"✅ Classificazione pura completata!")
+        print(f"  📊 Sessioni classificate: {len(predictions)}")
+        print(f"  📋 Casi individuali: {total_individual_cases} (rappresentanti + outliers)")
+        print(f"  🔄 Casi propagati: {len(predictions) - total_individual_cases}")
         
-        print(f"💾 Inizio salvataggio di {len(predictions)} classificazioni...")
+        # Disconnetti dal database TAG (se connesso)
+        try:
+            self.tag_db.disconnetti()
+        except:
+            pass
+        
+        trace_all("classifica_sessioni_puro", "EXIT", 
+                 predictions_count=len(predictions),
+                 total_individual_cases=total_individual_cases)
+        return predictions
+    
+    def classifica_e_salva_sessioni_new(self,
+                                       sessioni: Dict[str, Dict],
+                                       batch_size: int = 32,
+                                       use_ensemble: bool = True,
+                                       optimize_clusters: bool = True,
+                                       force_review: bool = False,
+                                       embeddings: Optional[np.ndarray] = None,
+                                       cluster_labels: Optional[np.ndarray] = None,
+                                       cluster_info: Optional[Dict] = None) -> Dict[str, Any]:
+        """
+        Funzione orchestratrice che combina classificazione e salvataggio.
+        Usa le nuove funzioni separate per mantenere compatibilità API.
+        
+        Args:
+            sessioni: Sessioni da classificare e salvare
+            batch_size: Dimensione del batch per la classificazione
+            use_ensemble: Se True, usa l'ensemble classifier
+            optimize_clusters: Se True, usa clustering ottimizzato
+            force_review: Se True, cancella MongoDB prima del salvataggio
+            embeddings: Embeddings precomputati (opzionale)
+            cluster_labels: Labels cluster precomputati (opzionale)
+            cluster_info: Info cluster precomputate (opzionale)
+            
+        Returns:
+            Statistiche del salvataggio
+            
+        Autore: Valerio Bignardi
+        Data creazione: 2025-09-07
+        Ultima modifica: 2025-09-07 - Orchestrazione funzioni separate
+        """
+        trace_all("classifica_e_salva_sessioni_new", "ENTER",
+                 sessioni_count=len(sessioni),
+                 batch_size=batch_size,
+                 use_ensemble=use_ensemble,
+                 optimize_clusters=optimize_clusters,
+                 force_review=force_review)
+        
+        print(f"🏷️  CLASSIFICAZIONE E SALVATAGGIO ORCHESTRATO di {len(sessioni)} sessioni...")
+        
+        # 1. FASE CLASSIFICAZIONE PURA
+        print(f"📊 FASE 1: Classificazione pura...")
+        predictions = self.classifica_sessioni_puro(
+            sessioni=sessioni,
+            batch_size=batch_size,
+            use_ensemble=use_ensemble,
+            optimize_clusters=optimize_clusters,
+            embeddings=embeddings,
+            cluster_labels=cluster_labels,
+            cluster_info=cluster_info
+        )
+        
+        # 2. FASE SALVATAGGIO PURO  
+        print(f"💾 FASE 2: Salvataggio puro...")
+        stats = self.salva_classificazioni_puro(
+            sessioni=sessioni,
+            predictions=predictions,
+            use_ensemble=use_ensemble,
+            force_review=force_review
+        )
+        
+        trace_all("classifica_e_salva_sessioni_new", "EXIT", return_value=stats)
+        return stats
+
+        # CODICE OBSOLETO DA RIMUOVERE - INIZIA QUI
         print(f"📊 Casi individuali da classificare: {total_individual_cases} (rappresentanti + outliers)")
         
         for i, (session_id, prediction) in enumerate(zip(session_ids, predictions)):
@@ -2906,11 +3109,11 @@ class EndToEndPipeline:
             
             # 4. Classificazione usando ensemble o ML singolo
             if use_ensemble:
-                classification_stats = self.classifica_e_salva_sessioni(
+                classification_stats = self.classifica_e_salva_sessioni_new(
                     sessioni, batch_size=batch_size, use_ensemble=True
                 )
             else:
-                classification_stats = self.classifica_e_salva_sessioni(
+                classification_stats = self.classifica_e_salva_sessioni_new(
                     sessioni, batch_size=batch_size, use_ensemble=False
                 )
             
@@ -3259,6 +3462,9 @@ class EndToEndPipeline:
         
         return risultati_analisi
     
+
+#funzione richiamata dalla rotta training supervised 
+
     def esegui_training_interattivo(self,
                                   giorni_indietro: int = 7,
                                   limit: Optional[int] = 100,
@@ -3322,18 +3528,18 @@ class EndToEndPipeline:
         try:
             # NUOVO: Leggi parametri dal database MySQL
             if hasattr(self, 'tenant') and self.tenant:
-                training_params = get_supervised_training_params_from_db(self.tenant.tenant_id)
-                print(f"✅ Parametri training da database MySQL")
+                training_params = get_supervised_training_params_from_db(self.tenant.tenant_id) # carica le soglie dal db per i parametri di hdbscan e umap
+                print(f"✅ Parametri HDBSCAN e UMAP caricati da database MySQL")
             else:
-                print(f"⚠️ Tenant non disponibile, leggo da config.yaml")
+                print(f"⚠️ Tenant non disponibile, leggo da config.yaml i parametri di HDBSCAN e UMAP")
                 training_params = None
             
             if training_params:
                 # Usa parametri dal database
                 human_limit = training_params.get('max_total_sessions', max_human_review_sessions)
                 confidence_threshold_priority = training_params.get('confidence_threshold_priority', confidence_threshold)
-                print(f"📊 [DB MYSQL] max_total_sessions: {human_limit}")
-                print(f"📊 [DB MYSQL] confidence_threshold_priority: {confidence_threshold_priority}")
+                print(f"📊 [ESEGUI TRAINING INTERATTIVO] max_total_sessions: {human_limit}")
+                print(f"📊 [ESEGUI TRAINING INTERATTIVO] confidence_threshold_priority: {confidence_threshold_priority}")
             else:
                 # Fallback a config.yaml
                 with open(self.config_path, 'r', encoding='utf-8') as file:
@@ -3418,7 +3624,7 @@ class EndToEndPipeline:
             debug_logger.info(f"   Rappresentanti totali: {len(representatives)}")
 
             # 3. Selezione intelligente rappresentanti per review umana
-            print(f"\n📊 FASE 3: SELEZIONE RAPPRESENTANTI PER REVIEW UMANA")
+            print(f"\n📊 ")
             print(f"🚨 [DEBUG] AVVIO SELEZIONE RAPPRESENTANTI - funzione esegui_training_interattivo")
             limited_representatives, selection_stats = self._select_representatives_for_human_review(
                 representatives, suggested_labels, human_limit, sessioni,
@@ -3448,8 +3654,8 @@ class EndToEndPipeline:
             
             debug_logger.info(f"📊 AVVIO FASE 4 - Classificazione ensemble completa")
             
-            # Usa la funzione esistente che fa tutto: ensemble, salvataggio, outlier, propagazione
-            classification_results = self.classifica_e_salva_sessioni(
+            # Usa la funzione orchestratrice che fa tutto: ensemble, salvataggio, outlier, propagazione
+            classification_results = self.classifica_e_salva_sessioni_new(
                 sessioni=sessioni,
                 batch_size=32,
                 use_ensemble=True,
@@ -3538,6 +3744,13 @@ class EndToEndPipeline:
             traceback.print_exc()
             raise
     
+
+
+
+
+
+
+
     def _select_representatives_for_human_review(self,
                                                representatives: Dict[int, List[Dict]],
                                                suggested_labels: Dict[int, str],
@@ -3562,6 +3775,14 @@ class EndToEndPipeline:
         Returns:
             Tuple (limited_representatives, selection_stats)
         """
+        trace_all("_select_representatives_for_human_review", "ENTER",
+                 num_representatives=len(representatives),
+                 num_suggested_labels=len(suggested_labels),
+                 max_sessions=max_sessions,
+                 confidence_threshold=confidence_threshold,
+                 force_review=force_review,
+                 disagreement_threshold=disagreement_threshold)
+        
         print(f"🔍 Selezione intelligente rappresentanti per review umana...")
         
         # Carica configurazione DAL DATABASE
@@ -3633,11 +3854,21 @@ class EndToEndPipeline:
         # Se non abbiamo cluster eleggibili, ritorna tutto disponibile
         if not eligible_clusters:
             print(f"⚠️ Nessun cluster eleggibile, ritorno cluster disponibili")
-            return representatives, {
+            
+            fallback_stats = {
                 'total_sessions_for_review': sum(len(reps) for reps in representatives.values()),
                 'excluded_clusters': 0,
                 'strategy': 'fallback_all'
             }
+            
+            trace_all("_select_representatives_for_human_review", "EXIT", 
+                     strategy="fallback_all", 
+                     total_sessions_selected=fallback_stats['total_sessions_for_review'],
+                     clusters_selected=len(representatives),
+                     excluded_clusters=0,
+                     reason="no_eligible_clusters")
+            
+            return representatives, fallback_stats
         
         # Calcola sessioni totali se prendiamo tutti i rappresentanti default
         total_sessions_with_default = sum(
@@ -3661,11 +3892,19 @@ class EndToEndPipeline:
                 limited_representatives[cluster_id] = selected_reps
                 total_selected_sessions += len(selected_reps)
             
-            return limited_representatives, {
+            result_stats = {
                 'total_sessions_for_review': total_selected_sessions,
                 'excluded_clusters': excluded_small_clusters,
                 'strategy': f'standard_{default_reps_per_cluster}_per_cluster'
             }
+            
+            trace_all("_select_representatives_for_human_review", "EXIT", 
+                     strategy="standard", 
+                     total_sessions_selected=total_selected_sessions,
+                     clusters_selected=len(limited_representatives),
+                     excluded_clusters=excluded_small_clusters)
+            
+            return limited_representatives, result_stats
         
         # Dobbiamo applicare selezione intelligente
         print(f"⚡ Applicazione selezione intelligente (strategia: {selection_strategy})")
@@ -3732,13 +3971,23 @@ class EndToEndPipeline:
         print(f"  👤 Cluster per review: {len(limited_representatives)}")
         print(f"  🚫 Cluster esclusi totali: {excluded_clusters}")
         
-        return limited_representatives, {
+        result_stats = {
             'total_sessions_for_review': total_selected_sessions,
             'excluded_clusters': excluded_clusters,
             'strategy': selection_strategy,
             'budget_used': total_selected_sessions,
             'budget_available': max_sessions
         }
+        
+        trace_all("_select_representatives_for_human_review", "EXIT", 
+                 strategy="intelligent", 
+                 total_sessions_selected=total_selected_sessions,
+                 clusters_selected=len(limited_representatives),
+                 excluded_clusters=excluded_clusters,
+                 budget_used=total_selected_sessions,
+                 budget_available=max_sessions)
+        
+        return limited_representatives, result_stats
     
     def classifica_sessioni_esistenti(self,
                                     session_ids: List[str],
@@ -3776,7 +4025,7 @@ class EndToEndPipeline:
         print(f"📊 Recuperate {len(sessioni)} sessioni valide")
         
         # Classifica le sessioni
-        classification_stats = self.classifica_e_salva_sessioni(
+        classification_stats = self.classifica_e_salva_sessioni_new(
             sessioni, use_ensemble=use_ensemble
         )
         
@@ -4758,38 +5007,6 @@ class EndToEndPipeline:
                      return_value_count=len(predictions), method="FALLBACK")
             return predictions
 
-    def _generate_cluster_info_from_labels(self, cluster_labels: np.ndarray, session_texts: List[str]) -> Dict[int, Dict]:
-        """
-        Genera informazioni cluster dai soli labels HDBSCAN (senza BERTopic riaddestramento)
-        
-        Args:
-            cluster_labels: Labels cluster da HDBSCAN
-            session_texts: Testi delle sessioni
-            
-        Returns:
-            Dizionario con informazioni cluster
-        """
-        cluster_info = {}
-        
-        for cluster_id in set(cluster_labels):
-            if cluster_id == -1:  # Skip outlier
-                continue
-                
-            # Trova sessioni nel cluster
-            cluster_indices = [i for i, label in enumerate(cluster_labels) if label == cluster_id]
-            cluster_texts = [session_texts[i] for i in cluster_indices]
-            
-            # Genera nome cluster semplice
-            cluster_info[cluster_id] = {
-                'size': len(cluster_indices),
-                'intent': f'cluster_{cluster_id}',
-                'intent_string': f'Cluster {cluster_id}',
-                'confidence': 0.8,  # Confidenza media
-                'method': 'HDBSCAN_SIMPLE'
-            }
-            
-        return cluster_info
-
     def _propagate_labels_to_sessions(self, 
                                     sessioni: Dict[str, Dict],
                                     cluster_labels: np.ndarray,
@@ -5191,7 +5408,7 @@ class EndToEndPipeline:
         
         # Fallback: clustering completo
         print(f"🔄 Esecuzione clustering completo come fallback...")
-        return self._esegui_clustering_completo(sessioni)
+        return self.esegui_clustering_puro(sessioni)
     
     def _ha_modello_hdbscan_salvato(self, model_path: str) -> bool:
         """

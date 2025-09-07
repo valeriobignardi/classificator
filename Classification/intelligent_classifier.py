@@ -3160,7 +3160,7 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
                     tools=classification_tools,  # 🔑 AGGIUNTA: Function tools per OpenAI
-                    tool_choice="auto"  # Permette al modello di scegliere quando usare tools
+                    tool_choice={"type": "function", "function": {"name": "classify_conversation"}}  # 🔧 FORZA sempre l'uso del tool classify_conversation
                 )
             
             # Esegui la chiamata asincrona in modo sincrono per compatibilità
@@ -3345,6 +3345,23 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                                 }
                             }
                             
+                            # Log su file tool_batch_openai.log
+                            
+                            log_message = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🔄 [OpenAI Batch] Caricato tool di classificazione: {db_tool['tool_name']}"
+                            
+                            # Determina path del file di log (nella stessa directory del file corrente)
+                            log_file_path = os.path.join(os.path.dirname(__file__), 'tool_batch_openai.log')
+                            
+                            # Salva su file
+                            try:
+                                with open(log_file_path, 'a', encoding='utf-8') as log_file:
+                                    log_file.write(log_message + '\n')
+                            except Exception as log_error:
+                                if self.enable_logging:
+                                    print(f"⚠️ Errore scrittura log su file: {log_error}")
+                            
+                          
+
                             # Aggiorna l'enum dei domain_labels nel tool
                             if (self.domain_labels and 
                                 'properties' in classification_tool['function']['parameters'] and
@@ -6788,6 +6805,8 @@ def create_intelligent_classifier(embedder=None, semantic_memory=None, **kwargs)
             try:
                 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'AIConfiguration'))
                 from ai_configuration_service import AIConfigurationService
+import os
+from datetime import datetime
                 ai_service = AIConfigurationService(use_database=True)
             except ImportError as e:
                 print(f"⚠️ AIConfigurationService non disponibile: {e}")

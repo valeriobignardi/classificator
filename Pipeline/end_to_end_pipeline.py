@@ -6341,8 +6341,23 @@ class EndToEndPipeline:
         Scopo: Classificazione batch usando LLM reale con batch processing per OpenAI
         Input: session_texts, cluster_ids, suggested_labels, base_confidence
         Output: Lista risultati classificazione
-        Data ultima modifica: 2025-01-31
+        Data ultima modifica: 2025-09-07 - Aggiunto tracing
         """
+        trace_all(
+            component="EndToEndPipeline",
+            action="ENTER", 
+            function="_classify_sessions_batch_llm_only",
+            message="Avvio classificazione LLM batch",
+            details={
+                "n_sessions": len(session_texts),
+                "n_cluster_ids": len(cluster_ids),
+                "n_suggested_labels": len(suggested_labels),
+                "base_confidence": base_confidence,
+                "has_ensemble_classifier": hasattr(self, 'ensemble_classifier') and self.ensemble_classifier is not None,
+                "has_llm_classifier": hasattr(self, 'ensemble_classifier') and self.ensemble_classifier and hasattr(self.ensemble_classifier, 'llm_classifier')
+            }
+        )
+        
         results = []
         
         print(f"   🔄 Classificazione LLM ottimizzata per {len(session_texts)} sessioni...")

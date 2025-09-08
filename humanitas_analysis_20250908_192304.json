@@ -1,0 +1,372 @@
+{
+  "success": true,
+  "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+  "tenant_name": "Humanitas",
+  "collection_name": "humanitas_015007d9-d413-11ef-86a5-96000228e7fe",
+  "analysis_date": "2025-09-08T19:23:04.832380",
+  "collection_stats": {
+    "total_documents": 1026,
+    "tenant_documents": 1026,
+    "classification_methods": {
+      "INTELLIGENT_CLUSTERING": 1026
+    }
+  },
+  "representatives": {
+    "total_by_metadata": 0,
+    "total_by_field": 0,
+    "by_classification": {},
+    "sample_documents": []
+  },
+  "outliers": {
+    "total_by_type": 1026,
+    "total_by_metadata": 1026,
+    "by_classification": {
+      "INFO_PRERICOVERO": {
+        "count": 12,
+        "example_sessions": [
+          "a315362365f49a3554146d2e61281434",
+          "7fe7eb89487a28654ea4aba37cc4960c",
+          "09e25e903810f3cb0cf35766383f41e7"
+        ]
+      },
+      "MODIFICA_PRENOTAZIONE": {
+        "count": 9,
+        "example_sessions": [
+          "28bcc756fe3342fb4f06615687c01f21",
+          "db4ad938a842bf40947d1d4c56cd61b0",
+          "523c4630be175d428faaf94f9a520340"
+        ]
+      },
+      "INFO_ESAMI_PRESTAZIONI": {
+        "count": 115,
+        "example_sessions": [
+          "ad7a67b70a31fe7f23116395f653034f",
+          "55848cbaddd5b8e4c5f92473666e5734",
+          "1471c679801cf9c97026ed9c1760b4d4"
+        ]
+      },
+      "PROBLEMA_RITIRO_REFERTI_CARTELLA_CLINICA": {
+        "count": 125,
+        "example_sessions": [
+          "5d58cb38dc42bccb945bf3e286191e34",
+          "1e584100474f0c68ac4455eef2c9a3f7",
+          "1a893422f38c88da448a70341c381dcb"
+        ]
+      },
+      "PARERE_MEDICO": {
+        "count": 14,
+        "example_sessions": [
+          "5fa9e0d5b6106b650dbde9f80c375460",
+          "cdb0e12c8ef336123fc6fd5771071b8c",
+          "bfc29a9bafd4e1ec059620b2e72c2f12"
+        ]
+      },
+      "INDICAZIONI_STRADALI": {
+        "count": 23,
+        "example_sessions": [
+          "fdffc60dffc61fce24d8b6252e68baa4",
+          "bd0a7a9ffbb3a937e0923f3e7c8e36de",
+          "c32cb9a706b07590808849e2535f2d39"
+        ]
+      },
+      "PROBLEMI_FATTURAZIONE": {
+        "count": 13,
+        "example_sessions": [
+          "158e4a044f66a2730b1eca1a31374990",
+          "401b3fc614848856353f35e3ff6266e0",
+          "c96b36a667193e867c1ca92c291b8fa4"
+        ]
+      },
+      "PRENOTAZIONE_ESAMI": {
+        "count": 34,
+        "example_sessions": [
+          "35e54acb98716c6b03c6d5a125599455",
+          "440f7488d7304ba0fc249fc605aea739",
+          "580a71148c2019bbb53c899e503b3384"
+        ]
+      },
+      "PROBLEMI_AMMNISTRATIVI": {
+        "count": 6,
+        "example_sessions": [
+          "70d1537b9e42943771c073c662b5bdc1",
+          "e3cb15eeb8224942b244439a94c265be",
+          "0b8ac18484f8dd635edabe3fc5a64a42"
+        ]
+      },
+      "EMERGENZE": {
+        "count": 3,
+        "example_sessions": [
+          "f43511420524c48ed4766dac1b955a2e",
+          "b05d07af105e54f800d07b146d3ede26",
+          "c2c97f7ffedc8602d5cd36c2a9b7dacb"
+        ]
+      },
+      "CONVENZIONI_VIAGGIO_STRUTTURE_ALBERGHIERE": {
+        "count": 13,
+        "example_sessions": [
+          "bda806cf16743a052d8437f888998558",
+          "5fcc0a59b413ae42fb3e60a4b2f51abb",
+          "c5547b902dadd26e7664674f2f25e23f"
+        ]
+      },
+      "INFO_PARCHEGGIO": {
+        "count": 9,
+        "example_sessions": [
+          "33a8ba16c4ed893db465cbaadbd1957c",
+          "a643b8d1f0f3bd3396803d24e514c5c9",
+          "167c81572eb730a0b01f7e8e7e1347a6"
+        ]
+      },
+      "INFO_INTERVENTI": {
+        "count": 15,
+        "example_sessions": [
+          "b116c3de500f29039ae0e58402fab697",
+          "7925c39404397565b3b6810c1c11fd1f",
+          "012eb40eec4a5f3fffb260c6fe41cf88"
+        ]
+      },
+      "INFO_FERTILITY_CENTER": {
+        "count": 19,
+        "example_sessions": [
+          "7b18049864f9aa50f531a08f3d2d4f64",
+          "153add0b12ddf3644d6d545a87dac87c",
+          "4bf6e1707df50d5d529b6d414512334c"
+        ]
+      },
+      "INFO_CERTIFICATI": {
+        "count": 11,
+        "example_sessions": [
+          "92a23aa9c5edfdc38542e7aa96ec7750",
+          "05af086db01ecb9c5d975a06b1f71a2e",
+          "adfb454a0cb1fbfee99dfab43aebfdd4"
+        ]
+      },
+      "PROBLEMI_TECNICI": {
+        "count": 9,
+        "example_sessions": [
+          "a9da34f5fafa29be8438a2cb5718d890",
+          "e2e451a98a2544b5a3f81055cc82daec",
+          "3f6dde335ad5e965946c6c537ca9e786"
+        ]
+      },
+      "CANCELLAZIONE_PRENOTAZIONE": {
+        "count": 12,
+        "example_sessions": [
+          "5418c86d5b403f70446b293223cbacdb",
+          "9518e21c33e5ac5717d5b5d1b7169945",
+          "97295f8e88522e365aeab0069121a7c6"
+        ]
+      },
+      "NORME_PREPARAZIONE_ESAME": {
+        "count": 22,
+        "example_sessions": [
+          "1a473940b817800ce4742413359c5f62",
+          "352a5b2dac1658e065cdedaac6093819",
+          "705884983bfe1ca92fdeea2b79ca240f"
+        ]
+      },
+      "RICHIESTA_RITIRO_REFERTI_CARTELLA_CLINICA": {
+        "count": 85,
+        "example_sessions": [
+          "4f5f5a6c71d8c82c3eb1eef140069155",
+          "953cb28b2c279b94fbeba763787a2dbd",
+          "84fcf2f091b6eaae4a7f28413b59a43e"
+        ]
+      },
+      "STRUTTURE_CONVENZIONATE_ALBERGHIERE": {
+        "count": 12,
+        "example_sessions": [
+          "f6e9af6f27069a9e14ad35204fd6d072",
+          "3785810fb6cb2fc9c4217179aca36502",
+          "d1c47ef5f54e8e6553264afcd71e111d"
+        ]
+      },
+      "INFO_AMMINISTRATIVE": {
+        "count": 26,
+        "example_sessions": [
+          "6b49300ad16417ffb0d20e4604d48ba4",
+          "d61861cc8016b705f6e835464fe75b3d",
+          "78bbf6e86d1acce4d9fda6096a8e091e"
+        ]
+      },
+      "PROBLEMA_ACCESSO_PORTALE": {
+        "count": 114,
+        "example_sessions": [
+          "76e231b0f239319807200fd6f81c06f5",
+          "918deed0efd36382af96719058e7d48c",
+          "91d888ebcc1691d8f77da0e3c44ab46f"
+        ]
+      },
+      "PROBLEMI_PRENOTAZIONE": {
+        "count": 36,
+        "example_sessions": [
+          "2470c78e36aa69100ca8b0eab9f3cf05",
+          "148e680c70cb55afcc9f6d2b72d4021b",
+          "7def947ae143b8fae5e54d5bba6d4139"
+        ]
+      },
+      "CAMBIO_ANAGRAFICA": {
+        "count": 10,
+        "example_sessions": [
+          "945de465873f59ca7b5ed55f1f3e0a1c",
+          "d323806e72b99dc622596415ed5988c3",
+          "aa478925d3b2537e8375d12a0a01a048"
+        ]
+      },
+      "ALTRO": {
+        "count": 180,
+        "example_sessions": [
+          "9b8fe4db53c9186c4b37c3e9ea5a702c",
+          "7a467e2d79c2c70de2acdd67921ba503",
+          "3060615e4137d08b3560da4e126f2170"
+        ]
+      },
+      "INFO_RICOVERO": {
+        "count": 10,
+        "example_sessions": [
+          "87bb36873543fb8e7b2449a4b6a743a5",
+          "f015c153d69041526e58b2151a867abd",
+          "cb9c85c3159b8b244bd5214afc222080"
+        ]
+      },
+      "INFO_CONTATTI_MEDICO": {
+        "count": 89,
+        "example_sessions": [
+          "f34a9f086925de6d1112788adbab825c",
+          "a40a448fbad4480d5e713448a9df7843",
+          "1a882828db04db7ed48045e5464db3e1"
+        ]
+      }
+    },
+    "sample_documents": [
+      {
+        "_id": "68bf1dd434ea2bca071edb0a",
+        "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+        "session_id": "35e54acb98716c6b03c6d5a125599455",
+        "classification": "PRENOTAZIONE_ESAMI",
+        "classification_LLM": "PRENOTAZIONE_ESAMI",
+        "classification_method": "INTELLIGENT_CLUSTERING",
+        "classification_type": "OUTLIER",
+        "classified_at": "2025-09-08T18:17:56.203828",
+        "classified_by": "intelligent_clustering",
+        "confidence": 1.0,
+        "confidence_disagreement": 0.0,
+        "created_at": "2025-09-08T18:17:56.203828",
+        "disagreement": false,
+        "disagreement_score": 0.0,
+        "embedding": [],
+        "embedding_model": "no_embedding",
+        "human_reviewed": false,
+        "llm_confidence": 1.0,
+        "llm_prediction": "PRENOTAZIONE_ESAMI",
+        "llm_reasoning": "Richiesta di prenotazione per una visita medica specifica",
+        "metadata": {
+          "cluster_id": -1,
+          "is_representative": false,
+          "representative": false,
+          "outlier": true,
+          "propagated": false
+        },
+        "motivazione": "Richiesta di prenotazione per una visita medica specifica",
+        "notes": "",
+        "precision_LLM": 1.0,
+        "predicted_label": "PRENOTAZIONE_ESAMI",
+        "review_status": "auto_classified",
+        "session_type": "outlier",
+        "tenant_name": "Humanitas",
+        "tenant_slug": "humanitas",
+        "testo_completo": "[UTENTE] Vorrei prenotare una visita urologica [ASSISTENTE] Per prenotare una visita urologica presso l'Istituto Clinico Humanitas, puoi utilizzare i seguenti canali di prenotazione:\n\n1. **Privatamente con fondi e assicurazioni**:\n   - Online, da [Humanitas con te](https://www.humanitasconte.it);\n   - Telefonicamente contattando il numero 02 82 24 82 24, dal lunedì al venerdì dalle 8:00 alle 19:00, il sabato dalle 8:00 alle 13:00, esclusi i festivi.\n\n2. **Con il Servizio Sanitario Nazionale (SSN)**:\n   - Tramite i canali di prenotazione di Regione Lombardia:\n     - Online, collegandoti al servizio [Prenotazione Online di Regione Lombardia](http://prenotasalute.regione.lombardia.it/);\n     - Telefonicamente, chiamando il numero verde di Regione Lombardia da rete fissa 800 63 86 38 oppure il numero 02 99 95 99 da rete mobile, dal lunedì al sabato dalle 8:00 alle 20:00, esclusi i festivi;\n     - Chiamando il numero Humanitas 02 82 24 82 82, dal lunedì al venerdì dalle 9:00 alle 17:00, esclusi i festivi.\n\nPer ulteriori informazioni puoi visitare la pagina [Prenotazioni](https://www.humanitas.it/info/prenotazioni/).",
+        "updated_at": "2025-09-08T18:17:56.204073"
+      },
+      {
+        "_id": "68bf1dd734ea2bca071edb11",
+        "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+        "session_id": "2470c78e36aa69100ca8b0eab9f3cf05",
+        "classification": "PROBLEMI_PRENOTAZIONE",
+        "classification_LLM": "PROBLEMI_PRENOTAZIONE",
+        "classification_method": "INTELLIGENT_CLUSTERING",
+        "classification_type": "OUTLIER",
+        "classified_at": "2025-09-08T18:17:59.429959",
+        "classified_by": "intelligent_clustering",
+        "confidence": 0.9,
+        "confidence_disagreement": 0.0,
+        "created_at": "2025-09-08T18:17:59.429959",
+        "disagreement": false,
+        "disagreement_score": 0.0,
+        "embedding": [],
+        "embedding_model": "no_embedding",
+        "human_reviewed": false,
+        "llm_confidence": 0.9,
+        "llm_prediction": "PROBLEMI_PRENOTAZIONE",
+        "llm_reasoning": "L'utente ha problemi con la prenotazione di una visita online, non avendo ricevuto il link e le istruzioni necessarie.",
+        "metadata": {
+          "cluster_id": -1,
+          "is_representative": false,
+          "representative": false,
+          "outlier": true,
+          "propagated": false
+        },
+        "motivazione": "L'utente ha problemi con la prenotazione di una visita online, non avendo ricevuto il link e le istruzioni necessarie.",
+        "notes": "",
+        "precision_LLM": 0.9,
+        "predicted_label": "PROBLEMI_PRENOTAZIONE",
+        "review_status": "auto_classified",
+        "session_type": "outlier",
+        "tenant_name": "Humanitas",
+        "tenant_slug": "humanitas",
+        "testo_completo": "[UTENTE] Ho prenotato una prima visita che dovrebbe essere online ma non ho capito come si svolgerà e qual è il link [ASSISTENTE] Il giorno successivo alla prenotazione della televisita, riceverai un'email contenente il link alla piattaforma per la visita e le istruzioni per autenticarti e accettare la privacy. Il giorno dell'appuntamento, accedi alla piattaforma cliccando sul link fornito, e verrai messo in collegamento video con lo specialista. Durante la visita, il medico analizzerà i tuoi sintomi e i documenti caricati, fornendoti un referto digitale al termine【6:0†FAQ TELEVISITA.docx】.\n\nPer maggiori informazioni, puoi visitare la pagina dedicata alla [televisita](https://www.humanitas.it/visite-ed-esami/televisita/).",
+        "updated_at": "2025-09-08T18:17:59.430203"
+      },
+      {
+        "_id": "68bf1dda34ea2bca071edb16",
+        "tenant_id": "015007d9-d413-11ef-86a5-96000228e7fe",
+        "session_id": "9b8fe4db53c9186c4b37c3e9ea5a702c",
+        "classification": "ALTRO",
+        "classification_LLM": "ALTRO",
+        "classification_method": "INTELLIGENT_CLUSTERING",
+        "classification_type": "OUTLIER",
+        "classified_at": "2025-09-08T18:18:02.660127",
+        "classified_by": "intelligent_clustering",
+        "confidence": 0.3,
+        "confidence_disagreement": 0.0,
+        "created_at": "2025-09-08T18:18:02.660127",
+        "disagreement": false,
+        "disagreement_score": 0.0,
+        "embedding": [],
+        "embedding_model": "no_embedding",
+        "human_reviewed": false,
+        "llm_confidence": 0.3,
+        "llm_prediction": "ALTRO",
+        "llm_reasoning": "La conversazione è incompleta e non fornisce abbastanza informazioni per determinare l'intento principale. L'utente menziona una prenotazione, ma non è chiaro se si tratta di una richiesta di modifica, cancellazione o altro.",
+        "metadata": {
+          "cluster_id": -1,
+          "is_representative": false,
+          "representative": false,
+          "outlier": true,
+          "propagated": false
+        },
+        "motivazione": "La conversazione è incompleta e non fornisce abbastanza informazioni per determinare l'intento principale. L'utente menziona una prenotazione, ma non è chiaro se si tratta di una richiesta di modifica, cancellazione o altro.",
+        "notes": "",
+        "precision_LLM": 0.3,
+        "predicted_label": "ALTRO",
+        "review_status": "auto_classified",
+        "session_type": "outlier",
+        "tenant_name": "Humanitas",
+        "tenant_slug": "humanitas",
+        "testo_completo": "[UTENTE] Ciao  [ASSISTENTE] Ciao! Come posso esserti utile? 😊 [UTENTE] Si  [ASSISTENTE] Perfetto! Dimmi pure, come posso aiutarti? 😊 [UTENTE] ho prenotato per il 15 settembre con il Dr. Lamberto Zocchi la prestazione elencata come “Mapping Nevi Computerizzato – Dermatologia”. Vorrei cortesemente conferma che l’esame verrà eseguito utilizzando il sistema FotoFinder e che le immagini (panoramiche e dermoscopiche) verranno messe a disposizione del paziente in formato digitale o cartaceo. [ASSISTENTE] Non ho accesso a informazioni specifiche sulle modalità di esecuzione degli esami o sui dettagli delle prenotazioni. Ti consiglio di contattare direttamente il reparto di dermatologia o il servizio prenotazioni per ottenere conferma sull'utilizzo del sistema FotoFinder e sulla disponibilità delle immagini in formato digitale o cartaceo.\n\nPuoi contattare il numero 02 82 24 82 24 per prenotazioni private o il numero 02 82 24 82 82 per prenotazioni tramite SSN. Per ulteriori informazioni, puoi visitare la pagina [Prenotazioni](https://www.humanitas.it/info/prenotazioni/).",
+        "updated_at": "2025-09-08T18:18:02.660366"
+      }
+    ]
+  },
+  "propagated": {
+    "total_propagated": 0,
+    "by_classification": {},
+    "sample_documents": []
+  },
+  "summary": {
+    "total_representatives": 0,
+    "total_outliers": 1026,
+    "total_propagated": 0,
+    "total_documents": 1026
+  }
+}

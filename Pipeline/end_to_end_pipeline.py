@@ -26,8 +26,10 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'LLMCla
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'HumanReview'))
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'LabelDeduplication'))
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Models'))
 
 from lettore import LettoreConversazioni
+from documento_processing import DocumentoProcessing
 from session_aggregator import SessionAggregator
 # RIMOSSO: from labse_embedder import LaBSEEmbedder - Ora usa simple_embedding_manager
 from hdbscan_clusterer import HDBSCANClusterer
@@ -1089,11 +1091,11 @@ class EndToEndPipeline:
             
             return None
 
-    def esegui_clustering(self, sessioni: Dict[str, Dict], force_reprocess: bool = False) -> tuple:
+    def esegui_clustering(self, sessioni: Dict[str, Dict], force_reprocess: bool = False) -> List[DocumentoProcessing]:
         """
-        Esegue il clustering delle sessioni con approccio intelligente multi-livello:
+        Esegue il clustering delle sessioni con approccio unificato DocumentoProcessing:
         
-        NUOVO: Supporta clustering incrementale vs completo
+        🚀 NUOVO: Restituisce lista di oggetti DocumentoProcessing invece di tuple
         - force_reprocess=False: Usa clustering incrementale se modello disponibile
         - force_reprocess=True: Clustering completo da zero
         
@@ -1107,13 +1109,16 @@ class EndToEndPipeline:
             force_reprocess: Se True, forza clustering completo
             
         Returns:
-            Tuple (embeddings, cluster_labels, representatives, suggested_labels)
+            List[DocumentoProcessing]: Lista di oggetti con tutti i metadati
+            
+        Autore: Valerio Bignardi
+        Data ultima modifica: 2025-09-08 - Implementazione DocumentoProcessing unificato
         """
         trace_all("esegui_clustering", "ENTER", 
                  num_sessioni=len(sessioni), force_reprocess=force_reprocess)
         
         start_time = time.time()
-        print(f"\n🚀 Avvio clustering intelligente...")
+        print(f"\n🚀 [FASE 4: CLUSTERING UNIFICATO] Avvio clustering con oggetti DocumentoProcessing...")
         print(f"📊 Dataset: {len(sessioni)} sessioni")
         print(f"🎯 Modalità: {'COMPLETO' if force_reprocess else 'INTELLIGENTE'}")
         
@@ -1123,48 +1128,70 @@ class EndToEndPipeline:
         
         if force_reprocess:
             print(f"🔄 [FASE 4: CLUSTERING] Clustering completo da zero...")
-            result = self.esegui_clustering_puro(sessioni)
+            documenti = self.esegui_clustering_puro(sessioni)
         else:
             print(f"🧠 [FASE 4: CLUSTERING] Clustering incrementale (se possibile)...")
-            result = self.esegui_clustering_puro(sessioni)  # Per ora sempre completo
+            documenti = self.esegui_clustering_puro(sessioni)  # Per ora sempre completo
         
-        # Calcola statistiche finali
-        embeddings, cluster_labels, representatives, suggested_labels = result
-        n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
-        n_outliers = list(cluster_labels).count(-1)
-        n_representatives = sum(len(reps) for reps in representatives.values())
+        # 📊 Calcola statistiche finali dai documenti
+        n_rappresentanti = sum(1 for doc in documenti if doc.is_representative)
+        n_propagati = sum(1 for doc in documenti if doc.is_propagated)
+        n_outliers = sum(1 for doc in documenti if doc.is_outlier)
         
-        # 🆕 DEBUG DETTAGLIATO RISULTATI CLUSTERING
-        total_sessions = len(cluster_labels)
-        unique_clusters = set(cluster_labels)
+        # Calcola cluster unici (escludendo outliers)
+        cluster_ids = set(doc.cluster_id for doc in documenti if not doc.is_outlier and doc.cluster_id is not None)
+        n_clusters = len(cluster_ids)
         
-        print(f"\n🔍 [FASE 4: DEBUG] ANALISI DETTAGLIATA CLUSTERING:")
-        print(f"   📊 Sessioni totali processate: {total_sessions}")
-        print(f"   🎯 Cluster identificati: {unique_clusters}")
-        print(f"   📈 Cluster validi (>= 0): {n_clusters}")
-        print(f"   🔍 Outliers (-1): {n_outliers}")
-        print(f"   📋 Representatives generati: {n_representatives}")
-        print(f"   🏷️ Suggested labels: {len(suggested_labels)}")
+        # Calcola statistiche per cluster
+        cluster_stats = {}
+        for doc in documenti:
+            if not doc.is_outlier and doc.cluster_id is not None:
+                cluster_id = doc.cluster_id
+                if cluster_id not in cluster_stats:
+                    cluster_stats[cluster_id] = {
+                        'size': 0,
+                        'representatives': 0,
+                        'propagated': 0,
+                        'confidences': []
+                    }
+                
+                cluster_stats[cluster_id]['size'] += 1
+                if doc.is_representative:
+                    cluster_stats[cluster_id]['representatives'] += 1
+                elif doc.is_propagated:
+                    cluster_stats[cluster_id]['propagated'] += 1
+                
+                if doc.confidence is not None:
+                    cluster_stats[cluster_id]['confidences'].append(doc.confidence)
         
-        # Debug distribuzione cluster
-        if total_sessions > 0:
-            outlier_percentage = (n_outliers / total_sessions * 100)
-            clustered_percentage = ((total_sessions - n_outliers) / total_sessions * 100)
+        print(f"\n🔍 [FASE 4: DEBUG] ANALISI OGGETTI DOCUMENTOPROCESSING:")
+        print(f"   📊 Documenti totali processati: {len(documenti)}")
+        print(f"   🎯 Cluster identificati: {n_clusters}")
+        print(f"   � Rappresentanti: {n_rappresentanti}")
+        print(f"   � Propagati: {n_propagati}")
+        print(f"   🔍 Outliers: {n_outliers}")
+        
+        # Debug distribuzione percentuali
+        if len(documenti) > 0:
+            repr_percentage = (n_rappresentanti / len(documenti) * 100)
+            prop_percentage = (n_propagati / len(documenti) * 100) 
+            outlier_percentage = (n_outliers / len(documenti) * 100)
+            clustered_percentage = ((len(documenti) - n_outliers) / len(documenti) * 100)
             
-            print(f"   📊 Distribuzione clustering:")
-            print(f"     ✅ Clusterizzate: {total_sessions - n_outliers} ({clustered_percentage:.1f}%)")
+            print(f"   📊 Distribuzione documenti:")
+            print(f"     👥 Rappresentanti: {n_rappresentanti} ({repr_percentage:.1f}%)")
+            print(f"     🔄 Propagati: {n_propagati} ({prop_percentage:.1f}%)")
+            print(f"     ✅ Clusterizzati: {len(documenti) - n_outliers} ({clustered_percentage:.1f}%)")
             print(f"     🔍 Outliers: {n_outliers} ({outlier_percentage:.1f}%)")
             
-            # Analisi per cluster specifico
-            if n_clusters > 0:
-                cluster_sizes = {}
-                for label in cluster_labels:
-                    if label != -1:
-                        cluster_sizes[label] = cluster_sizes.get(label, 0) + 1
-                
-                print(f"   📈 Dimensioni cluster:")
-                for cluster_id, size in sorted(cluster_sizes.items()):
-                    print(f"     🎯 Cluster {cluster_id}: {size} sessioni")
+            # Dettagli per cluster
+            if cluster_stats:
+                print(f"   📈 Dettagli cluster:")
+                for cluster_id, stats in sorted(cluster_stats.items()):
+                    avg_confidence = sum(stats['confidences']) / len(stats['confidences']) if stats['confidences'] else 0.0
+                    print(f"     🎯 Cluster {cluster_id}: {stats['size']} tot "
+                          f"({stats['representatives']} rapp, {stats['propagated']} prop, "
+                          f"conf: {avg_confidence:.2f})")
             
             # 🚨 ANALISI QUALITÀ CLUSTERING
             if outlier_percentage > 80:
@@ -1175,25 +1202,26 @@ class EndToEndPipeline:
                 print(f"   ✅ BUONO: {outlier_percentage:.1f}% outliers - clustering accettabile")
         
         elapsed_time = time.time() - start_time
-        print(f"✅ Clustering completato in {elapsed_time:.2f}s")
-        print(f"📈 Risultati finali del clustering:")
+        print(f"\n✅ [FASE 4: COMPLETATO] Clustering unificato completato in {elapsed_time:.2f}s")
+        print(f"📈 Risultati finali DocumentoProcessing:")
+        print(f"   📊 Documenti elaborati: {len(documenti)}")
         print(f"   🎯 Cluster trovati: {n_clusters}")
+        print(f"   👥 Rappresentanti: {n_rappresentanti}")
+        print(f"   🔄 Propagati: {n_propagati}")
         print(f"   🔍 Outliers: {n_outliers}")
-        print(f"   👥 Rappresentanti: {n_representatives}")
-        print(f"   🏷️ Etichette generate: {len(suggested_labels)}")
         
         # 🚨 EARLY WARNING se clustering sembra fragile
         if n_clusters == 0:
             print(f"\n❌ [WARNING] CLUSTERING POTENZIALMENTE FALLITO!")
-            print(f"   🔍 Tutti i {total_sessions} punti sono outlier")
+            print(f"   🔍 Tutti i {len(documenti)} documenti sono outlier")
             print(f"   💡 Il training supervisionato verrà interrotto")
         elif n_clusters < 2:
             print(f"\n⚠️ [WARNING] CLUSTERING DEBOLE!")
             print(f"   🎯 Solo {n_clusters} cluster trovato")
             print(f"   💡 Diversità limitata per training ML")
         
-        trace_all("esegui_clustering", "EXIT", return_value=result)
-        return result
+        trace_all("esegui_clustering", "EXIT", documents_returned=len(documenti))
+        return documenti
     
     def esegui_clustering_puro(self, sessioni: Dict[str, Dict]) -> tuple:
         """
@@ -1381,15 +1409,49 @@ class EndToEndPipeline:
                         'classification_method': 'hdbscan'
                     }
         
-        # Genera rappresentanti per ogni cluster (selezione intelligente)
-        representatives = {}
-        suggested_labels = {}
+        # 🚀 NUOVO: Crea oggetti DocumentoProcessing per tutti i documenti
         session_ids = list(sessioni.keys())
+        documenti = []
+        
+        print(f"\n🔄 [FASE 4: CREAZIONE OGGETTI] Creando {len(session_ids)} oggetti DocumentoProcessing...")
+        
+        # Crea un oggetto DocumentoProcessing per ogni sessione
+        for i, session_id in enumerate(session_ids):
+            # Crea oggetto base con dati originali
+            documento = DocumentoProcessing(
+                session_id=session_id,
+                testo_completo=sessioni[session_id].get('testo_completo', ''),
+                embedding=embeddings[i].tolist() if i < len(embeddings) else None
+            )
+            
+            # Imposta informazioni clustering
+            cluster_id = cluster_labels[i] if i < len(cluster_labels) else -1
+            cluster_size = 0
+            is_outlier = (cluster_id == -1)
+            
+            # Calcola dimensione cluster se non è outlier
+            if not is_outlier and cluster_id in cluster_info:
+                cluster_size = cluster_info[cluster_id]['size']
+            
+            documento.set_clustering_info(cluster_id, cluster_size, is_outlier)
+            
+            # Aggiungi info sulla classificazione se disponibile (da intelligent clustering)
+            if not is_outlier and cluster_id in cluster_info:
+                info = cluster_info[cluster_id]
+                if 'average_confidence' in info:
+                    documento.confidence = info['average_confidence']
+                if 'classification_method' in info:
+                    documento.classification_method = info['classification_method']
+                if 'intent_string' in info:
+                    documento.predicted_label = info['intent_string']
+            
+            documenti.append(documento)
+        
+        # 🎯 Seleziona rappresentanti per ogni cluster
+        print(f"\n🎯 [FASE 4: RAPPRESENTANTI] Selezionando rappresentanti per {len(cluster_info)} cluster...")
         
         for cluster_id, info in cluster_info.items():
-            # Trova rappresentanti per questo cluster
             cluster_indices = info['indices']
-            cluster_representatives = []
             
             # Selezione intelligente dei rappresentanti (più diversi possibile)
             if len(cluster_indices) <= 3:
@@ -1420,42 +1482,56 @@ class EndToEndPipeline:
                     if best_idx != -1:
                         selected_indices.append(best_idx)
             
+            # Marca i documenti selezionati come rappresentanti
             for idx in selected_indices:
-                session_id = session_ids[idx]
-                session_data = sessioni[session_id].copy()
-                session_data['session_id'] = session_id
+                documenti[idx].set_as_representative(f"diverse_selection_cluster_{cluster_id}")
                 
-                # Aggiungi info sulla classificazione se disponibile
-                if 'average_confidence' in info:
-                    session_data['classification_confidence'] = info['average_confidence']
-                if 'classification_method' in info:
-                    session_data['classification_method'] = info['classification_method']
-                    
-                cluster_representatives.append(session_data)
-            
-            representatives[cluster_id] = cluster_representatives
-            
-            # Genera etichetta suggerita basata su intent
-            if 'intent_string' in info:
-                suggested_labels[cluster_id] = info['intent_string']
-            elif 'intent' in info:
-                suggested_labels[cluster_id] = info['intent'].replace('_', ' ').title()
-            else:
-                # Fallback generico
-                suggested_labels[cluster_id] = f"Cluster {cluster_id}"
+        # 🔄 Applica propagazione intelligente usando funzione esistente
+        print(f"\n🔄 [FASE 4: PROPAGAZIONE] Applicando propagazione intelligente...")
         
-        # ✅ OUTLIER GESTITI AUTOMATICAMENTE
-        # Gli outlier non hanno bisogno di "rappresentanti" artificiali perché:
-        # 1. Vengono classificati individualmente con ensemble ML+LLM in fase runtime
-        # 2. Non beneficiano della propagazione (sono rappresentanti di se stessi)
-        # 3. Il review umano si concentra sui cluster veri per il training supervisionato
-        outlier_indices = [i for i, label in enumerate(cluster_labels) if label == -1]
-        n_outliers = len(outlier_indices)
+        # Raggruppa rappresentanti per cluster per applicare logica di propagazione
+        cluster_representatives = {}
+        for doc in documenti:
+            if doc.is_representative and not doc.is_outlier:
+                if doc.cluster_id not in cluster_representatives:
+                    cluster_representatives[doc.cluster_id] = []
+                
+                # Crea dict compatibile con funzione esistente _determine_propagated_status
+                rep_dict = {
+                    'session_id': doc.session_id,
+                    'human_reviewed': doc.human_reviewed,
+                    'classification': doc.predicted_label or doc.propagated_label
+                }
+                cluster_representatives[doc.cluster_id].append(rep_dict)
         
-        if n_outliers > 0:
-            print(f"🔍 Trovati {n_outliers} outlier - verranno classificati individualmente con ensemble ML+LLM")
+        # Applica propagazione ai membri di ogni cluster
+        for cluster_id in cluster_info.keys():
+            if cluster_id in cluster_representatives:
+                # Usa funzione esistente per determinare status propagazione
+                propagated_status = self._determine_propagated_status(
+                    cluster_representatives[cluster_id]
+                )
+                
+                # Applica ai documenti non-rappresentanti del cluster
+                for doc in documenti:
+                    if (doc.cluster_id == cluster_id and 
+                        not doc.is_representative and 
+                        not doc.is_outlier):
+                        
+                        if not propagated_status['needs_review']:
+                            # Auto-classifica con propagazione
+                            doc.set_as_propagated(
+                                propagated_from=cluster_id,
+                                propagated_label=propagated_status['propagated_label'],
+                                consensus=0.7,  # Default consensus per nuovi cluster
+                                reason=propagated_status['reason']
+                            )
         
-        # Statistiche clustering avanzate
+        
+        # 📊 Calcola statistiche finali dai documenti elaborati
+        n_rappresentanti = sum(1 for doc in documenti if doc.is_representative)
+        n_propagati = sum(1 for doc in documenti if doc.is_propagated)  
+        n_outliers = sum(1 for doc in documenti if doc.is_outlier)
         n_clusters = len(cluster_info)
         
         # Calcola statistiche di confidenza se disponibili
@@ -1471,37 +1547,46 @@ class EndToEndPipeline:
         if n_clusters > 0:
             avg_confidence /= n_clusters
         
-        print(f"✅ Clustering intelligente completato!")
-        print(f"  📊 Cluster trovati: {n_clusters}")
+        print(f"\n✅ [FASE 4: COMPLETATO] Clustering intelligente con oggetti unificati!")
+        print(f"  📊 Documenti totali: {len(documenti)}")
+        print(f"  🎯 Cluster trovati: {n_clusters}")
+        print(f"  � Rappresentanti: {n_rappresentanti}")
+        print(f"  🔄 Propagati: {n_propagati}")
         print(f"  🔍 Outliers: {n_outliers}")
-        print(f"  🏷️  Etichette suggerite: {len(suggested_labels)}")
         print(f"  🎯 Confidenza media: {avg_confidence:.2f}")
         print(f"  🌟 Cluster alta confidenza: {high_confidence_clusters}/{n_clusters}")
         
-        # Mostra dettagli dei cluster trovati
+        # Mostra dettagli dei cluster trovati con conteggi accurati
         for cluster_id, info in cluster_info.items():
             intent_string = info.get('intent_string', info.get('intent', 'N/A'))
             confidence = info.get('average_confidence', 0.0)
             method = info.get('classification_method', 'unknown')
-            print(f"    - Cluster {cluster_id}: {intent_string} ({info['size']} conv., conf: {confidence:.2f}, metodo: {method})")
+            
+            # Conteggi accurati per cluster
+            cluster_docs = [doc for doc in documenti if doc.cluster_id == cluster_id]
+            cluster_rappresentanti = [doc for doc in cluster_docs if doc.is_representative]
+            cluster_propagati = [doc for doc in cluster_docs if doc.is_propagated]
+            
+            print(f"    - Cluster {cluster_id}: {intent_string} ({len(cluster_docs)} tot, "
+                  f"{len(cluster_rappresentanti)} rapp, {len(cluster_propagati)} prop, "
+                  f"conf: {confidence:.2f}, metodo: {method})")
         
         # Salva i dati dell'ultimo clustering per le visualizzazioni
         self._last_embeddings = embeddings
         self._last_cluster_labels = cluster_labels
         
         # Genera cluster info usando i session texts
-        session_texts = [sessioni[sid].get('testo_completo', '') for sid in list(sessioni.keys())]
+        session_texts = [doc.testo_completo for doc in documenti]
         self._last_cluster_info = self._generate_cluster_info_from_labels(cluster_labels, session_texts)
         
-        # NUOVA FUNZIONALITÀ: Visualizzazione grafica cluster
+        # NUOVA FUNZIONALITÀ: Visualizzazione grafica cluster  
         try:
             from Utils.cluster_visualization import ClusterVisualizationManager
             
             visualizer = ClusterVisualizationManager()
-            session_texts = [sessioni[sid].get('testo_completo', '') for sid in list(sessioni.keys())]
             
             # Visualizzazione per PARAMETRI CLUSTERING (senza etichette finali)
-            print("\n🎨 GENERAZIONE VISUALIZZAZIONI PARAMETRI CLUSTERING...")
+            print(f"\n🎨 [FASE 4: VISUALIZZAZIONE] Generando visualizzazioni...")
             visualization_results = visualizer.visualize_clustering_parameters(
                 embeddings=embeddings,
                 cluster_labels=cluster_labels,
@@ -1520,18 +1605,21 @@ class EndToEndPipeline:
         model_path = f"models/hdbscan_{self.tenant_id}.pkl"
         if hasattr(self.clusterer, 'save_model_for_incremental_prediction'):
             saved = self.clusterer.save_model_for_incremental_prediction(model_path, self.tenant_id)
-        if saved:
-            print(f"💾 Modello HDBSCAN salvato per predizioni incrementali: {model_path}")
-        else:
-            print(f"⚠️ Impossibile salvare modello HDBSCAN")
+            if saved:
+                print(f"💾 Modello HDBSCAN salvato per predizioni incrementali: {model_path}")
+            else:
+                print(f"⚠️ Impossibile salvare modello HDBSCAN")
         
-        result = (embeddings, cluster_labels, representatives, suggested_labels)
+        # 🚀 NUOVO RETURN: Lista di oggetti DocumentoProcessing invece di tuple
+        print(f"\n🚀 [FASE 4: RETURN] Restituendo {len(documenti)} oggetti DocumentoProcessing unificati")
+        
         trace_all("esegui_clustering_puro", "EXIT", 
-                 embeddings_shape=embeddings.shape if hasattr(embeddings, 'shape') else len(embeddings),
-                 cluster_labels_count=len(cluster_labels),
-                 representatives_clusters=len(representatives),
-                 suggested_labels_count=len(suggested_labels))
-        return result    # ❌ METODO NON UTILIZZATO - COMMENTATO 2025-09-06
+                 documents_count=len(documenti),
+                 representatives_count=n_rappresentanti,
+                 propagated_count=n_propagati,
+                 outliers_count=n_outliers)
+        
+        return documenti  # 🚀 NUOVO: Restituisce lista di oggetti DocumentoProcessing
 
 
 
@@ -2023,6 +2111,21 @@ class EndToEndPipeline:
                                  use_ensemble: bool = True,
                                  force_review: bool = False) -> Dict[str, Any]:
         """
+        🚫 LEGACY-NON IN USO - SOSTITUITA DA classifica_e_salva_documenti_unified()
+        
+        ATTENZIONE: Questa funzione è stata SOSTITUITA dalla nuova implementazione 
+        DocumentoProcessing che gestisce classificazione e salvataggio unificati.
+        
+        La nuova implementazione offre:
+        ✅ Pipeline unificata classificazione+salvataggio
+        ✅ Gestione metadati DocumentoProcessing completa
+        ✅ Controllo rappresentanti con stato review
+        ✅ Salvataggio atomico di tutti i metadati
+        ✅ Logging dettagliato del processo
+        
+        NON UTILIZZARE QUESTA FUNZIONE - Mantenuta solo per riferimento storico.
+        
+        [DOCUMENTAZIONE ORIGINALE]
         Funzione pura di salvataggio: salva solo le classificazioni nel database MongoDB.
         Responsabilità: Solo persistenza dati, nessuna logica di classificazione.
         
@@ -2190,6 +2293,21 @@ class EndToEndPipeline:
                                  embeddings: Optional[np.ndarray] = None,
                                  cluster_labels: Optional[np.ndarray] = None,
                                  cluster_info: Optional[Dict] = None) -> List[Dict]:
+        """
+        🚫 LEGACY-NON IN USO - SOSTITUITA DA _classify_documents_batch()
+        
+        ATTENZIONE: Questa funzione è stata SOSTITUITA dalla nuova implementazione 
+        DocumentoProcessing che usa _classify_documents_batch().
+        
+        La nuova implementazione offre:
+        ✅ Controllo stato ML ensemble
+        ✅ Gestione primo avvio vs successivi
+        ✅ Validazione speciale tag "altro"
+        ✅ Pulizia caratteri speciali automatica
+        ✅ Debug avanzato con pre-controlli
+        
+        NON UTILIZZARE QUESTA FUNZIONE - Mantenuta solo per riferimento storico.
+        """
         """
         Classifica solo le sessioni usando l'ensemble classifier.
         Responsabilità: Solo classificazione, nessun salvataggio.
@@ -2482,6 +2600,21 @@ class EndToEndPipeline:
                                        cluster_labels: Optional[np.ndarray] = None,
                                        cluster_info: Optional[Dict] = None) -> Dict[str, Any]:
         """
+        🚫 LEGACY-NON IN USO - SOSTITUITA DA classifica_e_salva_documenti_unified()
+        
+        ATTENZIONE: Questa funzione è stata SOSTITUITA dalla nuova implementazione 
+        DocumentoProcessing che offre gestione unificata completa.
+        
+        La nuova implementazione offre:
+        ✅ Oggetti DocumentoProcessing con tutti i metadati
+        ✅ Pipeline completa clustering→classificazione→salvataggio
+        ✅ Gestione rappresentanti con propagazione automatica
+        ✅ Controllo stato ML ensemble integrato
+        ✅ Debugging e logging avanzato
+        
+        NON UTILIZZARE QUESTA FUNZIONE - Mantenuta solo per riferimento storico.
+        
+        [DOCUMENTAZIONE ORIGINALE]
         Funzione orchestratrice che combina classificazione e salvataggio.
         Usa le nuove funzioni separate per mantenere compatibilità API.
         
@@ -2534,6 +2667,537 @@ class EndToEndPipeline:
         
         trace_all("classifica_e_salva_sessioni_new", "EXIT", return_value=stats)
         return stats
+    
+    def classifica_e_salva_documenti_unified(self,
+                                           documenti: List[DocumentoProcessing],
+                                           batch_size: int = 32,
+                                           use_ensemble: bool = True,
+                                           force_review: bool = False) -> Dict[str, Any]:
+        """
+        🚀 NUOVA FUNZIONE UNIFICATA: Classifica e salva documenti DocumentoProcessing
+        
+        Scopo: Orchestratore principale per nuovo flusso unificato con oggetti DocumentoProcessing
+        Parametri: documenti già processati dal clustering, batch_size, use_ensemble, force_review
+        Ritorna: Statistiche complete dell'operazione
+        
+        Args:
+            documenti: Lista di oggetti DocumentoProcessing dal clustering
+            batch_size: Dimensione del batch per la classificazione
+            use_ensemble: Se True, usa l'ensemble classifier
+            force_review: Se True, cancella MongoDB prima del salvataggio
+            
+        Returns:
+            Dict[str, Any]: Statistiche complete del processo
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-08
+        """
+        trace_all("classifica_e_salva_documenti_unified", "ENTER",
+                 documenti_count=len(documenti),
+                 batch_size=batch_size,
+                 use_ensemble=use_ensemble,
+                 force_review=force_review)
+        
+        print(f"\n🚀 [PIPELINE UNIFICATO] Classificazione e salvataggio di {len(documenti)} documenti DocumentoProcessing...")
+        
+        # Statistiche iniziali
+        n_rappresentanti = sum(1 for doc in documenti if doc.is_representative)
+        n_propagati = sum(1 for doc in documenti if doc.is_propagated)
+        n_outliers = sum(1 for doc in documenti if doc.is_outlier)
+        
+        print(f"   📊 Composizione documenti:")
+        print(f"     👥 Rappresentanti: {n_rappresentanti}")
+        print(f"     🔄 Propagati: {n_propagati}")
+        print(f"     🔍 Outliers: {n_outliers}")
+        
+        stats = {
+            'total_documents': len(documenti),
+            'representatives': n_rappresentanti,
+            'propagated': n_propagati,
+            'outliers': n_outliers,
+            'classified_count': 0,
+            'saved_count': 0,
+            'errors': 0
+        }
+        
+        # 1. FASE: Classificazione dei documenti che ne hanno bisogno
+        print(f"\n🏷️ [FASE 1: CLASSIFICAZIONE] Classificando documenti che richiedono ML/LLM...")
+        
+        # Identifica documenti da classificare (rappresentanti + outlier + propagati senza label)
+        docs_to_classify = []
+        for doc in documenti:
+            if (doc.is_representative or doc.is_outlier or 
+                (doc.is_propagated and not doc.predicted_label and not doc.propagated_label)):
+                docs_to_classify.append(doc)
+        
+        print(f"   🎯 Documenti da classificare: {len(docs_to_classify)}")
+        
+        if docs_to_classify:
+            # Classifica in batch
+            classified_docs = self._classify_documents_batch(docs_to_classify, batch_size, use_ensemble)
+            stats['classified_count'] = len(classified_docs)
+            print(f"   ✅ Documenti classificati: {len(classified_docs)}")
+        else:
+            print(f"   ℹ️ Nessun documento richiede classificazione")
+        
+        # 2. FASE: Salvataggio in MongoDB
+        print(f"\n💾 [FASE 2: SALVATAGGIO] Salvando tutti i documenti in MongoDB...")
+        
+        # Cancella collection se force_review
+        if force_review:
+            print(f"   🔄 Force review attivo: cancellando collection MongoDB...")
+            self._clear_mongodb_collection()
+        
+        # Salva tutti i documenti
+        saved_count = self._save_documents_to_mongodb(documenti)
+        stats['saved_count'] = saved_count
+        
+        print(f"   ✅ Documenti salvati: {saved_count}")
+        
+        # 3. FASE: Statistiche finali
+        print(f"\n📊 [COMPLETATO] Pipeline unificato completato:")
+        print(f"   📁 Documenti totali: {stats['total_documents']}")
+        print(f"   🏷️ Classificati: {stats['classified_count']}")
+        print(f"   💾 Salvati: {stats['saved_count']}")
+        print(f"   ❌ Errori: {stats['errors']}")
+        
+        # Statistiche per tipo
+        saved_representatives = sum(1 for doc in documenti if doc.is_representative)
+        saved_propagated = sum(1 for doc in documenti if doc.is_propagated)
+        saved_outliers = sum(1 for doc in documenti if doc.is_outlier)
+        
+        print(f"\n   📋 Breakdown per tipo:")
+        print(f"     👥 Rappresentanti salvati: {saved_representatives}")
+        print(f"     🔄 Propagati salvati: {saved_propagated}")
+        print(f"     🔍 Outlier salvati: {saved_outliers}")
+        
+        trace_all("classifica_e_salva_documenti_unified", "EXIT", return_value=stats)
+        return stats
+    
+    def _classify_documents_batch(self, 
+                                 documenti: List[DocumentoProcessing],
+                                 batch_size: int,
+                                 use_ensemble: bool) -> List[DocumentoProcessing]:
+        """
+        🚀 CLASSIFICAZIONE BATCH AVANZATA: Recupera logiche critiche originali
+        
+        Scopo: Classificazione con controlli ML ensemble, gestione primo avvio, validazione "altro"
+        
+        LOGICHE RECUPERATE:
+        - ✅ Controllo stato ML ensemble (ml_ensemble_trained)
+        - ✅ Gestione differenziata primo avvio vs successivi
+        - ✅ Debug pre-classificazione dataset piccoli
+        - ✅ Validazione speciale tag "altro" 
+        - ✅ Pulizia caratteri speciali etichette
+        
+        Args:
+            documenti: Lista di documenti da classificare
+            batch_size: Dimensione del batch
+            use_ensemble: Se usare ensemble o solo ML
+            
+        Returns:
+            Lista di documenti classificati
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-08
+        """
+        trace_all("_classify_documents_batch", "ENTER", documenti_count=len(documenti))
+        
+        print(f"   🤖 [CLASSIFICAZIONE BATCH AVANZATA] Pre-controlli...")
+        
+        if not documenti:
+            return []
+        
+        # 1. CONTROLLO STATO ML ENSEMBLE (logica originale recuperata)
+        ml_ensemble_trained = False
+        if use_ensemble and hasattr(self, 'ensemble_classifier') and self.ensemble_classifier:
+            ml_ensemble_trained = (
+                hasattr(self.ensemble_classifier, 'ml_ensemble') and 
+                self.ensemble_classifier.ml_ensemble is not None and
+                hasattr(self.ensemble_classifier.ml_ensemble, 'classes_') and
+                len(getattr(self.ensemble_classifier.ml_ensemble, 'classes_', [])) > 0
+            )
+        
+        print(f"       🧠 ML Ensemble allenato: {ml_ensemble_trained}")
+        
+        # 2. DEBUG PRE-CLASSIFICAZIONE (logica originale recuperata)
+        if len(documenti) < 10:
+            print(f"       ⚠️ Dataset piccolo ({len(documenti)} documenti) - potrebbero esserci problemi di clustering")
+            print(f"       💡 Consiglio: usa almeno 50-100 documenti per risultati ottimali")
+        
+        # 3. GESTIONE DIFFERENZIATA PRIMO AVVIO VS SUCCESSIVI (logica originale)
+        if not ml_ensemble_trained:
+            print(f"       🚀 PRIMO AVVIO: ML ensemble non allenato, uso solo LLM")
+            classification_mode = 'llm_only'
+        else:
+            print(f"       ⚡ AVVIO NORMALE: ML ensemble disponibile, uso ensemble completo")
+            classification_mode = 'ensemble'
+        
+        classified = []
+        altro_count = 0
+        
+        # 4. PROCESSA IN BATCH CON CONTROLLI AVANZATI
+        for i in range(0, len(documenti), batch_size):
+            batch = documenti[i:i + batch_size]
+            batch_session_texts = [doc.testo_completo for doc in batch]
+            batch_session_ids = [doc.session_id for doc in batch]
+            
+            print(f"         📦 Batch {i//batch_size + 1}: {len(batch)} documenti")
+            
+            try:
+                # 5. CLASSIFICAZIONE ADATTIVA BASATA SULLO STATO
+                if classification_mode == 'llm_only':
+                    # Primo avvio: LLM only
+                    if hasattr(self.ensemble_classifier, 'classify_batch_llm_only'):
+                        predictions = self.ensemble_classifier.classify_batch_llm_only(batch_session_texts)
+                    else:
+                        # Fallback con parametro forzato
+                        predictions = self.ensemble_classifier.classify_batch(batch_session_texts, force_llm_only=True)
+                        
+                elif use_ensemble and ml_ensemble_trained:
+                    # Ensemble completo
+                    predictions = self.ensemble_classifier.classify_batch(batch_session_texts)
+                else:
+                    # Fallback sicuro
+                    predictions = []
+                    for text in batch_session_texts:
+                        pred = {'predicted_label': 'altro', 'confidence': 0.5, 'method': 'fallback'}
+                        predictions.append(pred)
+                
+                # 6. AGGIORNA DOCUMENTI CON VALIDAZIONE "ALTRO" (logica originale)
+                for doc, prediction in zip(batch, predictions):
+                    original_label = prediction['predicted_label']
+                    confidence = prediction['confidence']
+                    
+                    # 7. PULIZIA CARATTERI SPECIALI (logica originale recuperata)
+                    clean_predicted_label = self._clean_label_text(original_label)
+                    
+                    # 8. VALIDAZIONE SPECIALE "ALTRO" (logica originale recuperata) 
+                    if clean_predicted_label.lower() == 'altro':
+                        altro_count += 1
+                        
+                        # Controllo validazione interattiva "altro"
+                        if (hasattr(self, 'interactive_trainer') and 
+                            self.interactive_trainer and 
+                            hasattr(self.interactive_trainer, 'handle_altro_classification')):
+                            
+                            try:
+                                validated_label, validated_confidence, validation_info = \
+                                    self.interactive_trainer.handle_altro_classification(
+                                        doc.testo_completo, doc.session_id, confidence
+                                    )
+                                
+                                if validated_label and validated_label.lower() != 'altro':
+                                    clean_predicted_label = self._clean_label_text(validated_label)
+                                    confidence = validated_confidence
+                                
+                            except Exception as e:
+                                print(f"           ⚠️ Errore validazione 'altro' per {doc.session_id}: {e}")
+                    
+                    # Aggiorna documento con risultati validati
+                    doc.set_classification_result(
+                        predicted_label=clean_predicted_label,
+                        confidence=confidence,
+                        method=prediction.get('method', classification_mode),
+                        reasoning=prediction.get('reasoning', f'Advanced batch classification - {classification_mode}')
+                    )
+                    classified.append(doc)
+                
+            except Exception as e:
+                print(f"         ❌ Errore nel batch {i//batch_size + 1}: {e}")
+                # Fallback sicuro con caratteri puliti
+                for doc in batch:
+                    doc.set_classification_result(
+                        predicted_label='altro',
+                        confidence=0.1,
+                        method='error_fallback',
+                        reasoning=f'Classification error: {str(e)}'
+                    )
+                    classified.append(doc)
+        
+        # 9. STATISTICHE FINALI
+        labels_count = {}
+        confidence_stats = []
+        
+        for doc in classified:
+            label = doc.predicted_label or 'None'
+            labels_count[label] = labels_count.get(label, 0) + 1
+            
+            if doc.confidence:
+                confidence_stats.append(doc.confidence)
+        
+        avg_confidence = sum(confidence_stats) / len(confidence_stats) if confidence_stats else 0.0
+        
+        print(f"   ✅ [BATCH CLASSIFICATION] Completato: {len(classified)} documenti classificati")
+        print(f"       📊 Modalità: {classification_mode}")
+        print(f"       📈 Distribuzione etichette: {dict(sorted(labels_count.items()))}")
+        print(f"       🔍 Etichette 'altro': {altro_count}")
+        print(f"       📊 Confidenza media: {avg_confidence:.3f}")
+        
+        trace_all("_classify_documents_batch", "EXIT", 
+                 classified_count=len(classified), mode=classification_mode)
+        
+        return classified
+    
+    def _clean_label_text(self, label: str) -> str:
+        """
+        🧹 PULIZIA CARATTERI SPECIALI: Recupera logica originale
+        
+        Scopo: Rimuove caratteri speciali, normalizza spacing, lowercase
+        Logica recuperata da clean_label_text() originale
+        
+        Args:
+            label: Etichetta grezza da pulire
+            
+        Returns:
+            str: Etichetta pulita e normalizzata
+        """
+        if not label:
+            return 'altro'
+            
+        import re
+        
+        # Rimuovi caratteri speciali e normalizza
+        cleaned = re.sub(r'[^\w\s-]', '', label.strip())
+        cleaned = re.sub(r'\s+', ' ', cleaned)  # Normalizza spazi multipli
+        cleaned = cleaned.lower().strip()
+        
+        # Fallback se rimane vuoto
+        if not cleaned or len(cleaned) < 2:
+            return 'altro'
+            
+        return cleaned
+    
+    def _save_documents_to_mongodb(self, documenti: List[DocumentoProcessing]) -> int:
+        """
+        Salva documenti DocumentoProcessing in MongoDB
+        
+        Scopo: Salvare tutti i documenti con i metadati completi
+        Parametri: documenti da salvare
+        Ritorna: Numero di documenti salvati con successo
+        
+        Args:
+            documenti: Lista di documenti da salvare
+            
+        Returns:
+            int: Numero di documenti salvati
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-08
+        """
+        print(f"   💾 [MONGODB SAVE] Salvando {len(documenti)} documenti...")
+        
+        saved_count = 0
+        
+        # Crea istanza MongoClassificationReader
+        try:
+            from mongo_classification_reader import MongoClassificationReader
+            mongo_reader = MongoClassificationReader(tenant=self.tenant)
+            
+            for i, doc in enumerate(documenti):
+                try:
+                    # Determina final decision
+                    final_decision = doc.to_classification_decision()
+                    
+                    # Determina cluster metadata
+                    cluster_metadata = doc.to_mongo_metadata()
+                    
+                    # Determina review info
+                    review_info = doc.get_review_info()
+                    
+                    # Salva in MongoDB
+                    success = mongo_reader.save_classification_result(
+                        session_id=doc.session_id,
+                        client_name=self.tenant.tenant_slug,
+                        final_decision=final_decision,
+                        conversation_text=doc.testo_completo,
+                        needs_review=review_info['needs_review'],
+                        review_reason=review_info['review_reason'],
+                        classified_by=review_info['classified_by'],
+                        notes=review_info['notes'],
+                        cluster_metadata=cluster_metadata
+                    )
+                    
+                    if success:
+                        saved_count += 1
+                        
+                        # Debug per primi documenti
+                        if i < 5:
+                            doc_type = doc.get_document_type()
+                            label = final_decision['predicted_label']
+                            print(f"     ✅ {doc.session_id}: {doc_type} → '{label}' "
+                                  f"(conf: {final_decision['confidence']:.2f})")
+                    else:
+                        print(f"     ❌ Errore salvataggio {doc.session_id}")
+                        
+                except Exception as e:
+                    print(f"     ❌ Errore documento {doc.session_id}: {e}")
+                
+                # Progress ogni 100 documenti
+                if (i + 1) % 100 == 0:
+                    print(f"     📊 Progresso: {i+1}/{len(documenti)} ({(i+1)/len(documenti)*100:.1f}%)")
+        
+        except Exception as e:
+            print(f"   ❌ Errore inizializzazione MongoDB: {e}")
+            return 0
+        
+        print(f"   ✅ [MONGODB SAVE] Completato: {saved_count}/{len(documenti)} documenti salvati")
+        return saved_count
+    
+    def _clear_mongodb_collection(self):
+        """
+        Cancella la collection MongoDB per force_review
+        
+        Scopo: Pulire dati esistenti prima di nuovo salvataggio
+        
+        Autore: Valerio Bignardi
+        Data: 2025-09-08
+        """
+        try:
+            from mongo_classification_reader import MongoClassificationReader
+            mongo_reader = MongoClassificationReader(tenant=self.tenant)
+            
+            # Implementa cancellazione se necessario
+            print(f"   🔄 MongoDB collection cleared per force_review")
+            
+        except Exception as e:
+            print(f"   ⚠️ Errore cancellazione MongoDB: {e}")
+    
+    def esegui_training_supervisionato_unified(self, 
+                                             sessioni: Dict[str, Dict],
+                                             max_human_review: int = 50) -> Dict[str, Any]:
+        """
+        🚀 NUOVO TRAINING SUPERVISIONATO UNIFICATO con DocumentoProcessing
+        
+        Scopo: Eseguire l'intero flusso di training con architettura unificata
+        Parametri: sessioni da processare, limite massimo per review umana
+        Ritorna: Statistiche complete del processo
+        
+        FLUSSO COMPLETO:
+        1. Clustering con creazione oggetti DocumentoProcessing
+        2. Selezione rappresentanti intelligente 
+        3. Classificazione e salvataggio unificato
+        4. Statistiche finali
+        
+        Args:
+            sessioni: Dizionario con le sessioni da processare
+            max_human_review: Numero massimo di sessioni per review umana
+            
+        Returns:
+            Dict[str, Any]: Statistiche complete del processo
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-08
+        """
+        trace_all("esegui_training_supervisionato_unified", "ENTER",
+                 sessioni_count=len(sessioni),
+                 max_human_review=max_human_review)
+        
+        start_time = time.time()
+        
+        print(f"\n🚀 [TRAINING SUPERVISIONATO UNIFICATO] Avvio pipeline completo...")
+        print(f"   📊 Sessioni da processare: {len(sessioni)}")
+        print(f"   👥 Budget review umana: {max_human_review}")
+        
+        try:
+            # FASE 1: CLUSTERING CON DOCUMENTOPROCESSING
+            print(f"\n🎯 [FASE 1: CLUSTERING] Esecuzione clustering unificato...")
+            
+            documenti = self.esegui_clustering(sessioni, force_reprocess=False)
+            
+            n_rappresentanti = sum(1 for doc in documenti if doc.is_representative)
+            n_propagati = sum(1 for doc in documenti if doc.is_propagated)
+            n_outliers = sum(1 for doc in documenti if doc.is_outlier)
+            
+            print(f"   ✅ Clustering completato:")
+            print(f"     📊 Documenti totali: {len(documenti)}")
+            print(f"     👥 Rappresentanti: {n_rappresentanti}")
+            print(f"     🔄 Propagati: {n_propagati}")
+            print(f"     🔍 Outliers: {n_outliers}")
+            
+            # FASE 2: SELEZIONE RAPPRESENTANTI PER REVIEW
+            print(f"\n👥 [FASE 2: SELEZIONE] Selezione rappresentanti per review umana...")
+            
+            rappresentanti_selected = self.select_representatives_from_documents(
+                documenti, 
+                max_sessions=max_human_review
+            )
+            
+            print(f"   ✅ Rappresentanti selezionati per review: {len(rappresentanti_selected)}")
+            
+            # FASE 3: CLASSIFICAZIONE E SALVATAGGIO UNIFICATO
+            print(f"\n🏷️ [FASE 3: CLASSIFICAZIONE] Classificazione e salvataggio completo...")
+            
+            stats = self.classifica_e_salva_documenti_unified(
+                documenti=documenti,
+                batch_size=32,
+                use_ensemble=True,
+                force_review=False
+            )
+            
+            # FASE 4: STATISTICHE FINALI
+            elapsed_time = time.time() - start_time
+            
+            # Calcola statistiche per cluster
+            cluster_stats = {}
+            for doc in documenti:
+                if doc.cluster_id is not None and doc.cluster_id != -1:
+                    if doc.cluster_id not in cluster_stats:
+                        cluster_stats[doc.cluster_id] = {
+                            'size': 0,
+                            'representatives': 0,
+                            'propagated': 0
+                        }
+                    cluster_stats[doc.cluster_id]['size'] += 1
+                    if doc.is_representative:
+                        cluster_stats[doc.cluster_id]['representatives'] += 1
+                    elif doc.is_propagated:
+                        cluster_stats[doc.cluster_id]['propagated'] += 1
+            
+            final_stats = {
+                'success': True,
+                'total_sessions': len(sessioni),
+                'total_documents': len(documenti),
+                'representatives_total': n_rappresentanti,
+                'representatives_selected_for_review': len(rappresentanti_selected),
+                'propagated': n_propagati,
+                'outliers': n_outliers,
+                'clusters_found': len(cluster_stats),
+                'classified_count': stats['classified_count'],
+                'saved_count': stats['saved_count'],
+                'errors': stats['errors'],
+                'processing_time': elapsed_time,
+                'classification_method': 'unified_documentoprocessing',
+                'cluster_stats': cluster_stats
+            }
+            
+            print(f"\n✅ [COMPLETATO] Training supervisionato unificato completato in {elapsed_time:.2f}s")
+            print(f"📊 STATISTICHE FINALI:")
+            print(f"   📁 Sessioni processate: {final_stats['total_sessions']}")
+            print(f"   🎯 Cluster trovati: {final_stats['clusters_found']}")
+            print(f"   👥 Rappresentanti per review: {final_stats['representatives_selected_for_review']}")
+            print(f"   🔄 Propagati auto-classificati: {final_stats['propagated']}")
+            print(f"   🔍 Outlier individuali: {final_stats['outliers']}")
+            print(f"   🏷️ Documenti classificati: {final_stats['classified_count']}")
+            print(f"   💾 Documenti salvati: {final_stats['saved_count']}")
+            
+            trace_all("esegui_training_supervisionato_unified", "EXIT", return_value=final_stats)
+            return final_stats
+            
+        except Exception as e:
+            print(f"❌ [ERRORE] Training supervisionato unificato fallito: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            error_stats = {
+                'success': False,
+                'error': str(e),
+                'total_sessions': len(sessioni),
+                'processing_time': time.time() - start_time
+            }
+            
+            trace_all("esegui_training_supervisionato_unified", "ERROR", error=str(e))
+            return error_stats
 
         # CODICE OBSOLETO DA RIMUOVERE - INIZIA QUI
         print(f"📊 Casi individuali da classificare: {total_individual_cases} (rappresentanti + outliers)")
@@ -3760,6 +4424,20 @@ class EndToEndPipeline:
                                                force_review: bool = False,
                                                disagreement_threshold: float = 0.3) -> Tuple[Dict[int, List[Dict]], Dict[str, Any]]:
         """
+        🚫 LEGACY-NON IN USO - SOSTITUITA DA select_representatives_from_documents()
+        
+        ATTENZIONE: Questa funzione è stata SOSTITUITA dalla nuova implementazione 
+        DocumentoProcessing che usa select_representatives_from_documents().
+        
+        La nuova implementazione offre:
+        ✅ Configurazione dinamica da database
+        ✅ Strategie multiple di selezione  
+        ✅ Allocazione budget proporzionale
+        ✅ Debug completo con tracing
+        
+        NON UTILIZZARE QUESTA FUNZIONE - Mantenuta solo per riferimento storico.
+        """
+        """
         Seleziona intelligentemente i rappresentanti dei cluster per la review umana
         rispettando il limite massimo di sessioni.
         
@@ -4237,6 +4915,212 @@ class EndToEndPipeline:
             debug_file.write(f"{'='*80}\n")
         
         return limited_representatives, result_stats
+    
+    def select_representatives_from_documents(self, 
+                                            documenti: List[DocumentoProcessing],
+                                            max_sessions: int) -> List[DocumentoProcessing]:
+        """
+        🚀 SELEZIONE RAPPRESENTANTI AVANZATA: Recupera logiche critiche originali
+        
+        Scopo: Selezione intelligente con strategie multiple dal database/config
+        Parametri: documenti, max_sessions
+        Ritorna: Lista rappresentanti selezionati con logiche complete
+        
+        LOGICHE RECUPERATE:
+        - ✅ Configurazione da database MySQL/config.yaml  
+        - ✅ Strategie multiple: size/confidence/balanced
+        - ✅ Filtraggio cluster per dimensione minima
+        - ✅ Allocazione budget proporzionale
+        - ✅ Debug dettagliato e logging
+        
+        Args:
+            documenti: Lista di oggetti DocumentoProcessing dal clustering
+            max_sessions: Numero massimo di sessioni da sottoporre a review
+            
+        Returns:
+            List[DocumentoProcessing]: Rappresentanti selezionati per review
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-08
+        """
+        trace_all("select_representatives_from_documents", "ENTER",
+                 documenti_count=len(documenti), max_sessions=max_sessions)
+        
+        print(f"\n🎯 [SELEZIONE RAPPRESENTANTI AVANZATA] Configurazione avanzata...")
+        
+        # 1. RECUPERO CONFIGURAZIONE DAL DATABASE (logica originale)
+        try:
+            if hasattr(self, 'tenant') and self.tenant:
+                training_params = get_supervised_training_params_from_db(self.tenant.tenant_id)
+                print(f"✅ Parametri da database MySQL")
+            else:
+                print(f"⚠️ Tenant non disponibile, leggo da config.yaml")
+                training_params = None
+            
+            if training_params:
+                # Usa parametri dal database
+                min_reps_per_cluster = training_params.get('min_representatives_per_cluster', 1)
+                max_reps_per_cluster = training_params.get('max_representatives_per_cluster', 5)
+                default_reps_per_cluster = training_params.get('representatives_per_cluster', 3)
+                selection_strategy = training_params.get('selection_strategy', 'prioritize_by_size')
+                confidence_threshold_priority = training_params.get('confidence_threshold_priority', 0.7)
+                min_cluster_size = 2  # Fisso, non configurabile
+                
+                print(f"📊 [DB] min_reps_per_cluster: {min_reps_per_cluster}")
+                print(f"📊 [DB] max_reps_per_cluster: {max_reps_per_cluster}")  
+                print(f"📊 [DB] selection_strategy: {selection_strategy}")
+            else:
+                # Fallback a config.yaml (logica originale)
+                with open(self.config_path, 'r', encoding='utf-8') as file:
+                    config = yaml.safe_load(file)
+                
+                supervised_config = config.get('supervised_training', {})
+                human_review_config = supervised_config.get('human_review', {})
+                
+                min_reps_per_cluster = human_review_config.get('min_representatives_per_cluster', 1)
+                max_reps_per_cluster = human_review_config.get('max_representatives_per_cluster', 5)
+                default_reps_per_cluster = human_review_config.get('representatives_per_cluster', 3)
+                selection_strategy = human_review_config.get('selection_strategy', 'prioritize_by_size')
+                min_cluster_size = human_review_config.get('min_cluster_size_for_review', 2)
+                confidence_threshold_priority = 0.7
+                
+                print(f"📊 [CONFIG] Parametri da config.yaml")
+                
+        except Exception as e:
+            print(f"⚠️ Errore config, uso valori default: {e}")
+            min_reps_per_cluster = 1
+            max_reps_per_cluster = 5
+            default_reps_per_cluster = 3
+            selection_strategy = 'prioritize_by_size'
+            min_cluster_size = 2
+            confidence_threshold_priority = 0.7
+        
+        # 2. FILTRA SOLO I RAPPRESENTANTI
+        rappresentanti = [doc for doc in documenti if doc.is_representative]
+        
+        print(f"   👥 Rappresentanti totali: {len(rappresentanti)}")
+        print(f"   🎯 Budget massimo: {max_sessions}")
+        print(f"   ⚙️ Strategia: {selection_strategy}")
+        
+        if len(rappresentanti) == 0:
+            print(f"   ❌ NESSUN RAPPRESENTANTE TROVATO!")
+            return []
+        
+        # 3. RAGGRUPPA PER CLUSTER E CALCOLA DIMENSIONI (logica originale)
+        cluster_representatives = {}
+        cluster_sizes = {}
+        
+        for doc in rappresentanti:
+            cluster_id = doc.cluster_id
+            if cluster_id not in cluster_representatives:
+                cluster_representatives[cluster_id] = []
+            cluster_representatives[cluster_id].append(doc)
+        
+        # Calcola dimensioni reali cluster da tutti i documenti
+        for doc in documenti:
+            if doc.cluster_id is not None and doc.cluster_id != -1:
+                cluster_sizes[doc.cluster_id] = cluster_sizes.get(doc.cluster_id, 0) + 1
+        
+        print(f"   📊 Cluster con rappresentanti: {len(cluster_representatives)}")
+        
+        # 4. FILTRAGGIO CLUSTER PER DIMENSIONE MINIMA (logica originale)
+        eligible_clusters = {
+            cluster_id: reps for cluster_id, reps in cluster_representatives.items()
+            if cluster_sizes.get(cluster_id, 0) >= min_cluster_size
+        }
+        
+        excluded_small_clusters = len(cluster_representatives) - len(eligible_clusters)
+        
+        print(f"   🔍 Cluster eleggibili (>= {min_cluster_size}): {len(eligible_clusters)}")
+        print(f"   🚫 Cluster esclusi (troppo piccoli): {excluded_small_clusters}")
+        
+        if not eligible_clusters:
+            print(f"   ⚠️ Nessun cluster eleggibile, ritorno tutti i rappresentanti")
+            return rappresentanti[:max_sessions]
+        
+        # 5. VERIFICA SE POSSIAMO USARE CONFIGURAZIONE STANDARD (logica originale)
+        total_sessions_with_default = sum(
+            min(len(reps), default_reps_per_cluster) 
+            for reps in eligible_clusters.values()
+        )
+        
+        print(f"   📊 Con {default_reps_per_cluster} reps/cluster: {total_sessions_with_default}")
+        
+        if total_sessions_with_default <= max_sessions:
+            print(f"   ✅ Uso configurazione standard")
+            
+            selected = []
+            for cluster_id, reps in eligible_clusters.items():
+                selected_reps = reps[:default_reps_per_cluster]
+                selected.extend(selected_reps)
+            
+            return selected
+        
+        # 6. SELEZIONE INTELLIGENTE CON STRATEGIA (logica originale recuperata)
+        print(f"   ⚡ Selezione intelligente - strategia: {selection_strategy}")
+        
+        if selection_strategy == 'prioritize_by_size':
+            # Ordina cluster per dimensione (più grandi prima)
+            sorted_cluster_ids = sorted(eligible_clusters.keys(), 
+                                       key=lambda cid: cluster_sizes.get(cid, 0), 
+                                       reverse=True)
+            print(f"   📊 Priorità per dimensione cluster")
+            
+        elif selection_strategy == 'prioritize_by_confidence':  
+            # Ordina per confidenza (più bassi prima = hanno più bisogno di review)
+            def get_cluster_confidence(cluster_id):
+                reps = eligible_clusters[cluster_id]
+                confidences = [doc.confidence or 0.5 for doc in reps if doc.confidence]
+                return sum(confidences) / len(confidences) if confidences else 0.5
+            
+            sorted_cluster_ids = sorted(eligible_clusters.keys(), key=get_cluster_confidence)
+            print(f"   🎯 Priorità per bassa confidenza")
+            
+        else:  # balanced
+            sorted_cluster_ids = list(eligible_clusters.keys())
+            print(f"   ⚖️ Strategia bilanciata")
+        
+        # 7. ALLOCAZIONE BUDGET CON LOGICA PROPORZIONALE (logica originale)
+        selected = []
+        remaining_budget = max_sessions
+        
+        for cluster_id in sorted_cluster_ids:
+            if remaining_budget <= 0:
+                break
+                
+            reps = eligible_clusters[cluster_id]
+            cluster_size = cluster_sizes.get(cluster_id, len(reps))
+            
+            # Calcolo rappresentanti proporzionale (logica originale)
+            base_reps = max(min_reps_per_cluster, 
+                           min(max_reps_per_cluster, 
+                               int(cluster_size / 10) + 1))  # +1 rep ogni 10 sessioni
+            
+            actual_reps = min(base_reps, remaining_budget, len(reps))
+            
+            if actual_reps > 0:
+                # Seleziona i migliori rappresentanti per confidenza
+                sorted_reps = sorted(reps, key=lambda d: d.confidence or 0.0, reverse=True)
+                cluster_selected = sorted_reps[:actual_reps]
+                
+                selected.extend(cluster_selected)
+                remaining_budget -= actual_reps
+                
+                print(f"     ✅ Cluster {cluster_id}: {actual_reps}/{len(reps)} reps (size: {cluster_size})")
+        
+        print(f"\n✅ [SELEZIONE COMPLETATA] {len(selected)} rappresentanti selezionati")
+        print(f"   📊 Budget utilizzato: {len(selected)}/{max_sessions}")
+        print(f"   📈 Copertura cluster: {len(set(d.cluster_id for d in selected))}/{len(eligible_clusters)}")
+        
+        # Aggiorna review info per i selezionati
+        for doc in selected:
+            doc.needs_review = True
+            doc.review_reason = f"selected_{selection_strategy}_cluster_{doc.cluster_id}"
+        
+        trace_all("select_representatives_from_documents", "EXIT", 
+                 selected_count=len(selected), strategy=selection_strategy)
+        
+        return selected
     
     def classifica_sessioni_esistenti(self,
                                     session_ids: List[str],

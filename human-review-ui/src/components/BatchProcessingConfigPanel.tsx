@@ -82,23 +82,56 @@ const BatchProcessingConfigPanel: React.FC<BatchProcessingConfigPanelProps> = ({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
+  
+  // 🚨 FIX LOOP INFINITO: Stati per controllo retry e prevenzione loop
+  const [retryCount, setRetryCount] = useState(0);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [lastLoadAttempt, setLastLoadAttempt] = useState<number>(0);
+  const MAX_RETRIES = 3;
+  const RETRY_DELAY = 5000; // 5 secondi tra retry
 
   /**
    * Carica configurazione batch processing per tenant
+   * 🚨 FIX LOOP INFINITO: Aggiunto controllo retry e prevenzione loop
    */
-  const loadConfig = useCallback(async () => {
+  const loadConfig = useCallback(async (forceRetry: boolean = false) => {
+    const now = Date.now();
+    
+    // 🚨 PREVENZIONE LOOP: Controlla se è troppo presto per un nuovo tentativo
+    if (!forceRetry && (now - lastLoadAttempt) < 2000) {
+      console.log('⚠️ [BatchConfig] Tentativo troppo frequente, skip per prevenire loop');
+      return;
+    }
+    
+    // 🚨 PREVENZIONE LOOP: Controlla limite retry
+    if (!forceRetry && retryCount >= MAX_RETRIES && !isRetrying) {
+      console.error('❌ [BatchConfig] Limite retry raggiunto, uso configurazione default');
+      setError('Impossibile caricare configurazione batch, uso valori default');
+      setLoading(false);
+      return;
+    }
+    
     try {
       setLoading(true);
       setError(null);
+      setLastLoadAttempt(now);
       
-      const response = await axios.get(`/api/ai-config/${tenantId}/batch-config`);
+      console.log(`🔄 [BatchConfig] Tentativo caricamento ${retryCount + 1}/${MAX_RETRIES} per tenant ${tenantId}`);
+      
+      const response = await axios.get(`/api/ai-config/${tenantId}/batch-config`, {
+        timeout: 10000 // 10 secondi timeout
+      });
       
       if (response.data.success) {
         const loadedConfig = response.data.batch_config;
         setConfig(loadedConfig);
         setLastSaved(loadedConfig.updated_at);
         
-        // Notifica parent component
+        // Reset retry counter su successo
+        setRetryCount(0);
+        setIsRetrying(false);
+        
+        // Notifica parent component SOLO se i valori sono effettivamente cambiati
         if (onConfigChange) {
           onConfigChange(loadedConfig);
         }
@@ -109,12 +142,28 @@ const BatchProcessingConfigPanel: React.FC<BatchProcessingConfigPanelProps> = ({
       }
       
     } catch (err: any) {
-      setError(err.message || 'Errore caricamento configurazione batch');
       console.error('❌ [BatchConfig] Errore caricamento:', err);
+      
+      // 🚨 GESTIONE RETRY CONTROLLATA
+      if (retryCount < MAX_RETRIES && !isRetrying) {
+        setRetryCount(prev => prev + 1);
+        setError(`Tentativo ${retryCount + 1}/${MAX_RETRIES} fallito. Nuovo tentativo tra ${RETRY_DELAY/1000}s...`);
+        
+        setIsRetrying(true);
+        setTimeout(() => {
+          setIsRetrying(false);
+          loadConfig(true); // Force retry
+        }, RETRY_DELAY);
+      } else {
+        setError(err.message || 'Errore caricamento configurazione batch');
+        setLoading(false);
+      }
     } finally {
-      setLoading(false);
+      if (retryCount >= MAX_RETRIES || !isRetrying) {
+        setLoading(false);
+      }
     }
-  }, [tenantId, onConfigChange]);
+  }, [tenantId, retryCount, isRetrying, lastLoadAttempt]); // 🚨 DIPENDENZE CONTROLLATE
 
   /**
    * Valida configurazione senza salvarla
@@ -223,7 +272,7 @@ const BatchProcessingConfigPanel: React.FC<BatchProcessingConfigPanelProps> = ({
       <div className="batch-config-panel error">
         <h3>❌ Errore Configurazione Batch</h3>
         <p>{error}</p>
-        <button onClick={loadConfig} className="retry-button">
+        <button onClick={() => loadConfig()} className="retry-button">
           🔄 Riprova
         </button>
       </div>

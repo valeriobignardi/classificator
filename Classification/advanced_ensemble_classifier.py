@@ -719,6 +719,14 @@ class AdvancedEnsembleClassifier:
                 processing_time=processing_time
             )
         
+        # 🔍 TRACING EXIT - Success
+        trace_all("predict_with_ensemble", "EXIT", 
+                 predicted_label=results.get('predicted_label', 'unknown'),
+                 confidence=results.get('confidence', 0.0),
+                 method=results.get('method', 'unknown'),
+                 processing_time=processing_time,
+                 exit_reason="SUCCESS")
+        
         return results
     
     def _combine_predictions(self, llm_pred: Dict, ml_pred: Dict, text: str = "") -> Dict[str, Any]:

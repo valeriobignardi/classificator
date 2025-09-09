@@ -5149,6 +5149,14 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         """
         Fallback intelligente usando embedding e memoria semantica
         """
+        # 🔍 TRACING ENTER
+        trace_all("_intelligent_semantic_fallback", "ENTER", 
+                 called_from="_fallback_classification",
+                 conversation_length=len(conversation_text) if conversation_text else 0,
+                 error_reason=error_reason,
+                 has_embedder=self.embedder is not None,
+                 has_semantic_memory=self.semantic_memory is not None)
+        
         try:
             # Genera embedding del testo
             embedding = self.embedder.encode_single(conversation_text)
@@ -5162,7 +5170,7 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 best_match = similar_classifications[0]
                 
                 # Usa classificazione più simile con confidence ridotta per incertezza
-                return ClassificationResult(
+                result = ClassificationResult(
                     predicted_label=best_match['label'],
                     confidence=best_match['similarity'] * 0.7,  # Ridotta per incertezza
                     motivation=f"Classificazione per similarità semantica (sim: {best_match['similarity']:.3f}), LLM non disponibile",
@@ -5170,10 +5178,34 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                     processing_time=0.05,  # Veloce
                     timestamp=datetime.now().isoformat()
                 )
+                
+                # 🔍 TRACING EXIT - Success
+                trace_all("_intelligent_semantic_fallback", "EXIT", 
+                         called_from="_fallback_classification",
+                         predicted_label=result.predicted_label,
+                         confidence=result.confidence,
+                         similarity=best_match['similarity'],
+                         exit_reason="SEMANTIC_MATCH_FOUND")
+                
+                return result
+            
+            # 🔍 TRACING EXIT - No Match
+            trace_all("_intelligent_semantic_fallback", "EXIT", 
+                     called_from="_fallback_classification",
+                     exit_reason="NO_SEMANTIC_MATCH",
+                     similar_classifications_count=len(similar_classifications) if similar_classifications else 0)
             
             return None
             
         except Exception as e:
+            # 🔍 TRACING ERROR
+            trace_all("_intelligent_semantic_fallback", "ERROR", 
+                     called_from="_fallback_classification",
+                     error_type=type(e).__name__,
+                     error_message=str(e),
+                     conversation_length=len(conversation_text) if conversation_text else 0,
+                     error_reason=error_reason)
+            
             self.logger.warning(f"Errore fallback semantico: {e}")
             return None
     

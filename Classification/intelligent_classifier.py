@@ -103,6 +103,15 @@ except ImportError:
     MySqlConnettore = None
     MYSQL_AVAILABLE = False
 
+# Import per Database AI Configuration Service
+try:
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Database'))
+    from database_ai_config_service import DatabaseAIConfigService
+    DATABASE_AI_CONFIG_AVAILABLE = True
+except ImportError:
+    DatabaseAIConfigService = None
+    DATABASE_AI_CONFIG_AVAILABLE = False
+
 # Import per MongoDB - USA IL CONNETTORE GIUSTO
 try:
     sys.path.append(os.path.dirname(__file__))
@@ -529,6 +538,21 @@ class IntelligentClassifier:
             if enable_logging:
                 self.logger.error(f"❌ Errore inizializzazione PromptManager: {e}")
                 self.logger.error("❌ PromptManager obbligatorio - sistema non può funzionare senza configurazione prompt")
+        
+        # INIZIALIZZAZIONE DATABASE AI CONFIG SERVICE: Configurazioni AI da database
+        self.ai_config_service = None
+        try:
+            if DATABASE_AI_CONFIG_AVAILABLE:
+                self.ai_config_service = DatabaseAIConfigService()
+                if enable_logging:
+                    self.logger.info(f"✅ DatabaseAIConfigService inizializzato per configurazioni AI da database")
+            else:
+                if enable_logging:
+                    self.logger.warning(f"⚠️ DatabaseAIConfigService non disponibile - usando solo config.yaml")
+        except Exception as e:
+            if enable_logging:
+                self.logger.error(f"❌ Errore inizializzazione DatabaseAIConfigService: {e}")
+                self.logger.warning("⚠️ Fallback a config.yaml per configurazioni batch processing")
             self.prompt_manager = None
         
         # VALIDAZIONE PROMPT OBBLIGATORI per il tenant
@@ -3804,19 +3828,68 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
     
     def _load_config(self) -> Optional[Dict]:
         """
-        Carica configurazione da config.yaml per batch processing
+        Carica configurazione integrata database + config.yaml per batch processing
         
-        Returns:
-            Dict con configurazione o None se errore
+        Scopo della funzione:
+            Carica configurazione batch processing con priorità:
+            1. Database (se disponibile e tenant configurato)
+            2. config.yaml (fallback)
+        
+        Valori di ritorno:
+            Dict con configurazione batch processing o None se errore
+        
+        Tracciamento aggiornamenti:
+            2025-09-09: Integrazione database per batch processing dinamico
         """
+        
+        # 🗄️ PRIORITÀ 1: CARICA DA DATABASE (SE DISPONIBILE)
+        if (hasattr(self, 'ai_config_service') and self.ai_config_service and 
+            hasattr(self, 'tenant_id') and self.tenant_id):
+            try:
+                batch_config = self.ai_config_service.get_batch_processing_config(self.tenant_id)
+                
+                if batch_config and batch_config.get('source') == 'database':
+                    # Costruisce config format compatibile con il sistema esistente
+                    database_config = {
+                        'pipeline': {
+                            'classification_batch_size': batch_config.get('classification_batch_size', 32),
+                            'max_parallel_calls': batch_config.get('max_parallel_calls', 200)
+                        },
+                        'source': 'database',
+                        'updated_at': batch_config.get('updated_at')
+                    }
+                    
+                    if self.enable_logging:
+                        print(f"✅ [BATCH CONFIG] Caricato da database per tenant {self.tenant_id}: "
+                              f"batch_size={batch_config.get('classification_batch_size')}")
+                    
+                    return database_config
+                    
+            except Exception as e:
+                if self.enable_logging:
+                    print(f"⚠️ [BATCH CONFIG] Errore caricamento database per tenant {getattr(self, 'tenant_id', 'unknown')}: {e}")
+                    print("🔄 [BATCH CONFIG] Fallback a config.yaml...")
+        
+        # 📄 PRIORITÀ 2: FALLBACK A CONFIG.YAML
         try:
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
             if os.path.exists(config_path):
                 with open(config_path, 'r') as f:
-                    return yaml.safe_load(f)
+                    yaml_config = yaml.safe_load(f)
+                    if yaml_config:
+                        yaml_config['source'] = 'config.yaml'
+                        if self.enable_logging:
+                            batch_size = yaml_config.get('pipeline', {}).get('classification_batch_size', 'non configurato')
+                            print(f"✅ [BATCH CONFIG] Caricato da config.yaml: batch_size={batch_size}")
+                        return yaml_config
         except Exception as e:
             if self.enable_logging:
-                print(f"⚠️ [Config] Errore caricamento config.yaml: {e}")
+                print(f"⚠️ [BATCH CONFIG] Errore caricamento config.yaml: {e}")
+        
+        # ❌ NESSUNA CONFIGURAZIONE TROVATA
+        if self.enable_logging:
+            print(f"⚠️ [BATCH CONFIG] Nessuna configurazione disponibile - usando valori default")
+        
         return None
 
     def _extract_json_from_openai_response(self, content: str) -> Dict[str, Any]:
@@ -5887,51 +5960,90 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
     
     def _load_config(self, config_path: Optional[str] = None) -> Dict[str, Any]:
         """
-        Carica la configurazione dal file config.yaml
+        Carica la configurazione con priorità database → config.yaml
         
-        Args:
-            config_path: Percorso del file di configurazione (opzionale)
+        Scopo della funzione:
+            Carica configurazione per il classificatore con sistema integrato:
+            1. Tenta caricamento da database (se disponibile e tenant configurato)
+            2. Fallback a config.yaml per configurazioni mancanti
+            3. Configurazione di default come ultimo fallback
+        
+        Parametri di input:
+            config_path: Percorso del file di configurazione YAML (opzionale)
             
-        Returns:
-            Dict con la configurazione caricata
+        Valori di ritorno:
+            Dict con la configurazione merged da database + YAML + default
+        
+        Tracciamento aggiornamenti:
+            2025-09-09: Implementata integrazione database per batch processing
         """
-        # Percorso di default del file di configurazione
+        
+        # 🔧 CONFIGURAZIONE DI DEFAULT BASE
+        default_config = {
+            'pipeline': {
+                'intelligent_classifier_embedding': False,
+                'embedding_validation': True,
+                'semantic_fallback': True,
+                'new_category_detection': True,
+                'embedding_similarity_threshold': 0.85,
+                'classification_batch_size': 32,  # Default batch size
+                'max_parallel_calls': 200
+            }
+        }
+        
+        # 🚀 PASSO 1: CARICA CONFIG.YAML (BASE)
+        yaml_config = {}
         if config_path is None:
-            # Cerca config.yaml nella directory del progetto
             current_dir = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.dirname(current_dir)  # Risale di un livello dalla cartella Classification
+            project_root = os.path.dirname(current_dir)  
             config_path = os.path.join(project_root, 'config.yaml')
         
         try:
             if os.path.exists(config_path):
                 with open(config_path, 'r', encoding='utf-8') as f:
-                    config = yaml.safe_load(f)
-                    return config if config is not None else {}
-            else:
-                # Configurazione di default se il file non esiste
-                default_config = {
-                    'pipeline': {
-                        'intelligent_classifier_embedding': False,
-                        'embedding_validation': True,
-                        'semantic_fallback': True,
-                        'new_category_detection': True,
-                        'embedding_similarity_threshold': 0.85
-                    }
-                }
-                return default_config
-                
+                    yaml_config = yaml.safe_load(f) or {}
         except Exception as e:
-            self.logger.warning(f"Errore nel caricamento config da {config_path}: {e}")
-            # Ritorna configurazione di default in caso di errore
-            return {
-                'pipeline': {
-                    'intelligent_classifier_embedding': False,
-                    'embedding_validation': True,
-                    'semantic_fallback': True,
-                    'new_category_detection': True,
-                    'embedding_similarity_threshold': 0.85
-                }
-            }
+            if hasattr(self, 'logger'):
+                self.logger.warning(f"Errore caricamento config.yaml da {config_path}: {e}")
+        
+        # 🗄️ PASSO 2: INTEGRA CONFIGURAZIONI DATABASE (PRIORITÀ ALTA)
+        # Solo se il servizio database è disponibile e il tenant è configurato
+        if (hasattr(self, 'ai_config_service') and self.ai_config_service and 
+            hasattr(self, 'tenant_id') and self.tenant_id):
+            try:
+                # Recupera configurazioni batch processing da database
+                batch_config = self.ai_config_service.get_batch_processing_config(self.tenant_id)
+                
+                if batch_config and batch_config.get('source') == 'database':
+                    # Sovrascrive configurazioni YAML con valori database (PRIORITÀ DATABASE)
+                    if 'pipeline' not in yaml_config:
+                        yaml_config['pipeline'] = {}
+                    
+                    yaml_config['pipeline']['classification_batch_size'] = batch_config.get('classification_batch_size', 32)
+                    yaml_config['pipeline']['max_parallel_calls'] = batch_config.get('max_parallel_calls', 200)
+                    
+                    if hasattr(self, 'logger'):
+                        self.logger.info(f"✅ Configurazione batch loading da database per tenant {self.tenant_id}: "
+                                       f"batch_size={batch_config.get('classification_batch_size')}")
+                        
+            except Exception as e:
+                if hasattr(self, 'logger'):
+                    self.logger.warning(f"⚠️ Errore caricamento config database per tenant {getattr(self, 'tenant_id', 'unknown')}: {e}")
+                    self.logger.info("🔄 Fallback a configurazione config.yaml")
+        
+        # 🔗 PASSO 3: MERGE CONFIGURAZIONI (DATABASE → YAML → DEFAULT)
+        # Inizia con default, poi sovrascrive con YAML, poi con database
+        merged_config = default_config.copy()
+        
+        # Merge YAML config
+        if yaml_config:
+            for key in yaml_config:
+                if key == 'pipeline' and 'pipeline' in merged_config:
+                    merged_config['pipeline'].update(yaml_config['pipeline'])
+                else:
+                    merged_config[key] = yaml_config[key]
+        
+        return merged_config
     
     # ==================== METODI FINE-TUNING ====================
     

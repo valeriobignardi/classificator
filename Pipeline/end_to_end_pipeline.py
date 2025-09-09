@@ -803,6 +803,56 @@ class EndToEndPipeline:
         
         return cluster_info
     
+    def _generate_cluster_info_from_documenti(self, documenti):
+        """
+        🚀 NUOVO: Genera cluster_info dai documenti DocumentoProcessing
+        
+        Scopo: Converte l'architettura DocumentoProcessing al formato 
+               cluster_info richiesto dal resto della pipeline legacy
+        
+        Args:
+            documenti: Lista di oggetti DocumentoProcessing con metadati completi
+            
+        Returns:
+            dict: Informazioni sui cluster nel formato atteso dalla pipeline
+            
+        Data ultima modifica: 2025-01-13
+        Autore: Valerio Bignardi
+        """
+        cluster_info = {}
+        
+        for idx, doc in enumerate(documenti):
+            if not doc.is_outlier and doc.cluster_id is not None:
+                cluster_id = doc.cluster_id
+                
+                if cluster_id not in cluster_info:
+                    cluster_info[cluster_id] = {
+                        'intent': f'cluster_hdbscan_{cluster_id}',
+                        'size': 0,
+                        'indices': [],
+                        'intent_string': f'Cluster HDBSCAN {cluster_id}',
+                        'classification_method': 'hdbscan_optimized',
+                        'average_confidence': 0.7,
+                        'documents': [],
+                        'representative_text': doc.testo_completo
+                    }
+                
+                # Se questo documento è il rappresentante, usa il suo testo
+                if doc.is_representative:
+                    cluster_info[cluster_id]['representative_text'] = doc.testo_completo
+                
+                cluster_info[cluster_id]['indices'].append(idx)
+                cluster_info[cluster_id]['documents'].append({
+                    'index': idx,
+                    'session_id': doc.session_id,
+                    'text': doc.testo_completo[:200] + "..." if len(doc.testo_completo) > 200 else doc.testo_completo,
+                    'is_representative': doc.is_representative,
+                    'is_propagated': doc.is_propagated
+                })
+                cluster_info[cluster_id]['size'] += 1
+        
+        return cluster_info
+    
     def _get_embedder(self):
         """
         Ottiene embedder per pipeline tramite sistema dinamico (lazy loading)
@@ -4268,49 +4318,91 @@ class EndToEndPipeline:
             print(f"\n📊 FASE 2: CLUSTERING COMPLETO")
             print(f"🚨 [DEBUG] AVVIO CLUSTERING nella funzione esegui_training_interattivo")
             
-            debug_logger.info(f"📊 AVVIO FASE 2 - Clustering completo")
-            embeddings, cluster_labels, representatives, suggested_labels = self.esegui_clustering(sessioni)
+            debug_logger.info(f"📊 AVVIO FASE 2 - Clustering completo con DocumentoProcessing")
             
-            # Genera cluster_info dai cluster_labels per evitare duplicazione
-            session_texts = [sessioni[sid]['testo_completo'] for sid in sessioni.keys()]
-            cluster_info = self._generate_cluster_info_from_labels(cluster_labels, session_texts)
+            # 🚀 NUOVO: Usa l'architettura DocumentoProcessing unificata
+            documenti = self.esegui_clustering(sessioni)
             
-            n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
-            n_outliers = sum(1 for label in cluster_labels if label == -1)
-            print(f"✅ Clustering completo: {n_clusters} cluster, {n_outliers} outlier")
-            print(f"🚨 [DEBUG] FASE 2 COMPLETATA - Clustering")
+            # Calcola statistiche dai documenti DocumentoProcessing
+            n_clusters = len(set(doc.cluster_id for doc in documenti if not doc.is_outlier and doc.cluster_id is not None))
+            n_outliers = sum(1 for doc in documenti if doc.is_outlier)
+            n_rappresentanti = sum(1 for doc in documenti if doc.is_representative)
+            n_propagati = sum(1 for doc in documenti if doc.is_propagated)
+            
+            print(f"✅ Clustering DocumentoProcessing completo: {n_clusters} cluster, {n_outliers} outlier")
+            print(f"🚨 [DEBUG] FASE 2 COMPLETATA - Clustering DocumentoProcessing")
+            print(f"🚨 [DEBUG] Documenti processati: {len(documenti)}")
             print(f"🚨 [DEBUG] Cluster trovati: {n_clusters}, Outlier: {n_outliers}")
-            print(f"🚨 [DEBUG] Rappresentanti totali: {len(representatives)}")
-            print(f"🚨 [DEBUG] Cluster info generato: {len(cluster_info)} cluster")
+            print(f"🚨 [DEBUG] Rappresentanti: {n_rappresentanti}, Propagati: {n_propagati}")
             
-            debug_logger.info(f"📊 FASE 2 COMPLETATA - Clustering")
+            debug_logger.info(f"📊 FASE 2 COMPLETATA - Clustering DocumentoProcessing")
+            debug_logger.info(f"   Documenti processati: {len(documenti)}")
             debug_logger.info(f"   Cluster trovati: {n_clusters}, Outlier: {n_outliers}")
-            debug_logger.info(f"   Rappresentanti totali: {len(representatives)}")
+            debug_logger.info(f"   Rappresentanti: {n_rappresentanti}, Propagati: {n_propagati}")
+            
+            # Genera oggetti compatibili per il resto della pipeline legacy
+            representatives = [doc for doc in documenti if doc.is_representative]
+            cluster_labels = [doc.cluster_id if not doc.is_outlier else -1 for doc in documenti]
+            embeddings = [doc.embedding for doc in documenti]
+            suggested_labels = []  # Non più necessario con DocumentoProcessing
+            
+            # Genera cluster_info dai DocumentoProcessing
+            cluster_info = self._generate_cluster_info_from_documenti(documenti)
 
-            # 3. Selezione intelligente rappresentanti per review umana
-            print(f"\n📊 ")
-            print(f"🚨 [DEBUG] AVVIO SELEZIONE RAPPRESENTANTI - funzione esegui_training_interattivo")
-            limited_representatives, selection_stats = self._select_representatives_for_human_review(
-                representatives, suggested_labels, human_limit, sessioni,
-                confidence_threshold=confidence_threshold,
-                force_review=force_review,
-                disagreement_threshold=disagreement_threshold
+            # 3. Selezione intelligente rappresentanti con DocumentoProcessing
+            print(f"\n📊 FASE 3: SELEZIONE RAPPRESENTANTI CON DOCUMENTOPROCESSING")
+            print(f"🚨 [DEBUG] AVVIO SELEZIONE RAPPRESENTANTI - DocumentoProcessing architettura")
+            
+            # 🚀 USA LA NUOVA FUNZIONE select_representatives_from_documents
+            selected_docs = self.select_representatives_from_documents(
+                documenti=documenti,
+                max_sessions=human_limit
             )
+            
+            # Converte in formato legacy per compatibilità temporanea
+            limited_representatives = {}
+            for doc in selected_docs:
+                if not doc.is_outlier and doc.cluster_id is not None:
+                    cluster_id = doc.cluster_id
+                    if cluster_id not in limited_representatives:
+                        limited_representatives[cluster_id] = []
+                    
+                    limited_representatives[cluster_id].append({
+                        'session_id': doc.session_id,
+                        'text': doc.testo_completo,
+                        'index': doc.session_id,  # Compatibilità
+                        'is_representative': doc.is_representative,
+                        'cluster_id': doc.cluster_id
+                    })
+            
             trace_all("I rappresentanti selezionati sono: ", "DEBUG", selected_keys=list(limited_representatives.keys()))
             
-            print(f"✅ Selezione completata:")
-            print(f"  📋 Cluster originali: {len(representatives)}")
-            print(f"  👤 Cluster per review: {len(limited_representatives)}")
-            print(f"  📝 Sessioni per review: {selection_stats['total_sessions_for_review']}")
-            print(f"  🚫 Cluster esclusi: {selection_stats['excluded_clusters']}")
-            print(f"🚨 [DEBUG] FASE 3 COMPLETATA - Selezione rappresentanti")
-            print(f"🚨 [DEBUG] Limited representatives keys: {list(limited_representatives.keys())}")
+            # Crea statistiche per compatibilità
+            total_representatives = len([doc for doc in documenti if doc.is_representative])
+            total_clusters_with_reps = len(set(doc.cluster_id for doc in documenti 
+                                             if doc.is_representative and doc.cluster_id is not None))
             
-            debug_logger.info(f"📊 FASE 3 COMPLETATA - Selezione rappresentanti")
-            debug_logger.info(f"   Cluster originali: {len(representatives)}")
-            debug_logger.info(f"   Cluster per review: {len(limited_representatives)}")
-            debug_logger.info(f"   Sessioni per review: {selection_stats['total_sessions_for_review']}")
-            debug_logger.info(f"   Cluster esclusi: {selection_stats['excluded_clusters']}")
+            selection_stats = {
+                'total_sessions_for_review': len(selected_docs),
+                'excluded_clusters': total_clusters_with_reps - len(limited_representatives),
+                'strategy': 'advanced_document_processing',
+                'total_representatives_available': total_representatives,
+                'clusters_with_representatives': total_clusters_with_reps
+            }
+            
+            print(f"✅ Selezione DocumentoProcessing completata:")
+            print(f"  📋 Documenti totali: {len(documenti)}")
+            print(f"  👤 Documenti selezionati: {len(selected_docs)}")
+            print(f"  🧩 Cluster con rappresentanti: {len(limited_representatives)}")
+            print(f"  📊 Statistiche: {selection_stats}")
+            print(f"🚨 [DEBUG] FASE 3 COMPLETATA - Selezione DocumentoProcessing")
+            print(f"🚨 [DEBUG] Cluster selezionati: {list(limited_representatives.keys())}")
+            
+            debug_logger.info(f"📊 FASE 3 COMPLETATA - Selezione DocumentoProcessing")
+            debug_logger.info(f"   Documenti totali: {len(documenti)}")
+            debug_logger.info(f"   Documenti selezionati: {len(selected_docs)}")
+            debug_logger.info(f"   Cluster con rappresentanti: {len(limited_representatives)}")
+            debug_logger.info(f"   Statistiche: {selection_stats}")
 
             # 4. Classificazione completa con ensemble ML+LLM
             print(f"\n📊 FASE 4: CLASSIFICAZIONE COMPLETA CON ENSEMBLE ML+LLM")

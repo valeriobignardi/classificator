@@ -35,6 +35,37 @@ from dataclasses import dataclass, field
 from queue import Queue
 import backoff
 
+# 🔍 Import tracing per monitoring batch processing
+try:
+    import sys
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Pipeline'))
+    from end_to_end_pipeline import trace_all
+except ImportError as ie:
+    print(f"🔍 DEBUG: ImportError per end_to_end_pipeline: {ie}")
+    def trace_all(function_name: str, action: str = "ENTER", called_from: str = None, **kwargs):
+        """Fallback tracing function se il modulo principale non è disponibile"""
+        print(f"🔍 DEBUG: trace_all chiamata con function_name={function_name}, action={action}")
+        
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Crea messaggio di tracing
+        message = f"[{timestamp}] {action} {function_name}"
+        if called_from:
+            message += f" (from {called_from})"
+            
+        # Aggiungi parametri se presenti
+        if kwargs:
+            params = ", ".join([f"{k}={v}" for k, v in kwargs.items()])
+            message += f" - {params}"
+            
+        print(f"🔍 TRACE FALLBACK: {message}")
+        
+        # Debug finale
+        print(f"🔍 DEBUG: trace_all completata")
+    
+    print("🔍 DEBUG: Funzione trace_all fallback definita")
+
 
 @dataclass
 class OpenAICallStats:
@@ -429,37 +460,78 @@ class OpenAIService:
             
         Data ultima modifica: 2025-01-31
         """
+        print(f"🔍 DEBUG: batch_chat_completions chiamato con {len(requests)} richieste")
+        trace_all("OpenAIService.batch_chat_completions", "ENTER", 
+                 requests_count=len(requests), max_concurrent=max_concurrent)
+        print(f"🔍 DEBUG: trace_all chiamata completata")
+        
+        if not requests:
+            trace_all("OpenAIService.batch_chat_completions", "EXIT", message="empty_requests")
+            return []
+        
+        start_time = time.time()
+        
         if max_concurrent:
             # Usa semaforo temporaneo per questo batch
             temp_semaphore = asyncio.Semaphore(min(max_concurrent, self.max_parallel_calls))
+            effective_concurrency = min(max_concurrent, self.max_parallel_calls)
         else:
             temp_semaphore = self.semaphore
+            effective_concurrency = self.max_parallel_calls
+        
+        trace_all("OpenAIService.batch_chat_completions", "INFO", 
+                 effective_concurrency=effective_concurrency)
         
         async def process_request(request_data):
             async with temp_semaphore:
                 return await self.chat_completion(**request_data)
         
-        # Esegui tutte le richieste in parallelo
-        tasks = [process_request(req) for req in requests]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Converte eccezioni in errori strutturati
-        processed_results = []
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                processed_results.append({
-                    'error': str(result),
-                    'request_index': i,
-                    'success': False
-                })
-            else:
-                processed_results.append({
-                    **result,
-                    'request_index': i,
-                    'success': True
-                })
-        
-        return processed_results
+        try:
+            # Esegui tutte le richieste in parallelo
+            trace_all("OpenAIService.batch_chat_completions", "INFO", 
+                     message="starting_parallel_execution")
+            
+            tasks = [process_request(req) for req in requests]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Converte eccezioni in errori strutturati
+            processed_results = []
+            success_count = 0
+            error_count = 0
+            
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    processed_results.append({
+                        'error': str(result),
+                        'request_index': i,
+                        'success': False
+                    })
+                    error_count += 1
+                else:
+                    processed_results.append({
+                        **result,
+                        'request_index': i,
+                        'success': True
+                    })
+                    if result.get('error'):
+                        error_count += 1
+                    else:
+                        success_count += 1
+            
+            execution_time = time.time() - start_time
+            
+            trace_all("OpenAIService.batch_chat_completions", "EXIT", 
+                     success_count=success_count, error_count=error_count, 
+                     execution_time=f"{execution_time:.2f}s", 
+                     avg_per_request=f"{execution_time/len(requests):.3f}s")
+            
+            return processed_results
+            
+        except Exception as e:
+            execution_time = time.time() - start_time
+            trace_all("OpenAIService.batch_chat_completions", "ERROR", 
+                     error=str(e), execution_time=f"{execution_time:.2f}s")
+            raise
     
     
     def get_stats(self) -> Dict[str, Any]:

@@ -315,10 +315,25 @@ class IntelligentClassifier:
                     self.client_name = client_name
                     self.tenant_id = client_name or "humanitas"
         else:
-            # Fallback completo
-            self.tenant = None
-            self.client_name = client_name
-            self.tenant_id = client_name or "humanitas"
+            # Fallback completo: prova a creare Tenant da tenant_id di default
+            default_tenant_id = client_name or "humanitas"
+            try:
+                # Prova a creare un oggetto Tenant da slug "humanitas" per default
+                if TENANT_AVAILABLE:
+                    self.tenant = Tenant.from_slug(default_tenant_id)
+                    self.client_name = self.tenant.tenant_slug
+                    self.tenant_id = self.tenant.tenant_id
+                    if enable_logging:
+                        print(f"🔧 Tenant auto-creato da slug {default_tenant_id}: {self.tenant}")
+                else:
+                    raise ImportError("Tenant non disponibile")
+            except Exception as e:
+                if enable_logging:
+                    print(f"⚠️ Impossibile auto-creare Tenant da {default_tenant_id}: {e}")
+                    print("🔧 Uso fallback senza oggetto Tenant")
+                self.tenant = None
+                self.client_name = client_name
+                self.tenant_id = default_tenant_id
         # Carica configurazione PRIMA di tutto
         self.config_path = config_path or os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
         with open(self.config_path, 'r', encoding='utf-8') as file:
@@ -3978,44 +3993,14 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         
         try:
             if self.is_openai_model and self.openai_service:
-                # 🚨 TEMPORANEAMENTE COMMENTATO PER FORZARE BATCH PROCESSING
-                # result = self._call_openai_api_structured(conversation_text)
-                # trace_all("_call_llm_api_structured", "EXIT", 
-                #          called_from="classify_with_motivation",
-                #          llm_provider="OPENAI",
-                #          predicted_label=result.get('predicted_label', 'unknown'),
-                #          confidence=result.get('confidence', 0.0))
-                # return result
-                
-                # 🔥 FORZA BATCH PROCESSING ANCHE PER SINGOLE CONVERSAZIONI
-                print(f"🔥 [FORCE BATCH] Forzando batch processing per singola conversazione")
-                import asyncio
-                
-                async def force_batch_single():
-                    return await self._call_openai_api_batch([conversation_text])
-                
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        import concurrent.futures
-                        with concurrent.futures.ThreadPoolExecutor() as executor:
-                            future = executor.submit(asyncio.run, force_batch_single())
-                            batch_results = future.result()
-                    else:
-                        batch_results = loop.run_until_complete(force_batch_single())
-                except RuntimeError:
-                    batch_results = asyncio.run(force_batch_single())
-                
-                if batch_results and len(batch_results) > 0:
-                    result = batch_results[0]
-                    trace_all("_call_llm_api_structured", "EXIT", 
-                             called_from="classify_with_motivation",
-                             llm_provider="OPENAI_FORCED_BATCH",
-                             predicted_label=result.get('predicted_label', 'unknown'),
-                             confidence=result.get('confidence', 0.0))
-                    return result
-                else:
-                    raise ValueError("Batch processing non ha restituito risultati")
+                # ✅ USA IL METODO STRUTTURATO NORMALE PER OPENAI (SINGOLE CONVERSAZIONI)
+                result = self._call_openai_api_structured(conversation_text)
+                trace_all("_call_llm_api_structured", "EXIT", 
+                         called_from="classify_with_motivation",
+                         llm_provider="OPENAI",
+                         predicted_label=result.get('predicted_label', 'unknown'),
+                         confidence=result.get('confidence', 0.0))
+                return result
             else:
                 result = self._call_ollama_api_structured(conversation_text)
                 trace_all("_call_llm_api_structured", "EXIT", 

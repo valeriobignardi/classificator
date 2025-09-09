@@ -1202,10 +1202,6 @@ class AdvancedEnsembleClassifier:
                 # Fallback con solo embedding base
                 ml_features_cache.append(embedding.reshape(1, -1))
         
-        # 🔍 TRACING ENTER
-        trace_all("predict_with_llm_only", "ENTER", 
-                 called_from="classification_pipeline")
-        
         print(f"✅ Cache features ML creata: {len(ml_features_cache)} entries")
         return ml_features_cache
     
@@ -1241,8 +1237,6 @@ class AdvancedEnsembleClassifier:
                 })
             
             return result
-            
-# TODO: Aggiungere trace_all EXIT e ERROR per predict_with_llm_only
             
         except Exception as e:
             print(f"❌ Errore nella classificazione LLM standalone: {e}")

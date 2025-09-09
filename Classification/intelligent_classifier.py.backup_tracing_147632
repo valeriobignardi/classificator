@@ -2726,30 +2726,26 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                     'json_valid': True
                 }
             )
-            # 🔍 TRACING EXIT - Successo
-            trace_all("_parse_llm_response", "EXIT", 
-                     {"status": "SUCCESS", 
-                      "resolved_label": resolved_label,
-                      "final_confidence": final_confidence,
-                      "method": "STANDARD_PARSE"})
-            
             return resolved_label, final_confidence, motivation, predicted_label  # Include etichetta originale
             
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
-            # 🔍 TRACING ERROR
-            trace_all("_parse_llm_response", "ERROR", 
-                     {"error": str(e),
-                      "error_type": type(e).__name__,
-                      "response_length": len(response_text)})
-            
             fallback_result = self._fallback_parse_response(response_text)
+            trace_all(
+                'ERROR', 
+                '_parse_llm_response', 
+                {
+                    'error': str(e),
+                    'error_type': type(e).__name__,
+                    'response_length': len(response_text),
+                    'fallback_label': fallback_result[0],
+                    'fallback_confidence': fallback_result[1]
+                # TODO: Aggiungere trace_all EXIT e ERROR per _parse_llm_response
+                }
+            # 🔍 TRACING ENTER
+            trace_all("_fallback_parse_response", "ENTER", 
+                     called_from="classification_pipeline")
             
-            # 🔍 TRACING EXIT - Fallback
-            trace_all("_parse_llm_response", "EXIT", 
-                     {"status": "FALLBACK_USED",
-                      "fallback_label": fallback_result[0],
-                      "fallback_confidence": fallback_result[1]})
-            
+            )
             self.logger.warning(f"Errore parsing/validazione: {e}")
             return fallback_result
     
@@ -5833,6 +5829,10 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                     else:
                         self.logger.debug(f"🏷️ Tag '{result.predicted_label}' già esistente nella tabella tags")
                         
+                # 🔍 TRACING ENTER
+                trace_all("_validate_llm_classification_with_embedding", "ENTER", 
+                         called_from="classification_pipeline")
+                
                 except Exception as tag_error:
                     self.logger.warning(f"⚠️ Errore salvataggio tag '{result.predicted_label}' in tabella MySQL: {tag_error}")
                     # Non blocca il flusso principale, è solo per il frontend
@@ -6449,6 +6449,10 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             )
             return fallback_result
             
+        # 🔍 TRACING ENTER
+        trace_all("_resolve_label_semantically", "ENTER", 
+                 called_from="classification_pipeline")
+        
         except Exception as e:
             trace_all(
                 'ERROR', 
@@ -6656,10 +6660,6 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 
 # TODO: Aggiungere trace_all EXIT e ERROR per _find_best_match_via_examples
                 
-                # 🔍 TRACING ENTER
-                trace_all("_evaluate_new_category_with_bertopic", "ENTER", 
-                         called_from="classification_pipeline")
-                
                 # Similarità etichetta con categoria (usando nome categoria)
                 category_embedding = self.embedder.encode_single(category.replace('_', ' '))
                 label_similarity = self._cosine_similarity(proposed_embedding, category_embedding)
@@ -6778,7 +6778,6 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                                 'most_similar_existing': most_similar_label,
                                 'max_similarity': max_similarity
                             }
-                        # TODO: Aggiungere trace_all EXIT e ERROR per _evaluate_new_category_with_bertopic
                         }
                 else:
                     # Senza embedder, accetta il topic BERTopic se ha probabilità sufficiente

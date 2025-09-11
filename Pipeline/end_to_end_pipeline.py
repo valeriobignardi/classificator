@@ -1500,12 +1500,27 @@ class EndToEndPipeline:
         # 🎯 Seleziona rappresentanti per ogni cluster
         print(f"\n🎯 [FASE 4: RAPPRESENTANTI] Selezionando rappresentanti per {len(cluster_info)} cluster...")
         
+        # Crea mapping session_id -> indice documenti per correggere bug mapping
+        session_id_to_doc_index = {doc.session_id: i for i, doc in enumerate(documenti)}
+        
         for cluster_id, info in cluster_info.items():
             cluster_indices = info['indices']
             
+            # Converti indici originali in session_ids e poi in indici documenti
+            cluster_session_ids = [session_ids[idx] for idx in cluster_indices if idx < len(session_ids)]
+            cluster_doc_indices = [session_id_to_doc_index[session_id] for session_id in cluster_session_ids 
+                                  if session_id in session_id_to_doc_index]
+            
+            print(f"    🎯 Cluster {cluster_id}: {len(cluster_doc_indices)} documenti candidati")
+            
+            if len(cluster_doc_indices) == 0:
+                print(f"      ⚠️ Nessun documento trovato per cluster {cluster_id}")
+                continue
+                
             # Selezione intelligente dei rappresentanti (più diversi possibile)
-            if len(cluster_indices) <= 3:
-                selected_indices = cluster_indices
+            if len(cluster_doc_indices) <= 3:
+                selected_doc_indices = cluster_doc_indices
+                print(f"      ✅ Seleziono tutti {len(selected_doc_indices)} documenti")
             else:
                 # Seleziona 3 rappresentanti più diversi usando distanza embedding
                 cluster_embeddings = embeddings[cluster_indices]
@@ -1531,10 +1546,21 @@ class EndToEndPipeline:
                     
                     if best_idx != -1:
                         selected_indices.append(best_idx)
+                
+                # Converti indici selezionati in indici documenti
+                selected_session_ids = [session_ids[idx] for idx in selected_indices if idx < len(session_ids)]
+                selected_doc_indices = [session_id_to_doc_index[session_id] for session_id in selected_session_ids 
+                                       if session_id in session_id_to_doc_index]
+                print(f"      ✅ Seleziono {len(selected_doc_indices)} rappresentanti diversificati")
             
             # Marca i documenti selezionati come rappresentanti
-            for idx in selected_indices:
-                documenti[idx].set_as_representative(f"diverse_selection_cluster_{cluster_id}")
+            rappresentanti_cluster = 0
+            for doc_idx in selected_doc_indices:
+                if doc_idx < len(documenti):
+                    documenti[doc_idx].set_as_representative(f"diverse_selection_cluster_{cluster_id}")
+                    rappresentanti_cluster += 1
+            
+            print(f"      🎯 Marcati {rappresentanti_cluster} rappresentanti per cluster {cluster_id}")
                 
         # 🔄 Applica propagazione intelligente usando funzione esistente
         print(f"\n🔄 [FASE 4: PROPAGAZIONE] Applicando propagazione intelligente...")
@@ -7642,11 +7668,62 @@ class EndToEndPipeline:
             # Salvataggio batch in MongoDB
             print(f"   📊 Salvando {len(classifications)} classificazioni...")
             try:
-                # Usa il metodo di salvataggio esistente o implementa batch save
+                # 🔧 FIX: Usa save_classification_result() invece del metodo inesistente save_classification()
+                saved_count = 0
                 for record in classifications:
-                    mongo_reader.save_classification(record)
+                    session_id = record['session_id']
+                    
+                    # Prepara final_decision nel formato corretto
+                    final_decision = {
+                        'predicted_label': record['classification'],
+                        'confidence': record['confidence'],
+                        'method': record['classification_method'],
+                        'reasoning': f"Training supervisionato fase 1 - {record['classification_method']}"
+                    }
+                    
+                    # Prepara cluster_metadata nel formato corretto
+                    cluster_metadata = {
+                        'cluster_id': record['cluster_id'],
+                        'cluster_size': len(sessioni) if record['cluster_id'] != -1 else 1,  # Approssimazione
+                        'is_representative': record['is_representative'],
+                        'is_outlier': record['is_outlier'],
+                        'selection_reason': 'training_supervisionato' if record['is_representative'] else None,
+                        'propagated_from': None,
+                        'propagation_consensus': None,
+                        'propagation_reason': None
+                    }
+                    
+                    # Determina review info
+                    needs_review = record['review_status'] == 'pending'
+                    review_reason = 'primo_avvio' if not ml_model_available else 'confidence_bassa' if needs_review else 'pipeline_processing'
+                    classified_by = 'training_supervisionato_fase1'
+                    
+                    # Ottieni embedding se disponibile (dalle sessioni originali)
+                    embedding = None
+                    if session_id in sessioni:
+                        session_data = sessioni[session_id]
+                        embedding = session_data.get('embedding', None)
+                    
+                    # 🔧 FIX: Usa il metodo CORRETTO save_classification_result()
+                    success = mongo_reader.save_classification_result(
+                        session_id=session_id,
+                        client_name=self.tenant.tenant_slug,
+                        final_decision=final_decision,
+                        conversation_text=record['conversation_text'],
+                        needs_review=needs_review,
+                        review_reason=review_reason,
+                        classified_by=classified_by,
+                        notes=f"Training supervisionato fase 1 - cluster_id: {record['cluster_id']}",
+                        cluster_metadata=cluster_metadata,
+                        embedding=embedding
+                    )
+                    
+                    if success:
+                        saved_count += 1
+                    else:
+                        print(f"   ⚠️ Errore salvataggio session {session_id}")
                 
-                print(f"   ✅ Salvate {len(classifications)} classificazioni in MongoDB")
+                print(f"   ✅ Salvate {saved_count}/{len(classifications)} classificazioni in MongoDB")
                 
             except Exception as save_error:
                 print(f"   ❌ Errore salvataggio MongoDB: {save_error}")

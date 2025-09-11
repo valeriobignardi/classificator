@@ -3759,45 +3759,72 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 chunks = [conversations[i:i + batch_size] for i in range(0, len(conversations), batch_size)]
                 print(f"🔥 [OpenAI Batch] Diviso in {len(chunks)} chunks con batch_size={batch_size}")
                 
-                for chunk_idx, chunk in enumerate(chunks):
-                    print(f"📦 [OpenAI Batch] Processing chunk {chunk_idx + 1}/{len(chunks)} "
-                          f"({len(chunk)} conversazioni)")
+                # 🚀 OTTIMIZZAZIONE: PROCESSAMENTO PARALLELO DI TUTTI I CHUNK
+                import asyncio
+                
+                async def process_all_chunks_parallel():
+                    """Processa tutti i chunk in parallelo per massimizzare performance"""
                     
-                    # Chiamata batch asincrona
-                    import asyncio
+                    # Crea task per tutti i chunk simultaneamente
+                    chunk_tasks = []
+                    for chunk_idx, chunk in enumerate(chunks):
+                        print(f"🎯 [OpenAI Parallel] Creando task per chunk {chunk_idx + 1}/{len(chunks)} "
+                              f"({len(chunk)} conversazioni)")
+                        
+                        # Crea task asincrono per ogni chunk
+                        task = self._call_openai_api_batch(chunk)
+                        chunk_tasks.append(task)
                     
-                    async def process_chunk_async():
-                        return await self._call_openai_api_batch(chunk)
+                    print(f"🚀 [OpenAI Parallel] Avvio processamento parallelo di {len(chunk_tasks)} chunk...")
                     
-                    # Esecuzione asincrona del chunk
-                    try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            # Se siamo già in un loop asincrono, usiamo un thread
-                            import concurrent.futures
-                            with concurrent.futures.ThreadPoolExecutor() as executor:
-                                future = executor.submit(asyncio.run, process_chunk_async())
-                                chunk_results = future.result()
-                        else:
-                            chunk_results = loop.run_until_complete(process_chunk_async())
-                    except RuntimeError:
-                        # Nessun loop esistente, creane uno nuovo
-                        chunk_results = asyncio.run(process_chunk_async())
+                    # Esegue tutti i chunk in parallelo con asyncio.gather
+                    all_chunk_results = await asyncio.gather(*chunk_tasks, return_exceptions=True)
                     
-                    print(f"✅ [OpenAI Batch] Chunk {chunk_idx + 1} completato: {len(chunk_results)} risultati")
+                    print(f"✅ [OpenAI Parallel] Tutti i chunk completati in parallelo!")
                     
-                    # Converte risultati dict in ClassificationResult
-                    for result_dict in chunk_results:
-                        classification_result = ClassificationResult(
-                            predicted_label=result_dict['predicted_label'],
-                            confidence=result_dict['confidence'],
-                            motivation=result_dict['motivation'],
-                            method='openai_batch',
-                            response_time=0.0,  # TODO: tracciare tempo se necessario
-                            cache_hit=False,
-                            embedding_similarity=None
-                        )
-                        results.append(classification_result)
+                    # Processa risultati e gestisci eventuali eccezioni
+                    combined_results = []
+                    for chunk_idx, chunk_results in enumerate(all_chunk_results):
+                        if isinstance(chunk_results, Exception):
+                            print(f"❌ [OpenAI Parallel] Errore nel chunk {chunk_idx + 1}: {chunk_results}")
+                            # Fallback per chunk fallito: crea risultati vuoti
+                            chunk_size = len(chunks[chunk_idx])
+                            chunk_results = [{'predicted_label': 'altro', 'confidence': 0.1, 'motivation': f'Chunk error: {chunk_results}'}] * chunk_size
+                        
+                        print(f"📊 [OpenAI Parallel] Chunk {chunk_idx + 1}: {len(chunk_results)} risultati ricevuti")
+                        combined_results.extend(chunk_results)
+                    
+                    return combined_results
+                
+                # Esecuzione del processamento parallelo
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # Se siamo già in un loop asincrono, usiamo un thread
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(asyncio.run, process_all_chunks_parallel())
+                            all_results = future.result()
+                    else:
+                        all_results = loop.run_until_complete(process_all_chunks_parallel())
+                except RuntimeError:
+                    # Nessun loop esistente, creane uno nuovo
+                    all_results = asyncio.run(process_all_chunks_parallel())
+                
+                print(f"🎉 [OpenAI Parallel] Processamento parallelo completato: {len(all_results)} risultati totali")
+                
+                # Converte risultati dict in ClassificationResult
+                for result_dict in all_results:
+                    classification_result = ClassificationResult(
+                        predicted_label=result_dict['predicted_label'],
+                        confidence=result_dict['confidence'],
+                        motivation=result_dict['motivation'],
+                        method='openai_batch_parallel',  # Indica processamento parallelo
+                        response_time=0.0,  # TODO: tracciare tempo se necessario
+                        cache_hit=False,
+                        embedding_similarity=None
+                    )
+                    results.append(classification_result)
                 
                 if self.enable_logging:
                     print(f"✅ [OpenAI Batch] Completato batch processing: {len(results)} risultati")

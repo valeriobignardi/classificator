@@ -1448,46 +1448,23 @@ class EndToEndPipeline:
             
             print(f"      🎯 Marcati {rappresentanti_cluster} rappresentanti per cluster {cluster_id}")
                 
-        # 🔄 Applica propagazione intelligente usando funzione esistente
-        print(f"\n🔄 [FASE 4: PROPAGAZIONE] Applicando propagazione intelligente...")
+        # 🎯 Marca solo i documenti come propagati (SENZA label - sarà aggiunta dopo classificazione)
+        print(f"\n🎯 [FASE 4: MARCATURA PROPAGATI] Marcando documenti per propagazione futura...")
         
-        # Raggruppa rappresentanti per cluster per applicare logica di propagazione
-        cluster_representatives = {}
+        # Marca tutti i documenti non-rappresentanti e non-outlier come propagati
+        propagati_marcati = 0
         for doc in documenti:
-            if doc.is_representative and not doc.is_outlier:
-                if doc.cluster_id not in cluster_representatives:
-                    cluster_representatives[doc.cluster_id] = []
+            if (doc.cluster_id != -1 and  # Non outlier
+                not doc.is_representative and 
+                not doc.is_outlier):
                 
-                # Crea dict compatibile con funzione esistente _determine_propagated_status
-                rep_dict = {
-                    'session_id': doc.session_id,
-                    'human_reviewed': doc.human_reviewed,
-                    'classification': doc.predicted_label or doc.propagated_label
-                }
-                cluster_representatives[doc.cluster_id].append(rep_dict)
+                # Marca solo come propagato, SENZA label (sarà aggiunta dopo classificazione)
+                doc.is_propagated = True
+                doc.propagated_from_cluster = doc.cluster_id
+                doc.selection_reason = "cluster_propagated"
+                propagati_marcati += 1
         
-        # Applica propagazione ai membri di ogni cluster
-        for cluster_id in cluster_info.keys():
-            if cluster_id in cluster_representatives:
-                # Usa funzione esistente per determinare status propagazione
-                propagated_status = self._determine_propagated_status(
-                    cluster_representatives[cluster_id]
-                )
-                
-                # Applica ai documenti non-rappresentanti del cluster
-                for doc in documenti:
-                    if (doc.cluster_id == cluster_id and 
-                        not doc.is_representative and 
-                        not doc.is_outlier):
-                        
-                        if not propagated_status['needs_review']:
-                            # Auto-classifica con propagazione
-                            doc.set_as_propagated(
-                                propagated_from=cluster_id,
-                                propagated_label=propagated_status['propagated_label'],
-                                consensus=0.7,  # Default consensus per nuovi cluster
-                                reason=propagated_status['reason']
-                            )
+        print(f"   ✅ Marcati {propagati_marcati} documenti per propagazione futura")
         
         
         # 📊 Calcola statistiche finali dai documenti elaborati
@@ -2626,6 +2603,13 @@ class EndToEndPipeline:
             print(f"   ✅ Documenti classificati: {len(classified_docs)}")
         else:
             print(f"   ℹ️ Nessun documento richiede classificazione")
+        
+        # 1.5 FASE: PROPAGAZIONE (DOPO classificazione, PRIMA del salvataggio)
+        print(f"\n🔄 [FASE 1.5: PROPAGAZIONE] Propagando label dai rappresentanti ai cluster membri...")
+        
+        propagated_count = self._propagate_labels_from_representatives(documenti)
+        stats['propagated_count'] = propagated_count
+        print(f"   ✅ Documenti propagati: {propagated_count}")
         
         # 2. FASE: Salvataggio in MongoDB
         print(f"\n💾 [FASE 2: SALVATAGGIO] Salvando tutti i documenti in MongoDB...")
@@ -8137,3 +8121,90 @@ class EndToEndPipeline:
             trace_all("manual_retrain_model", "ERROR", 
                      error_message=error_msg, exception=str(e))
             return result
+
+    def _propagate_labels_from_representatives(self, documenti: List) -> int:
+        """
+        Propaga le label dai rappresentanti classificati ai membri del loro cluster
+        
+        Scopo: Assegna label ai documenti propagati basandosi sui rappresentanti del cluster
+        Parametri input: documenti (lista DocumentoProcessing)
+        Parametri output: numero di documenti propagati
+        Valori di ritorno: int (conteggio propagazioni)
+        Tracciamento aggiornamenti: 2025-09-13 - Valerio Bignardi - Fix bug propagazione
+        
+        Args:
+            documenti: Lista di oggetti DocumentoProcessing
+            
+        Returns:
+            int: Numero di documenti a cui è stata propagata la label
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-13
+        """
+        trace_all("_propagate_labels_from_representatives", "ENTER", 
+                 total_documents=len(documenti))
+        
+        try:
+            propagated_count = 0
+            
+            # 1. Raggruppa rappresentanti per cluster
+            print(f"   🔍 Analizzando rappresentanti per cluster...")
+            cluster_representatives = {}
+            
+            for doc in documenti:
+                if doc.is_representative and not doc.is_outlier and doc.predicted_label:
+                    cluster_id = doc.cluster_id
+                    if cluster_id not in cluster_representatives:
+                        cluster_representatives[cluster_id] = []
+                    
+                    # Crea dict compatibile con _determine_propagated_status
+                    rep_dict = {
+                        'session_id': doc.session_id,
+                        'human_reviewed': doc.human_reviewed,
+                        'classification': doc.predicted_label
+                    }
+                    cluster_representatives[cluster_id].append(rep_dict)
+            
+            print(f"   ✅ Trovati rappresentanti per {len(cluster_representatives)} cluster")
+            
+            # 2. Per ogni cluster con rappresentanti, determina label da propagare
+            for cluster_id, representatives in cluster_representatives.items():
+                print(f"   🎯 Cluster {cluster_id}: {len(representatives)} rappresentanti")
+                
+                # Usa funzione esistente per determinare status propagazione
+                propagated_status = self._determine_propagated_status(representatives)
+                
+                if not propagated_status['needs_review'] and propagated_status['propagated_label']:
+                    # 3. Applica propagazione ai membri del cluster
+                    cluster_propagated = 0
+                    for doc in documenti:
+                        if (doc.cluster_id == cluster_id and 
+                            doc.is_propagated and 
+                            not doc.is_representative and 
+                            not doc.is_outlier):
+                            
+                            # Propaga la label dal rappresentante
+                            doc.set_as_propagated(
+                                propagated_from=cluster_id,
+                                propagated_label=propagated_status['propagated_label'],
+                                consensus=0.7,  # Default consensus
+                                reason=propagated_status['reason']
+                            )
+                            cluster_propagated += 1
+                            propagated_count += 1
+                    
+                    print(f"     ✅ Propagata label '{propagated_status['propagated_label']}' a {cluster_propagated} documenti")
+                else:
+                    # Cluster necessita review - nessuna propagazione automatica
+                    reason = propagated_status.get('reason', 'unknown')
+                    print(f"     ⚠️ Cluster richiede review: {reason}")
+            
+            trace_all("_propagate_labels_from_representatives", "EXIT", 
+                     propagated_count=propagated_count)
+            return propagated_count
+            
+        except Exception as e:
+            trace_all("_propagate_labels_from_representatives", "ERROR", 
+                     exception=str(e))
+            print(f"   ❌ Errore durante propagazione: {str(e)}")
+            return 0

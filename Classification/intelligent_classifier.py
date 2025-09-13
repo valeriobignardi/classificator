@@ -135,7 +135,7 @@ except ImportError:
 
 # 🔍 Import tracing con fallback per evitare crash
 try:
-    from Pipeline.end_to_end_pipeline import trace_all
+    from Utils.tracing import trace_all
 except ImportError:
     def trace_all(function_name: str, action: str = "ENTER", called_from: str = None, **kwargs):
         """Fallback tracing function se il modulo principale non è disponibile"""
@@ -5347,17 +5347,18 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             raise e
     
     def classify_batch(self, 
-                      conversations: List[str],
+                      documents,
                       show_progress: bool = True) -> List[ClassificationResult]:
         """
-        Classifica multiple conversazioni in batch (metodo principale)
+        🚀 FIX METADATI: Classifica DocumentoProcessing preservando tutti i metadati
         
         Scopo della funzione:
-        - Classifica multiple conversazioni usando il metodo classify_with_motivation
+        - Classifica oggetti DocumentoProcessing aggiornandoli con risultati
+        - Preserva metadati cluster (outlier, representative, propagated)
         - Gestisce progress tracking e fallback per elementi falliti
         
         Parametri di input e output:
-        - conversations: List[str] - Lista di testi da classificare
+        - documents: List[DocumentoProcessing] O List[str] - Documenti o testi (compatibilità)
         - show_progress: bool - Se mostrare progress bar
         
         Valori di ritorno:
@@ -5365,14 +5366,29 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         
         Tracciamento aggiornamenti:
         - 2025-09-07: Aggiunto tracing completo ENTER/EXIT/ERROR
+        - 2025-01-13: Fix metadati DocumentoProcessing 
         
         Args:
-            conversations: Lista di testi da classificare
+            documents: Lista di DocumentoProcessing o testi da classificare
             show_progress: Se mostrare progress bar
             
         Returns:
             Lista di risultati classificazione
         """
+        # 🚀 FIX: Rileva tipo input e gestisci DocumentoProcessing
+        if documents and hasattr(documents[0], 'testo_completo'):
+            # Input: List[DocumentoProcessing] - MANTIENI METADATI!
+            print(f"🔍 classify_batch con {len(documents)} DocumentoProcessing (metadati preservati)")
+            conversations = [doc.testo_completo for doc in documents]
+            preserve_metadata = True
+            document_objects = documents
+        else:
+            # Input: List[str] - Compatibilità retroattiva
+            print(f"🔍 classify_batch con {len(documents)} stringhe (modalità compatibilità)")
+            conversations = documents
+            preserve_metadata = False
+            document_objects = None
+        
         # 🔍 TRACING ENTER
         trace_all("classify_batch", "ENTER", 
                  called_from="intelligent_intent_clusterer_or_api",
@@ -5431,7 +5447,18 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         if show_progress and total > 1:
             self.logger.info(f"Classificazione batch completata: {len(results)}/{total} elementi")
         
-        # 🔍 TRACING EXIT - Success
+        # � FIX: Aggiorna metadati DocumentoProcessing con risultati classificazione
+        if preserve_metadata and document_objects:
+            for i, (doc, result) in enumerate(zip(document_objects, results)):
+                doc.set_classification_result(
+                    predicted_label=result.predicted_label,
+                    confidence=result.confidence,
+                    method=f"intelligent_classifier_{result.method}",
+                    reasoning=result.motivation
+                )
+                print(f"  📝 Aggiornato DocumentoProcessing {doc.session_id}: {result.predicted_label} ({result.confidence:.3f})")
+        
+        # �🔍 TRACING EXIT - Success
         trace_all("classify_batch", "EXIT", 
                  called_from="intelligent_intent_clusterer_or_api",
                  total_conversations=total,
@@ -5444,19 +5471,19 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         return results
     
     def batch_classify(self, 
-                      conversations: List[str],
+                      documents,
                       show_progress: bool = True) -> List[ClassificationResult]:
         """
         Alias per classify_batch (compatibilità schema operativo)
         
         Args:
-            conversations: Lista di testi da classificare
+            documents: Lista di DocumentoProcessing o testi da classificare
             show_progress: Se mostrare progress bar
             
         Returns:
             Lista di risultati classificazione
         """
-        return self.classify_batch(conversations, show_progress)
+        return self.classify_batch(documents, show_progress)
     
     def _update_stats(self, processing_time: float, success: bool = True) -> None:
         """Aggiorna statistiche interne"""

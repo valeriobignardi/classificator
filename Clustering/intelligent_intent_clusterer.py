@@ -21,7 +21,7 @@ from tenant import Tenant
 
 # Import trace_all per debugging
 try:
-    from Pipeline.end_to_end_pipeline import trace_all
+    from Utils.tracing import trace_all
 except ImportError:
     # Fallback se non disponibile
     def trace_all(function_name: str, action: str = "ENTER", called_from: str = None, **kwargs):

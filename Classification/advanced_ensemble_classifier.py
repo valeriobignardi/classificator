@@ -1490,25 +1490,41 @@ class AdvancedEnsembleClassifier:
         self.bertopic_return_one_hot = return_one_hot
         print(f"🔗 BERTopic provider impostato (top_k={top_k}, one_hot={return_one_hot})")
 
-    def classify_batch(self, conversations: List[str], show_progress: bool = True, force_llm_only: bool = False, **kwargs) -> List[ClassificationResult]:
+    def classify_batch(self, conversations, show_progress: bool = True, force_llm_only: bool = False, **kwargs) -> List[ClassificationResult]:
         """
-        Metodo di compatibilità per classify_batch - interfaccia standard
+        🚀 FIX METADATI: Classifica batch preservando metadati DocumentoProcessing
+        
+        Scopo: Classificare documenti mantenendo tutti i metadati cluster
+        Supporta sia List[str] che List[DocumentoProcessing] per compatibilità
         
         Args:
-            conversations: Lista di testi da classificare (compatibilità IntelligentClassifier)
-            show_progress: Se mostrare progress bar (compatibilità IntelligentClassifier) 
-            force_llm_only: Se True, usa solo LLM (parametro specifico ensemble)
+            conversations: List[str] O List[DocumentoProcessing] - Testi o documenti completi
+            show_progress: Se mostrare progress bar 
+            force_llm_only: Se True, usa solo LLM
             **kwargs: Altri parametri per batch_predict
             
         Returns:
-            Lista di ClassificationResult (compatibilità IntelligentClassifier)
+            Lista di ClassificationResult con metadati preservati
             
         Autore: Valerio Bignardi
-        Data: 2025-01-13
+        Data: 2025-01-13 - Fix metadati DocumentoProcessing
         """
+        # 🚀 FIX: Rileva tipo input e estrai testi preservando metadati
+        if conversations and hasattr(conversations[0], 'testo_completo'):
+            # Input: List[DocumentoProcessing] - MANTIENI METADATI!
+            print(f"🔍 classify_batch con {len(conversations)} DocumentoProcessing (metadati preservati)")
+            batch_texts = [doc.testo_completo for doc in conversations]
+            preserve_metadata = True
+            documents = conversations
+        else:
+            # Input: List[str] - Compatibilità retroattiva
+            print(f"🔍 classify_batch con {len(conversations)} stringhe (modalità compatibilità)")
+            batch_texts = conversations
+            preserve_metadata = False
+            documents = None
         if force_llm_only and hasattr(self, 'llm_classifier') and self.llm_classifier:
             # Modalità LLM only - DEVE usare OpenAI per batch processing
-            print(f"🔍 classify_batch con force_llm_only=True - {len(conversations)} testi")
+            print(f"🔍 classify_batch con force_llm_only=True - {len(batch_texts)} testi")
             
             # 🚨 CRITICAL: Il batch processing funziona SOLO con OpenAI!
             # Verifica che l'LLM sia OpenAI, altrimenti crea classifier OpenAI temporaneo
@@ -1543,7 +1559,19 @@ class AdvancedEnsembleClassifier:
                     
                     if openai_classifier and hasattr(openai_classifier, 'classify_batch'):
                         print(f"✅ Uso classifier OpenAI temporaneo per batch: gpt-4o")
-                        return openai_classifier.classify_batch(conversations, show_progress=show_progress)
+                        llm_results = openai_classifier.classify_batch(batch_texts, show_progress=show_progress)
+                        
+                        # 🚀 FIX: Aggiorna metadati DocumentoProcessing con risultati LLM
+                        if preserve_metadata and documents:
+                            for doc, result in zip(documents, llm_results):
+                                doc.set_classification_result(
+                                    predicted_label=result.predicted_label,
+                                    confidence=result.confidence,
+                                    method="llm_openai_batch",
+                                    reasoning=result.motivation
+                                )
+                        
+                        return llm_results
                     
                 except Exception as e:
                     print(f"❌ Errore creazione classifier OpenAI temporaneo: {e}")
@@ -1555,27 +1583,49 @@ class AdvancedEnsembleClassifier:
                 if hasattr(self.llm_classifier, 'classify_batch') and is_openai_model:
                     # LLM ha classify_batch ed è OpenAI, usalo direttamente
                     print(f"✅ Uso classify_batch OpenAI esistente")
-                    return self.llm_classifier.classify_batch(conversations, show_progress=show_progress)
+                    llm_results = self.llm_classifier.classify_batch(batch_texts, show_progress=show_progress)
+                    
+                    # 🚀 FIX: Aggiorna metadati DocumentoProcessing con risultati LLM
+                    if preserve_metadata and documents:
+                        for doc, result in zip(documents, llm_results):
+                            doc.set_classification_result(
+                                predicted_label=result.predicted_label,
+                                confidence=result.confidence,
+                                method="llm_openai_existing",
+                                reasoning=result.motivation
+                            )
+                    
+                    return llm_results
                 else:
                     # Fallback a classificazione singola (anche per Ollama)
                     print(f"⚠️ Fallback a classificazioni singole (no batch per Ollama)")
                     results = []
-                    for i, text in enumerate(conversations):
-                        if show_progress and len(conversations) > 10 and i % max(1, len(conversations) // 10) == 0:
-                            print(f"Progress LLM-only singolo: {i}/{len(conversations)}")
+                    for i, text in enumerate(batch_texts):
+                        if show_progress and len(batch_texts) > 10 and i % max(1, len(batch_texts) // 10) == 0:
+                            print(f"Progress LLM-only singolo: {i}/{len(batch_texts)}")
                         result = self.llm_classifier.classify_with_motivation(text)
                         results.append(result)
+                        
+                        # 🚀 FIX: Aggiorna metadati DocumentoProcessing anche per singole
+                        if preserve_metadata and documents and i < len(documents):
+                            documents[i].set_classification_result(
+                                predicted_label=result.predicted_label,
+                                confidence=result.confidence,
+                                method="llm_ollama_single",
+                                reasoning=result.motivation
+                            )
+                    
                     return results
             except Exception as e:
                 print(f"❌ Errore in classify_batch force_llm_only: {e}")
                 raise
         else:
             # Modalità normale - usa batch_predict e converti risultati
-            dict_results = self.batch_predict(conversations, **kwargs)
+            dict_results = self.batch_predict(batch_texts, **kwargs)
             
             # Converti da Dict a ClassificationResult per compatibilità
             classification_results = []
-            for dict_result in dict_results:
+            for i, dict_result in enumerate(dict_results):
                 # Crea ClassificationResult da dict response
                 classification_result = ClassificationResult(
                     predicted_label=dict_result.get('predicted_label', 'altro'),
@@ -1586,6 +1636,15 @@ class AdvancedEnsembleClassifier:
                     timestamp=dict_result.get('timestamp', datetime.now().isoformat())
                 )
                 classification_results.append(classification_result)
+                
+                # 🚀 FIX: Aggiorna metadati DocumentoProcessing anche per ensemble
+                if preserve_metadata and documents and i < len(documents):
+                    documents[i].set_classification_result(
+                        predicted_label=classification_result.predicted_label,
+                        confidence=classification_result.confidence,
+                        method="ensemble_batch",
+                        reasoning=classification_result.motivation
+                    )
             
             return classification_results
     

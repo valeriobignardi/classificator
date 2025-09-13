@@ -75,128 +75,17 @@ except Exception as _e:
     _BERTopic_AVAILABLE = False
     print(f"⚠️ BERTopic non disponibile: {_e}")
 
-
-def trace_all(function_name: str, action: str = "ENTER", called_from: str = None, **kwargs):
-    """
-    Sistema di tracing completo per tracciare il flusso della pipeline
-    
-    Scopo della funzione: Tracciare ingresso, uscita ed errori di tutte le funzioni
-    Parametri di input: function_name, action, called_from, **kwargs (parametri da tracciare)
-    Parametri di output: None (scrive su file)
-    Valori di ritorno: None
-    Tracciamento aggiornamenti: 2025-09-06 - Valerio Bignardi - Sistema tracing pipeline
-    
-    Args:
-        function_name (str): Nome della funzione da tracciare
-        action (str): "ENTER", "EXIT", "ERROR"
-        called_from (str): Nome della funzione chiamante (per tracciare chiamate annidate)
-        **kwargs: Parametri da tracciare (input, return_value, exception, etc.)
-        
-    Autore: Valerio Bignardi
-    Data: 2025-09-06
-    """
-    import yaml
-    import os
-    from datetime import datetime
-    import json
-    
-    try:
-        # Carica configurazione tracing dal config.yaml
-        config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
-        if not os.path.exists(config_path):
-            return  # Tracing disabilitato se config non esiste
-            
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
-            
-        tracing_config = config.get('tracing', {})
-        if not tracing_config.get('enabled', False):
-            return  # Tracing disabilitato
-            
-        # Configurazioni tracing
-        log_file = tracing_config.get('log_file', 'tracing.log')
-        include_parameters = tracing_config.get('include_parameters', True)
-        include_return_values = tracing_config.get('include_return_values', True)
-        include_exceptions = tracing_config.get('include_exceptions', True)
-        max_file_size_mb = tracing_config.get('max_file_size_mb', 100)
-        
-        # Path assoluto per il file di log
-        log_path = os.path.join(os.path.dirname(__file__), '..', log_file)
-        
-        # Rotazione file se troppo grande
-        if os.path.exists(log_path):
-            file_size_mb = os.path.getsize(log_path) / (1024 * 1024)
-            if file_size_mb > max_file_size_mb:
-                backup_path = f"{log_path}.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                os.rename(log_path, backup_path)
-        
-        # Timestamp formattato
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-        
-        # Costruisci messaggio di tracing con called_from
-        if called_from:
-            message_parts = [f"[{timestamp}]", f"{action:>5}", "->", f"{called_from}::{function_name}"]
+# Import del sistema di tracing centralizzato per evitare import circolari
+try:
+    from Utils.tracing import trace_all
+except ImportError:
+    # Fallback se il modulo tracing non è disponibile
+    def trace_all(function_name: str, action: str = "ENTER", called_from: str = None, **kwargs):
+        """Fallback trace_all se il modulo Utils.tracing non è disponibile"""
+        if action == "ERROR" and 'exception' in kwargs:
+            print(f"🔍 TRACE {action}: {function_name} - ERROR: {kwargs['exception']}")
         else:
-            message_parts = [f"[{timestamp}]", f"{action:>5}", "->", function_name]
-        
-        # Aggiungi parametri se richiesto
-        if action == "ENTER" and include_parameters and kwargs:
-            params_str = []
-            for key, value in kwargs.items():
-                try:
-                    # Converti i parametri in stringa gestendo oggetti complessi
-                    if isinstance(value, (dict, list)):
-                        if len(str(value)) > 200:
-                            value_str = f"{type(value).__name__}(size={len(value)})"
-                        else:
-                            value_str = json.dumps(value, default=str, ensure_ascii=False)[:200]
-                    elif hasattr(value, '__len__') and len(str(value)) > 200:
-                        value_str = f"{type(value).__name__}(len={len(value)})"
-                    else:
-                        value_str = str(value)[:200]
-                    params_str.append(f"{key}={value_str}")
-                except Exception:
-                    params_str.append(f"{key}=<{type(value).__name__}>")
-            
-            if params_str:
-                message_parts.append(f"({', '.join(params_str)})")
-        
-        # Aggiungi valore di ritorno se richiesto
-        elif action == "EXIT" and include_return_values and 'return_value' in kwargs:
-            try:
-                return_val = kwargs['return_value']
-                if isinstance(return_val, (dict, list)):
-                    if len(str(return_val)) > 300:
-                        return_str = f"{type(return_val).__name__}(size={len(return_val)})"
-                    else:
-                        return_str = json.dumps(return_val, default=str, ensure_ascii=False)[:300]
-                elif hasattr(return_val, '__len__') and len(str(return_val)) > 300:
-                    return_str = f"{type(return_val).__name__}(len={len(return_val)})"
-                else:
-                    return_str = str(return_val)[:300]
-                message_parts.append(f"RETURN: {return_str}")
-            except Exception:
-                message_parts.append(f"RETURN: <{type(kwargs['return_value']).__name__}>")
-        
-        # Aggiungi eccezione se richiesto
-        elif action == "ERROR" and include_exceptions and 'exception' in kwargs:
-            try:
-                exc = kwargs['exception']
-                exc_str = f"{type(exc).__name__}: {str(exc)}"[:500]
-                message_parts.append(f"EXCEPTION: {exc_str}")
-            except Exception:
-                message_parts.append(f"EXCEPTION: <{type(kwargs['exception']).__name__}>")
-        
-        # Scrivi nel file di log
-        log_message = " ".join(message_parts) + "\n"
-        
-        with open(log_path, 'a', encoding='utf-8') as f:
-            f.write(log_message)
-            
-    except Exception as e:
-        # Fallback silenzioso se il tracing fallisce
-        # Non vogliamo che errori di tracing interrompano la pipeline
-        pass
+            print(f"🔍 TRACE {action}: {function_name}")
 
 
 def get_supervised_training_params_from_db(tenant_id: str) -> Dict[str, Any]:
@@ -2837,7 +2726,7 @@ class EndToEndPipeline:
         # 4. PROCESSA IN BATCH CON CONTROLLI AVANZATI
         for i in range(0, len(documenti), batch_size):
             batch = documenti[i:i + batch_size]
-            batch_session_texts = [doc.testo_completo for doc in batch]
+            # 🚀 FIX METADATI: Passa oggetti DocumentoProcessing invece di solo testi
             batch_session_ids = [doc.session_id for doc in batch]
             
             print(f"         📦 Batch {i//batch_size + 1}: {len(batch)} documenti")
@@ -2845,27 +2734,38 @@ class EndToEndPipeline:
             try:
                 # 5. CLASSIFICAZIONE ADATTIVA BASATA SULLO STATO
                 if classification_mode == 'llm_only':
-                    # Primo avvio: LLM only
+                    # Primo avvio: LLM only - PASSA OGGETTI DOCUMENTOPROCESSING
                     if hasattr(self.ensemble_classifier, 'classify_batch_llm_only'):
+                        # Fallback per metodi che supportano solo stringhe
+                        batch_session_texts = [doc.testo_completo for doc in batch]
                         predictions = self.ensemble_classifier.classify_batch_llm_only(batch_session_texts)
                     else:
-                        # Fallback con parametro forzato
-                        predictions = self.ensemble_classifier.classify_batch(batch_session_texts, force_llm_only=True)
+                        # 🚀 NUOVO: Passa oggetti DocumentoProcessing per preservare metadati
+                        predictions = self.ensemble_classifier.classify_batch(batch, force_llm_only=True)
                         
                 elif use_ensemble and ml_ensemble_trained:
-                    # Ensemble completo
-                    predictions = self.ensemble_classifier.classify_batch(batch_session_texts)
+                    # 🚀 NUOVO: Ensemble completo con metadati preservati
+                    predictions = self.ensemble_classifier.classify_batch(batch)
                 else:
                     # Fallback sicuro
                     predictions = []
-                    for text in batch_session_texts:
+                    for doc in batch:
                         pred = {'predicted_label': 'altro', 'confidence': 0.5, 'method': 'fallback'}
                         predictions.append(pred)
                 
                 # 6. AGGIORNA DOCUMENTI CON VALIDAZIONE "ALTRO" (logica originale)
                 for doc, prediction in zip(batch, predictions):
-                    original_label = prediction['predicted_label']
-                    confidence = prediction['confidence']
+                    # 🚀 FIX: Gestisci sia dict che ClassificationResult
+                    if hasattr(prediction, 'predicted_label'):
+                        # ClassificationResult object
+                        original_label = prediction.predicted_label
+                        confidence = prediction.confidence
+                        method = getattr(prediction, 'method', 'classification_result')
+                    else:
+                        # Dictionary (fallback/old format)
+                        original_label = prediction['predicted_label']
+                        confidence = prediction['confidence']
+                        method = prediction.get('method', 'dict_result')
                     
                     # 7. PULIZIA CARATTERI SPECIALI (logica originale recuperata)
                     clean_predicted_label = self._clean_label_text(original_label)
@@ -2893,11 +2793,19 @@ class EndToEndPipeline:
                                 print(f"           ⚠️ Errore validazione 'altro' per {doc.session_id}: {e}")
                     
                     # Aggiorna documento con risultati validati
+                    # 🚀 FIX: Gestisci sia dict che ClassificationResult per metadati completi
+                    if hasattr(prediction, 'predicted_label'):
+                        # ClassificationResult object
+                        reasoning = getattr(prediction, 'motivation', f'Advanced batch classification - {classification_mode}')
+                    else:
+                        # Dictionary (fallback/old format)
+                        reasoning = prediction.get('reasoning', f'Advanced batch classification - {classification_mode}')
+                    
                     doc.set_classification_result(
                         predicted_label=clean_predicted_label,
                         confidence=confidence,
-                        method=prediction.get('method', classification_mode),
-                        reasoning=prediction.get('reasoning', f'Advanced batch classification - {classification_mode}')
+                        method=method,
+                        reasoning=reasoning
                     )
                     classified.append(doc)
                 
@@ -3769,17 +3677,28 @@ class EndToEndPipeline:
                 # NOTA: Il training supervisionato viene gestito separatamente tramite esegui_training_interattivo()
                 training_metrics = {'note': 'Training supervisionato gestito separatamente', 'accuracy': 0.0}
             
-            # 4. Classificazione usando ensemble o ML singolo
+            # 4. 🚀 FIX: Clustering per creare DocumentoProcessing
+            print(f"🔗 Creazione DocumentoProcessing dal clustering...")
+            documenti = self.esegui_clustering(sessioni, force_reprocess=False)
+            print(f"   ✅ Creati {len(documenti)} oggetti DocumentoProcessing")
+            
+            # 5. 🚀 FIX: Classificazione unificata con metadati preservati
             if use_ensemble:
-                classification_stats = self.classifica_e_salva_sessioni_new(
-                    sessioni, batch_size=batch_size, use_ensemble=True
+                classification_stats = self.classifica_e_salva_documenti_unified(
+                    documenti=documenti, 
+                    batch_size=batch_size, 
+                    use_ensemble=True,
+                    force_review=False
                 )
             else:
-                classification_stats = self.classifica_e_salva_sessioni_new(
-                    sessioni, batch_size=batch_size, use_ensemble=False
+                classification_stats = self.classifica_e_salva_documenti_unified(
+                    documenti=documenti, 
+                    batch_size=batch_size, 
+                    use_ensemble=False,
+                    force_review=False
                 )
             
-            # 5. Aggiorna memoria semantica con nuove classificazioni
+            # 6. Aggiorna memoria semantica con nuove classificazioni
             print(f"🧠 Aggiornamento memoria semantica...")
             memory_update_stats = self._update_semantic_memory_with_classifications(
                 sessioni, classification_stats
@@ -5193,9 +5112,17 @@ class EndToEndPipeline:
         
         print(f"📊 Recuperate {len(sessioni)} sessioni valide")
         
-        # Classifica le sessioni
-        classification_stats = self.classifica_e_salva_sessioni_new(
-            sessioni, use_ensemble=use_ensemble
+        # 🚀 FIX: Clustering per creare DocumentoProcessing 
+        print(f"🔗 Creazione DocumentoProcessing dal clustering...")
+        documenti = self.esegui_clustering(sessioni, force_reprocess=False)
+        print(f"   ✅ Creati {len(documenti)} oggetti DocumentoProcessing")
+        
+        # 🚀 FIX: Classifica i documenti usando flusso unificato
+        classification_stats = self.classifica_e_salva_documenti_unified(
+            documenti=documenti,
+            batch_size=32,
+            use_ensemble=use_ensemble,
+            force_review=False
         )
         
         # Review manuale per casi incerti se richiesto
@@ -7487,48 +7414,95 @@ class EndToEndPipeline:
             print(f"   🔍 Outliers: {n_outliers}")
             print(f"   📈 Clusterizzate: {((total_sessions - n_outliers) / total_sessions * 100):.1f}%")
             
-            # 3. CLASSIFICA TUTTE LE SESSIONI con ML+LLM
-            print(f"\n🤖 [FASE 1] Classificazione di tutte le sessioni...")
+            # 3. 🚀 FIX: Crea DocumentoProcessing dal clustering
+            print(f"\n🔗 [FASE 1] Creazione DocumentoProcessing...")
+            
+            # Crea oggetti DocumentoProcessing con metadati cluster
+            documenti = []
+            for i, (session_id, session_data) in enumerate(sessioni.items()):
+                conversation_text = session_data.get('conversation_text', '')
+                cluster_id = cluster_labels[i] if i < len(cluster_labels) else -1
+                
+                # Determina se è rappresentante
+                is_representative = False
+                for cluster_representatives in representatives.values():
+                    if any(repr_data.get('session_id') == session_id for repr_data in cluster_representatives):
+                        is_representative = True
+                        break
+                
+                # Crea DocumentoProcessing
+                doc = DocumentoProcessing(
+                    session_id=session_id,
+                    testo_completo=conversation_text,
+                    cluster_id=cluster_id,
+                    is_outlier=(cluster_id == -1),
+                    is_representative=is_representative
+                )
+                
+                # Imposta cluster size se non outlier
+                if cluster_id != -1:
+                    cluster_size = list(cluster_labels).count(cluster_id)
+                    doc.cluster_size = cluster_size
+                
+                documenti.append(doc)
+            
+            print(f"   ✅ Creati {len(documenti)} oggetti DocumentoProcessing")
+            
+            # 4. 🚀 FIX: Classificazione unificata con metadati preservati
+            print(f"\n🤖 [FASE 1] Classificazione unificata con DocumentoProcessing...")
             
             # Verifica disponibilità modello ML
             ml_model_available = self.ensemble_classifier.has_trained_ml_model() if hasattr(self.ensemble_classifier, 'has_trained_ml_model') else False
             
             if ml_model_available:
                 classification_method = "ENSEMBLE_ML_LLM"
-                base_confidence = 0.7  # Confidence più alta con ML disponibile
                 print(f"   ✅ Modello ML disponibile - Usando ensemble ML+LLM")
             else:
                 classification_method = "SOLO_LLM"
-                base_confidence = 0.5  # Confidence default per primo avvio
                 print(f"   ⚠️ Modello ML non disponibile - Usando solo LLM (primo avvio)")
             
-            classifications = []
-            review_queue_count = 0
+            classification_results = self.classifica_e_salva_documenti_unified(
+                documenti=documenti,
+                batch_size=32,
+                use_ensemble=ml_model_available,
+                force_review=False
+            )
             
-            # Prepara lista sessioni per classificazione batch
-            session_texts = []
-            session_ids = []
-            session_cluster_ids = []
+            # 5. STATISTICHE FINALI
+            print(f"\n📊 [FASE 1] Statistiche finali:")
+            total_classified = classification_results.get('total_documents', len(documenti))
+            review_queue_count = classification_results.get('review_queue_count', 0)
+            saved_count = classification_results.get('saved_count', 0)
             
-            for i, (session_id, session_data) in enumerate(sessioni.items()):
-                conversation_text = session_data.get('conversation_text', '')
-                cluster_id = cluster_labels[i] if i < len(cluster_labels) else -1
-                
-                session_texts.append(conversation_text)
-                session_ids.append(session_id)
-                session_cluster_ids.append(cluster_id)
+            # 6. RISULTATO FINALE
+            elapsed_time = time.time() - start_time
             
-            print(f"   📝 Preparate {len(session_texts)} sessioni per classificazione batch")
+            result = {
+                'success': True,
+                'total_sessions': len(sessioni),
+                'total_classified': total_classified,
+                'review_queue_populated': review_queue_count,
+                'saved_count': saved_count,
+                'ml_model_available': ml_model_available,
+                'classification_method': classification_method,
+                'cluster_stats': {
+                    'valid_clusters': n_clusters,
+                    'outliers': n_outliers,
+                    'cluster_percentage': ((total_sessions - n_outliers) / total_sessions * 100) if total_sessions > 0 else 0
+                },
+                'processing_time': elapsed_time
+            }
             
-            # Esegui classificazione batch
-            if ml_model_available:
-                # Ensemble ML+LLM
-                print(f"   🔄 Esecuzione classificazione ensemble...")
-                batch_results = self._classify_sessions_batch_ensemble(session_texts, session_cluster_ids, suggested_labels)
-            else:
-                # Solo LLM (primo avvio)
-                print(f"   🔄 Esecuzione classificazione solo LLM...")
-                batch_results = self._classify_sessions_batch_llm_only(session_texts, session_cluster_ids, suggested_labels, base_confidence)
+            print(f"\n✅ [FASE 1] Completata con successo!")
+            print(f"   📊 Sessioni classificate: {total_classified}")
+            print(f"   📋 In review queue: {review_queue_count}")
+            print(f"   💾 Salvate: {saved_count}")
+            print(f"   🤖 Metodo: {classification_method}")
+            print(f"   ⏱️ Tempo elaborazione: {elapsed_time:.2f}s")
+            print(f"   🎯 Pronto per review umana (Fase 2)")
+            
+            trace_all("esegui_training_supervisionato_fase1", "EXIT", return_value=result)
+            return result
             
             # 4. SALVA TUTTO IN MONGODB
             print(f"\n💾 [FASE 1] Salvataggio classificazioni in MongoDB...")

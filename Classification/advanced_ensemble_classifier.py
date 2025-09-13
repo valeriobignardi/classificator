@@ -30,11 +30,9 @@ from Utils.numpy_serialization import convert_numpy_types
 
 # Import per debugging ML
 
-# Import della funzione di tracing
+# Import della funzione di tracing centralizzata
 try:
-    # TEMPORANEAMENTE DISABILITATO per evitare import circolare
-    # from Pipeline.end_to_end_pipeline import trace_all
-    raise ImportError("Import circolare temporaneamente disabilitato")
+    from Utils.tracing import trace_all
 except ImportError:
     # Fallback se il modulo non è disponibile
     def trace_all(function_name: str, action: str = "ENTER", called_from: str = None, **kwargs):

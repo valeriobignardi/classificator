@@ -35,19 +35,15 @@ from dataclasses import dataclass, field
 from queue import Queue
 import backoff
 
-# 🔍 Import tracing per monitoring batch processing
+# 🔍 Import tracing centralizzato per monitoring batch processing
 try:
     import sys
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Pipeline'))
-    # TEMPORANEAMENTE DISABILITATO per evitare import circolare
-    # from end_to_end_pipeline import trace_all
-    raise ImportError("Import circolare temporaneamente disabilitato")
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Utils'))
+    from tracing import trace_all
 except ImportError as ie:
-    print(f"🔍 DEBUG: ImportError per end_to_end_pipeline: {ie}")
+    print(f"🔍 DEBUG: ImportError per tracing centralizzato: {ie}")
     def trace_all(function_name: str, action: str = "ENTER", called_from: str = None, **kwargs):
         """Fallback tracing function se il modulo principale non è disponibile"""
-        print(f"🔍 DEBUG: trace_all chiamata con function_name={function_name}, action={action}")
-        
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
@@ -62,9 +58,6 @@ except ImportError as ie:
             message += f" - {params}"
             
         print(f"🔍 TRACE FALLBACK: {message}")
-        
-        # Debug finale
-        print(f"🔍 DEBUG: trace_all completata")
     
     print("🔍 DEBUG: Funzione trace_all fallback definita")
 

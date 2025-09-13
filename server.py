@@ -29,7 +29,15 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'TagDatabase'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'QualityGate'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'Utils'))
 
-from end_to_end_pipeline import EndToEndPipeline, trace_all
+# Import centralizzato di trace_all per evitare import circolari
+from Utils.tracing import trace_all
+
+# Import posticipato di EndToEndPipeline per evitare import circolari
+try:
+    from end_to_end_pipeline import EndToEndPipeline
+except ImportError:
+    print("🔍 DEBUG: ImportError per end_to_end_pipeline: Import circolare temporaneamente disabilitato")
+    EndToEndPipeline = None
 from tag_database_connector import TagDatabaseConnector
 from quality_gate_engine import QualityGateEngine
 from mongo_classification_reader import MongoClassificationReader

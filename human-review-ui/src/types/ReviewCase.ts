@@ -2,6 +2,8 @@ export interface ReviewCase {
   case_id: string;
   session_id: string;
   conversation_text: string;
+  classification: string; // 🚨 FIX CRITICO: Campo classificazione principale dall'API
+  classification_method?: string; // 🆕 Metodo di classificazione (LLM_STRUCTURED, ENSEMBLE, etc.)
   ml_prediction: string;
   ml_confidence: number;
   llm_prediction: string;

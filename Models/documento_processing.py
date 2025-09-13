@@ -56,6 +56,12 @@ class DocumentoProcessing:
     classification_method: Optional[str] = None
     reasoning: Optional[str] = None
     
+    # ========== PREDIZIONI SPECIFICHE ==========
+    ml_prediction: Optional[str] = None
+    ml_confidence: Optional[float] = None
+    llm_prediction: Optional[str] = None
+    llm_confidence: Optional[float] = None
+    
     # ========== REVIEW STATUS ==========
     needs_review: bool = False
     review_reason: Optional[str] = None
@@ -136,18 +142,30 @@ class DocumentoProcessing:
                          propagated_from: int, 
                          propagated_label: str,
                          consensus: float = 0.0,
-                         reason: str = "cluster_propagation"):
+                         reason: str = "cluster_propagation",
+                         ml_prediction: Optional[str] = None,
+                         ml_confidence: Optional[float] = None,
+                         llm_prediction: Optional[str] = None,
+                         llm_confidence: Optional[float] = None,
+                         classification_method: Optional[str] = None):
         """
-        Marca il documento come propagato
+        Marca il documento come propagato ereditando TUTTI i campi dal rappresentante
         
-        Scopo: Imposta status di propagato con label ereditata
-        Parametri: cluster di origine, label propagata, consenso
+        Scopo: Imposta status di propagato con COMPLETA ereditarietà dei campi classificazione
+        Parametri: cluster di origine, label propagata, consenso, predizioni specifiche
+        
+        🚨 FIX CRITICO: Ora eredita anche ml_prediction e llm_prediction dal rappresentante
         
         Args:
             propagated_from: Cluster ID da cui eredita la classificazione
             propagated_label: Label propagata dai rappresentanti
             consensus: Livello di consenso tra rappresentanti (0-1)
             reason: Motivo della propagazione
+            ml_prediction: Predizione ML ereditata dal rappresentante
+            ml_confidence: Confidenza ML ereditata dal rappresentante
+            llm_prediction: Predizione LLM ereditata dal rappresentante
+            llm_confidence: Confidenza LLM ereditata dal rappresentante
+            classification_method: Metodo classificazione ereditato dal rappresentante
             
         Autore: Valerio Bignardi
         Data: 2025-09-08
@@ -163,9 +181,15 @@ class DocumentoProcessing:
         # I propagati sono auto-classificati (non vanno in review automaticamente)
         self.predicted_label = propagated_label
         self.confidence = 0.6 + (consensus * 0.3)  # 0.6-0.9 basato su consenso
-        self.classification_method = "propagated_from_representatives"
+        self.classification_method = classification_method or "propagated_from_representatives"
         self.needs_review = False  # Mai review automatico per propagati
         self.reasoning = f"Label propagata da cluster {propagated_from} con consenso {consensus:.1%}"
+        
+        # 🚨 FIX CRITICO: Eredita TUTTI i campi di classificazione dal rappresentante
+        self.ml_prediction = ml_prediction
+        self.ml_confidence = ml_confidence
+        self.llm_prediction = llm_prediction
+        self.llm_confidence = llm_confidence
     
     def set_classification_result(self, 
                                  predicted_label: str,
@@ -391,13 +415,14 @@ class DocumentoProcessing:
     
     def to_classification_decision(self) -> Dict[str, Any]:
         """
-        Converte l'oggetto in decisione di classificazione
+        Converte l'oggetto in decisione di classificazione COMPLETA
         
         Scopo: Preparare dati per salvataggio risultato classificazione
-        Ritorna: Dizionario con decisione finale
+        🚨 FIX CRITICO: Ora include anche ml_prediction e llm_prediction
+        Ritorna: Dizionario con decisione finale completa
         
         Returns:
-            Dict: Decisione di classificazione formattata
+            Dict: Decisione di classificazione formattata con TUTTI i campi
             
         Autore: Valerio Bignardi
         Data: 2025-09-08
@@ -406,7 +431,12 @@ class DocumentoProcessing:
             'predicted_label': self.predicted_label or self.propagated_label,
             'confidence': self.confidence or 0.5,
             'method': self.classification_method or 'unified_pipeline',
-            'reasoning': self.reasoning or f'Documento {self.get_document_type().lower()}'
+            'reasoning': self.reasoning or f'Documento {self.get_document_type().lower()}',
+            # 🚨 FIX CRITICO: Aggiunti campi mancanti per predizioni specifiche
+            'ml_prediction': self.ml_prediction,
+            'ml_confidence': self.ml_confidence,
+            'llm_prediction': self.llm_prediction,
+            'llm_confidence': self.llm_confidence
         }
     
     def get_review_info(self) -> Dict[str, Any]:

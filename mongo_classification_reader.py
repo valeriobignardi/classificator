@@ -1393,15 +1393,19 @@ class MongoClassificationReader:
                     print(f"⚠️ [EMBEDDING] Modello non specificato, usato 'unknown'")
             
             # Aggiunge risultati ML se forniti
-            if ml_result:
+            if ml_result and ml_result.get("predicted_label"):
                 doc["ml_prediction"] = ml_result.get("predicted_label", "")
                 doc["ml_confidence"] = float(ml_result.get("confidence", 0.0))
                 # NUOVO: Aggiungi campi separati per tracciabilità
                 doc["classification_ML"] = ml_result.get("predicted_label", "")
                 doc["precision_ML"] = float(ml_result.get("confidence", 0.0))
+            else:
+                # 🚨 FIX: Anche quando ML non disponibile, salva campi vuoti per coerenza UI
+                doc["ml_prediction"] = ""
+                doc["ml_confidence"] = 0.0
             
             # Aggiunge risultati LLM se forniti
-            if llm_result:
+            if llm_result and llm_result.get("predicted_label"):
                 doc["llm_prediction"] = llm_result.get("predicted_label", "")
                 doc["llm_confidence"] = float(llm_result.get("confidence", 0.0))
                 # NUOVO: Aggiungi campi separati per tracciabilità
@@ -1409,6 +1413,10 @@ class MongoClassificationReader:
                 doc["precision_LLM"] = float(llm_result.get("confidence", 0.0))
                 if "reasoning" in llm_result:
                     doc["llm_reasoning"] = llm_result["reasoning"]
+            else:
+                # 🚨 FIX: Anche quando LLM non disponibile, salva campi vuoti per coerenza UI
+                doc["llm_prediction"] = ""
+                doc["llm_confidence"] = 0.0
             
             # 🆕 CALCOLA E SALVA DISAGREEMENT METRICS
             if ml_result and llm_result:
@@ -1448,6 +1456,16 @@ class MongoClassificationReader:
                 doc["classification_method"] = final_decision.get("method", "unknown")
                 if "reasoning" in final_decision:
                     doc["motivazione"] = final_decision["reasoning"]
+                
+                # 🚨 FIX CRITICO: Estrai anche ml_prediction e llm_prediction da final_decision
+                # Questo serve per i documenti propagati che non hanno ml_result/llm_result separati
+                if "ml_prediction" in final_decision and not ml_result:
+                    doc["ml_prediction"] = final_decision.get("ml_prediction", "")
+                    doc["ml_confidence"] = float(final_decision.get("ml_confidence", 0.0)) if final_decision.get("ml_confidence") is not None else 0.0
+                
+                if "llm_prediction" in final_decision and not llm_result:
+                    doc["llm_prediction"] = final_decision.get("llm_prediction", "")
+                    doc["llm_confidence"] = float(final_decision.get("llm_confidence", 0.0)) if final_decision.get("llm_confidence") is not None else 0.0
             
             # Determina review status
             if needs_review:

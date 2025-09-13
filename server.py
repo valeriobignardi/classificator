@@ -1999,6 +1999,8 @@ def api_get_review_cases(tenant_id: str):
                 'conversation_text': session.get('conversation_text', session.get('testo_completo', '')),
                 # 🔧 FIX BUG N/A: Usa direttamente i valori MongoDB già mappati correttamente
                 # Il metodo get_review_queue_sessions() gestisce già i fallback per casi propagati
+                'classification': session.get('classification', 'N/A'),  # 🚨 FIX CRITICO: Campo classificazione principale
+                'classification_method': session.get('classification_method', 'unknown'),  # 🆕 Metodo di classificazione
                 'ml_prediction': session.get('ml_prediction', 'N/A'),
                 'ml_confidence': float(session.get('ml_confidence', 0.0)),
                 'llm_prediction': session.get('llm_prediction', 'N/A'),

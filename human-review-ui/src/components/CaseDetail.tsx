@@ -215,10 +215,10 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
               <Box display="flex" gap={3}>
                 <Box flex={1}>
                   <Typography variant="subtitle2" fontWeight="bold" color="primary.main">
-                    🧠 ML Prediction:
+                    🎯 Classificazione Finale:
                   </Typography>
                   <Typography variant="h6" sx={{ mt: 0.5, mb: 1 }}>
-                    {isClusterPropagated ? '🔄 Non classificato (Propagato)' : caseItem.ml_prediction}
+                    {caseItem.classification || caseItem.ml_prediction || 'N/A'}
                   </Typography>
                   <Chip
                     label={isClusterPropagated 

@@ -8147,15 +8147,17 @@ class EndToEndPipeline:
         try:
             propagated_count = 0
             
-            # 1. Raggruppa rappresentanti per cluster
+            # 1. Raggruppa rappresentanti per cluster CON TUTTI I DATI CLASSIFICAZIONE
             print(f"   🔍 Analizzando rappresentanti per cluster...")
             cluster_representatives = {}
+            cluster_representative_docs = {}  # 🚨 FIX: Conserva oggetti DocumentoProcessing completi
             
             for doc in documenti:
                 if doc.is_representative and not doc.is_outlier and doc.predicted_label:
                     cluster_id = doc.cluster_id
                     if cluster_id not in cluster_representatives:
                         cluster_representatives[cluster_id] = []
+                        cluster_representative_docs[cluster_id] = []  # 🚨 FIX: Lista oggetti completi
                     
                     # Crea dict compatibile con _determine_propagated_status
                     rep_dict = {
@@ -8164,6 +8166,7 @@ class EndToEndPipeline:
                         'classification': doc.predicted_label
                     }
                     cluster_representatives[cluster_id].append(rep_dict)
+                    cluster_representative_docs[cluster_id].append(doc)  # 🚨 FIX: Conserva oggetto completo
             
             print(f"   ✅ Trovati rappresentanti per {len(cluster_representatives)} cluster")
             
@@ -8175,7 +8178,17 @@ class EndToEndPipeline:
                 propagated_status = self._determine_propagated_status(representatives)
                 
                 if not propagated_status['needs_review'] and propagated_status['propagated_label']:
-                    # 3. Applica propagazione ai membri del cluster
+                    # 🚨 FIX: Trova il rappresentante da cui ereditare TUTTI i campi
+                    source_representative = None
+                    for rep_doc in cluster_representative_docs[cluster_id]:
+                        if rep_doc.predicted_label == propagated_status['propagated_label']:
+                            source_representative = rep_doc
+                            break
+                    
+                    if not source_representative:
+                        source_representative = cluster_representative_docs[cluster_id][0]  # Fallback al primo
+                    
+                    # 3. Applica propagazione ai membri del cluster con EREDITARIETÀ COMPLETA
                     cluster_propagated = 0
                     for doc in documenti:
                         if (doc.cluster_id == cluster_id and 
@@ -8183,17 +8196,24 @@ class EndToEndPipeline:
                             not doc.is_representative and 
                             not doc.is_outlier):
                             
-                            # Propaga la label dal rappresentante
+                            # 🚨 FIX CRITICO: Propaga TUTTI i campi dal rappresentante
                             doc.set_as_propagated(
                                 propagated_from=cluster_id,
                                 propagated_label=propagated_status['propagated_label'],
                                 consensus=0.7,  # Default consensus
-                                reason=propagated_status['reason']
+                                reason=propagated_status['reason'],
+                                # 🚨 FIX: Eredita campi specifici dal rappresentante
+                                ml_prediction=source_representative.ml_prediction,
+                                ml_confidence=source_representative.ml_confidence,
+                                llm_prediction=source_representative.llm_prediction,
+                                llm_confidence=source_representative.llm_confidence,
+                                classification_method=source_representative.classification_method
                             )
                             cluster_propagated += 1
                             propagated_count += 1
                     
                     print(f"     ✅ Propagata label '{propagated_status['propagated_label']}' a {cluster_propagated} documenti")
+                    print(f"         🔄 Ereditati anche ML: {source_representative.ml_prediction}, LLM: {source_representative.llm_prediction}")
                 else:
                     # Cluster necessita review - nessuna propagazione automatica
                     reason = propagated_status.get('reason', 'unknown')

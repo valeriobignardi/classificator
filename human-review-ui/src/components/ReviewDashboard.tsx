@@ -765,91 +765,111 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
                                   ))}
                                 </Box>
 
-                                {/* Predictions Comparison */}
+                                {/* 🚨 CLASSIFICAZIONE PRINCIPALE GRANDE + Predictions Secondarie */}
+                                {/* 1. CLASSIFICAZIONE PRINCIPALE - BEN VISIBILE */}
                                 <Box 
                                   sx={{ 
-                                    border: '2px solid',
-                                    borderColor: cluster.representative.ml_prediction === cluster.representative.llm_prediction ? 'success.main' : 'warning.main',
+                                    border: '3px solid #2e7d32',
                                     borderRadius: 2,
                                     p: 2,
                                     mb: 2,
-                                    background: cluster.representative.ml_prediction === cluster.representative.llm_prediction 
-                                      ? 'linear-gradient(45deg, #e8f5e8 50%, #e8f5e8 50%)'
-                                      : 'linear-gradient(45deg, #ffe8e8 50%, #fff3cd 50%)'
+                                    backgroundColor: '#e8f5e8',
+                                    textAlign: 'center'
                                   }}
                                 >
-                                  <Box display="flex" alignItems="center" justifyContent="space-between" mb={1}>
-                                    <Typography variant="subtitle2" fontWeight="bold" color="text.primary">
-                                      🤖 PREDIZIONI MODELLI
-                                    </Typography>
-                                    <Chip
-                                      icon={cluster.representative.ml_prediction === cluster.representative.llm_prediction ? 
-                                        <CheckCircleIcon /> : <WarningIcon />}
-                                      label={cluster.representative.ml_prediction === cluster.representative.llm_prediction ? 
-                                        "ACCORDO" : "DISACCORDO"}
-                                      color={cluster.representative.ml_prediction === cluster.representative.llm_prediction ? 
-                                        "success" : "warning"}
-                                      size="small"
-                                      sx={{ fontWeight: 'bold' }}
-                                    />
-                                  </Box>
-
-                                  <Box display="flex" gap={2}>
-                                    <Box 
-                                      flex={1}
-                                      sx={{
-                                        border: '1px solid #1976d2',
-                                        borderRadius: 1,
-                                        p: 1.5,
-                                        backgroundColor: '#e3f2fd'
-                                      }}
-                                    >
-                                      <Typography variant="subtitle2" fontWeight="bold" color="primary">
-                                        🧠 ML Prediction
-                                      </Typography>
-                                      <Typography 
-                                        variant="h6" 
-                                        color="primary" 
-                                        sx={{ fontWeight: 'bold', my: 0.5 }}
-                                      >
-                                        {cluster.representative.ml_prediction || 'N/A'}
-                                      </Typography>
-                                      <Chip
-                                        label={`Confidenza: ${((cluster.representative.ml_confidence || 0) * 100).toFixed(1)}%`}
-                                        color={getConfidenceColor(cluster.representative.ml_confidence || 0)}
-                                        size="small"
-                                        sx={{ fontWeight: 'bold' }}
-                                      />
-                                    </Box>
-                                    
-                                    <Box 
-                                      flex={1}
-                                      sx={{
-                                        border: '1px solid #ff9800',
-                                        borderRadius: 1,
-                                        p: 1.5,
-                                        backgroundColor: '#fff3e0'
-                                      }}
-                                    >
-                                      <Typography variant="subtitle2" fontWeight="bold" color="warning.main">
-                                        🤖 LLM Prediction
-                                      </Typography>
-                                      <Typography 
-                                        variant="h6" 
-                                        color="warning.main" 
-                                        sx={{ fontWeight: 'bold', my: 0.5 }}
-                                      >
-                                        {cluster.representative.llm_prediction || 'N/A'}
-                                      </Typography>
-                                      <Chip
-                                        label={`Confidenza: ${((cluster.representative.llm_confidence || 0) * 100).toFixed(1)}%`}
-                                        color={getConfidenceColor(cluster.representative.llm_confidence || 0)}
-                                        size="small"
-                                        sx={{ fontWeight: 'bold' }}
-                                      />
-                                    </Box>
-                                  </Box>
+                                  <Typography variant="subtitle1" fontWeight="bold" color="success.dark" gutterBottom>
+                                    🏷️ CLASSIFICAZIONE FINALE
+                                  </Typography>
+                                  <Typography 
+                                    variant="h4" 
+                                    color="success.dark" 
+                                    sx={{ fontWeight: 'bold', mb: 1 }}
+                                  >
+                                    {cluster.representative.classification || 'N/A'}
+                                  </Typography>
                                 </Box>
+
+                                {/* 2. PREDIZIONI MODELLI - PIÙ PICCOLE (solo se presenti) */}
+                                {(cluster.representative.ml_prediction || cluster.representative.llm_prediction) && (
+                                  <Box 
+                                    sx={{ 
+                                      border: '1px solid #ccc',
+                                      borderRadius: 2,
+                                      p: 1.5,
+                                      mb: 2,
+                                      backgroundColor: '#f9f9f9'
+                                    }}
+                                  >
+                                    <Box display="flex" alignItems="center" justifyContent="space-between" mb={1}>
+                                      <Typography variant="body2" fontWeight="bold" color="text.secondary">
+                                        🤖 Dettagli Predizioni Modelli
+                                      </Typography>
+                                      <Chip
+                                        icon={cluster.representative.ml_prediction === cluster.representative.llm_prediction ? 
+                                          <CheckCircleIcon /> : <WarningIcon />}
+                                        label={cluster.representative.ml_prediction === cluster.representative.llm_prediction ? 
+                                          "ACCORDO" : "DISACCORDO"}
+                                        color={cluster.representative.ml_prediction === cluster.representative.llm_prediction ? 
+                                          "success" : "warning"}
+                                        size="small"
+                                      />
+                                    </Box>
+
+                                    <Box display="flex" gap={1}>
+                                      {cluster.representative.ml_prediction && (
+                                        <Box 
+                                          flex={1}
+                                          sx={{
+                                            border: '1px solid #1976d2',
+                                            borderRadius: 1,
+                                            p: 1,
+                                            backgroundColor: '#e3f2fd'
+                                          }}
+                                        >
+                                          <Typography variant="caption" fontWeight="bold" color="primary">
+                                            🧠 ML
+                                          </Typography>
+                                          <Typography 
+                                            variant="body2" 
+                                            color="primary" 
+                                            sx={{ fontWeight: 'bold' }}
+                                          >
+                                            {cluster.representative.ml_prediction}
+                                          </Typography>
+                                          <Typography variant="caption" color="text.secondary">
+                                            {((cluster.representative.ml_confidence || 0) * 100).toFixed(1)}%
+                                          </Typography>
+                                        </Box>
+                                      )}
+                                      
+                                      {cluster.representative.llm_prediction && (
+                                        <Box 
+                                          flex={1}
+                                          sx={{
+                                            border: '1px solid #ff9800',
+                                            borderRadius: 1,
+                                            p: 1,
+                                            backgroundColor: '#fff3e0'
+                                          }}
+                                        >
+                                          <Typography variant="caption" fontWeight="bold" color="warning.main">
+                                            🤖 LLM
+                                          </Typography>
+                                          <Typography 
+                                            variant="body2" 
+                                            color="warning.main" 
+                                            sx={{ fontWeight: 'bold' }}
+                                          >
+                                            {cluster.representative.llm_prediction}
+                                          </Typography>
+                                          <Typography variant="caption" color="text.secondary">
+                                            {((cluster.representative.llm_confidence || 0) * 100).toFixed(1)}%
+                                          </Typography>
+                                        </Box>
+                                      )}
+                                    </Box>
+                                  </Box>
+                                )}
 
                                 {/* Conversation Preview */}
                                 <Box 
@@ -1070,105 +1090,149 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
                             </Typography>
                           </Box>
 
-                          {/* Predictions Comparison - ENHANCED */}
+                          {/* 🚨 CLASSIFICAZIONE PRINCIPALE GRANDE + Predictions Secondarie */}
+                          {/* 1. CLASSIFICAZIONE PRINCIPALE - BEN VISIBILE */}
                           <Box 
                             sx={{ 
-                              border: '2px solid',
-                              borderColor: caseItem.ml_prediction === caseItem.llm_prediction ? 'success.main' : 'warning.main',
+                              border: '3px solid #2e7d32',
                               borderRadius: 2,
                               p: 2,
                               mb: 2,
-                              background: caseItem.ml_prediction === caseItem.llm_prediction 
-                                ? 'linear-gradient(45deg, #e8f5e8 50%, #e8f5e8 50%)'
-                                : 'linear-gradient(45deg, #ffe8e8 50%, #fff3cd 50%)'
+                              backgroundColor: '#e8f5e8',
+                              textAlign: 'center'
                             }}
                           >
-                            {/* Agreement/Disagreement Indicator */}
-                            <Box display="flex" alignItems="center" justifyContent="space-between" mb={1}>
-                              <Typography variant="subtitle2" fontWeight="bold" color="text.primary">
-                                🤖 PREDIZIONI MODELLI
-                              </Typography>
-                              <Chip
-                                icon={caseItem.ml_prediction === caseItem.llm_prediction ? 
-                                  <CheckCircleIcon /> : <WarningIcon />}
-                                label={caseItem.ml_prediction === caseItem.llm_prediction ? 
-                                  "ACCORDO" : "DISACCORDO"}
-                                color={caseItem.ml_prediction === caseItem.llm_prediction ? 
-                                  "success" : "warning"}
-                                size="small"
-                                sx={{ fontWeight: 'bold' }}
-                              />
-                            </Box>
-
-                            <Box display="flex" gap={2}>
-                              <Box 
-                                flex={1}
-                                sx={{
-                                  border: '1px solid #1976d2',
-                                  borderRadius: 1,
-                                  p: 1.5,
-                                  backgroundColor: '#e3f2fd'
-                                }}
-                              >
-                                <Typography variant="subtitle2" fontWeight="bold" color="primary">
-                                  🧠 ML Prediction
-                                </Typography>
-                                <Typography 
-                                  variant="h6" 
-                                  color="primary" 
-                                  sx={{ fontWeight: 'bold', my: 0.5 }}
-                                >
-                                  {caseItem.ml_prediction || 'N/A'}
-                                </Typography>
-                                <Chip
-                                  label={`Confidenza: ${((caseItem.ml_confidence || 0) * 100).toFixed(1)}%`}
-                                  color={getConfidenceColor(caseItem.ml_confidence || 0)}
-                                  size="small"
-                                  sx={{ fontWeight: 'bold' }}
-                                />
-                              </Box>
-                              
-                              <Box 
-                                flex={1}
-                                sx={{
-                                  border: '1px solid #ff9800',
-                                  borderRadius: 1,
-                                  p: 1.5,
-                                  backgroundColor: '#fff3e0'
-                                }}
-                              >
-                                <Typography variant="subtitle2" fontWeight="bold" color="warning.main">
-                                  🤖 LLM Prediction
-                                </Typography>
-                                <Typography 
-                                  variant="h6" 
-                                  color="warning.main" 
-                                  sx={{ fontWeight: 'bold', my: 0.5 }}
-                                >
-                                  {caseItem.llm_prediction || 'N/A'}
-                                </Typography>
-                                <Chip
-                                  label={`Confidenza: ${((caseItem.llm_confidence || 0) * 100).toFixed(1)}%`}
-                                  color={getConfidenceColor(caseItem.llm_confidence || 0)}
-                                  size="small"
-                                  sx={{ fontWeight: 'bold' }}
-                                />
-                              </Box>
-                            </Box>
-
-                            {/* Best Prediction Indicator */}
-                            {(caseItem.ml_confidence || 0) !== (caseItem.llm_confidence || 0) && (
-                              <Box mt={1} textAlign="center">
-                                <Typography variant="caption" color="text.secondary">
-                                  💡 Miglior confidenza: {
-                                    (caseItem.ml_confidence || 0) > (caseItem.llm_confidence || 0) 
-                                      ? `ML (${((caseItem.ml_confidence || 0) * 100).toFixed(1)}%)`
-                                      : `LLM (${((caseItem.llm_confidence || 0) * 100).toFixed(1)}%)`
-                                  }
-                                </Typography>
-                              </Box>
-                            )}
+                            <Typography variant="subtitle1" fontWeight="bold" color="success.dark" gutterBottom>
+                              🏷️ CLASSIFICAZIONE FINALE
+                            </Typography>
+                            <Typography 
+                              variant="h4" 
+                              color="success.dark" 
+                              sx={{ fontWeight: 'bold', mb: 1 }}
+                            >
+                              {caseItem.classification || 'N/A'}
+                            </Typography>
                           </Box>
+
+                          {/* 2. PREDIZIONI MODELLI - PIÙ PICCOLE (solo se esistono) */}
+                          {(caseItem.ml_prediction || caseItem.llm_prediction) && (
+                            <Box 
+                              sx={{ 
+                                border: '1px solid #ccc',
+                                borderRadius: 2,
+                                p: 1.5,
+                                mb: 2,
+                                backgroundColor: '#f9f9f9'
+                              }}
+                            >
+                              <Box display="flex" alignItems="center" justifyContent="space-between" mb={1}>
+                                <Typography variant="body2" fontWeight="bold" color="text.secondary">
+                                  🤖 Dettagli Predizioni Modelli
+                                </Typography>
+                                <Chip
+                                  icon={caseItem.ml_prediction === caseItem.llm_prediction ? 
+                                    <CheckCircleIcon /> : <WarningIcon />}
+                                  label={caseItem.ml_prediction === caseItem.llm_prediction ? 
+                                    "ACCORDO" : "DISACCORDO"}
+                                  color={caseItem.ml_prediction === caseItem.llm_prediction ? 
+                                    "success" : "warning"}
+                                  size="small"
+                                />
+                              </Box>
+
+                              <Box display="flex" gap={1}>
+                                {/* Mostra ML solo se presente */}
+                                {caseItem.ml_prediction && (
+                                  <Box 
+                                    flex={1}
+                                    sx={{
+                                      border: '1px solid #1976d2',
+                                      borderRadius: 1,
+                                      p: 1,
+                                      backgroundColor: '#e3f2fd'
+                                    }}
+                                  >
+                                    <Typography variant="caption" fontWeight="bold" color="primary">
+                                      🧠 ML
+                                    </Typography>
+                                    <Typography 
+                                      variant="body2" 
+                                      color="primary" 
+                                      sx={{ fontWeight: 'bold' }}
+                                    >
+                                      {caseItem.ml_prediction}
+                                    </Typography>
+                                    <Typography variant="caption" color="text.secondary">
+                                      {((caseItem.ml_confidence || 0) * 100).toFixed(1)}%
+                                    </Typography>
+                                  </Box>
+                                )}
+                                
+                                {/* Mostra LLM solo se presente */}
+                                {caseItem.llm_prediction && (
+                                  <Box 
+                                    flex={1}
+                                    sx={{
+                                      border: '1px solid #ff9800',
+                                      borderRadius: 1,
+                                      p: 1,
+                                      backgroundColor: '#fff3e0'
+                                    }}
+                                  >
+                                    <Typography variant="caption" fontWeight="bold" color="warning.main">
+                                      🤖 LLM
+                                    </Typography>
+                                    <Typography 
+                                      variant="body2" 
+                                      color="warning.main" 
+                                      sx={{ fontWeight: 'bold' }}
+                                    >
+                                      {caseItem.llm_prediction}
+                                    </Typography>
+                                    <Typography variant="caption" color="text.secondary">
+                                      {((caseItem.llm_confidence || 0) * 100).toFixed(1)}%
+                                    </Typography>
+                                  </Box>
+                                )}
+
+                                {/* Messaggio per solo LLM */}
+                                {!caseItem.ml_prediction && !caseItem.llm_prediction && (
+                                  <Box 
+                                    sx={{
+                                      border: '1px solid #9e9e9e',
+                                      borderRadius: 1,
+                                      p: 1,
+                                      backgroundColor: '#f5f5f5',
+                                      width: '100%',
+                                      textAlign: 'center'
+                                    }}
+                                  >
+                                    <Typography variant="caption" color="text.secondary">
+                                      🤖 Classificazione: {caseItem.classification_method || 'LLM'}
+                                    </Typography>
+                                  </Box>
+                                )}
+                              </Box>
+                            </Box>
+                          )}
+
+                          {/* Messaggio se nessuna predizione separata disponibile */}
+                          {!caseItem.ml_prediction && !caseItem.llm_prediction && (
+                            <Box 
+                              sx={{ 
+                                border: '1px solid #e0e0e0',
+                                borderRadius: 2,
+                                p: 1,
+                                mb: 2,
+                                backgroundColor: '#fafafa',
+                                textAlign: 'center'
+                              }}
+                            >
+                              <Typography variant="body2" color="text.secondary">
+                                📋 Metodo: {caseItem.classification_method || 'Non specificato'}
+                              </Typography>
+                            </Box>
+                          )}
 
                           {/* Conversation Preview */}
                           <Box 

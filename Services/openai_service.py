@@ -39,7 +39,9 @@ import backoff
 try:
     import sys
     sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Pipeline'))
-    from end_to_end_pipeline import trace_all
+    # TEMPORANEAMENTE DISABILITATO per evitare import circolare
+    # from end_to_end_pipeline import trace_all
+    raise ImportError("Import circolare temporaneamente disabilitato")
 except ImportError as ie:
     print(f"🔍 DEBUG: ImportError per end_to_end_pipeline: {ie}")
     def trace_all(function_name: str, action: str = "ENTER", called_from: str = None, **kwargs):

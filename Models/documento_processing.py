@@ -192,6 +192,156 @@ class DocumentoProcessing:
         self.classification_method = method
         self.reasoning = reasoning
         self.classified_by = "supervised_training_pipeline"
+        
+        # 🚀 FIX REVIEW QUEUE: Valuta automaticamente se necessita review umana
+        self.evaluate_review_needs()
+    
+    def evaluate_review_needs(self, 
+                             representative_threshold: float = None,
+                             outlier_threshold: float = None,
+                             propagated_threshold: float = None) -> None:
+        """
+        🚀 FIX REVIEW QUEUE: Valuta se il documento necessita review umana
+        
+        Scopo: Implementa la logica mancante per determinare needs_review
+        Parametri: soglie di confidence per diversi tipi di documento
+        
+        LOGICA IMPLEMENTATA:
+        - Rappresentanti: confidence < representative_threshold (default 0.85)
+        - Outlier: confidence < outlier_threshold (default 0.60) 
+        - Propagati: NON vanno mai automaticamente in review
+        - Altri documenti: confidence < 0.95 (soglia generale alta)
+        
+        Args:
+            representative_threshold: Soglia confidence per rappresentanti
+            outlier_threshold: Soglia confidence per outlier
+            propagated_threshold: Soglia confidence per propagati
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-12
+        """
+        if self.confidence is None:
+            # Senza confidence, non possiamo valutare
+            return
+        
+        # Soglie default se non fornite
+        rep_threshold = representative_threshold or 0.85
+        out_threshold = outlier_threshold or 0.60
+        prop_threshold = propagated_threshold or 0.80
+        general_threshold = 0.95
+        
+        # Reset stato review
+        self.needs_review = False
+        self.review_reason = None
+        
+        # LOGICA 1: RAPPRESENTANTI - Soglia più alta per massima qualità
+        if self.is_representative:
+            if self.confidence < rep_threshold:
+                self.needs_review = True
+                self.review_reason = f"representative_low_confidence_{self.confidence:.3f}"
+                return
+        
+        # LOGICA 2: OUTLIER - Soglia più bassa ma controllo necessario
+        elif self.is_outlier:
+            if self.confidence < out_threshold:
+                self.needs_review = True
+                self.review_reason = f"outlier_low_confidence_{self.confidence:.3f}"
+                return
+        
+        # LOGICA 3: PROPAGATI - Di solito auto-classificati, soglia alta
+        elif self.is_propagated:
+            # I propagati raramente vanno in review, solo se confidence molto bassa
+            if self.confidence < prop_threshold:
+                self.needs_review = True
+                self.review_reason = f"propagated_very_low_confidence_{self.confidence:.3f}"
+                return
+        
+        # LOGICA 4: DOCUMENTI GENERICI - Soglia alta per sicurezza
+        else:
+            if self.confidence < general_threshold:
+                self.needs_review = True
+                self.review_reason = f"general_low_confidence_{self.confidence:.3f}"
+                return
+        
+        # LOGICA 5: CONTROLLI AGGIUNTIVI
+        # Etichetta "altro" sempre da rivedere se confidence non altissima
+        if (self.predicted_label and 
+            self.predicted_label.lower() in ['altro', 'other', 'unknown'] and 
+            self.confidence < 0.90):
+            self.needs_review = True
+            self.review_reason = f"altro_classification_{self.confidence:.3f}"
+            return
+    
+    def evaluate_review_needs_with_db_thresholds(self, tenant_id: str) -> None:
+        """
+        🚀 FIX REVIEW QUEUE: Valuta needs_review usando soglie dal database MySQL
+        
+        Scopo: Integra con le soglie configurate nel database TAG per il tenant
+        Parametri: tenant_id per recuperare soglie specifiche
+        
+        Args:
+            tenant_id: ID del tenant per recuperare soglie personalizzate
+            
+        Autore: Valerio Bignardi
+        Data: 2025-09-12
+        """
+        try:
+            import yaml
+            import mysql.connector
+            import os
+            
+            # Carica configurazione database
+            config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+            
+            db_config = config['tag_database']
+            
+            # Connessione al database
+            connection = mysql.connector.connect(
+                host=db_config['host'],
+                port=db_config['port'],
+                user=db_config['user'],
+                password=db_config['password'],
+                database=db_config['database'],
+                autocommit=True
+            )
+            
+            cursor = connection.cursor(dictionary=True)
+            
+            # Query per recuperare soglie review queue
+            query = """
+            SELECT 
+                representative_confidence_threshold,
+                outlier_confidence_threshold,
+                propagated_confidence_threshold
+            FROM soglie 
+            WHERE tenant_id = %s 
+            ORDER BY id DESC 
+            LIMIT 1
+            """
+            
+            cursor.execute(query, (tenant_id,))
+            db_result = cursor.fetchone()
+            
+            if db_result:
+                # Usa soglie dal database
+                self.evaluate_review_needs(
+                    representative_threshold=float(db_result['representative_confidence_threshold']),
+                    outlier_threshold=float(db_result['outlier_confidence_threshold']),
+                    propagated_threshold=float(db_result.get('propagated_confidence_threshold', 0.80))
+                )
+            else:
+                # Fallback a soglie default
+                self.evaluate_review_needs()
+            
+            cursor.close()
+            connection.close()
+            
+        except Exception as e:
+            # Fallback silenzioso a soglie default in caso di errore DB
+            print(f"⚠️ Errore caricamento soglie DB per {tenant_id}: {e}")
+            self.evaluate_review_needs()
     
     def get_document_type(self) -> str:
         """

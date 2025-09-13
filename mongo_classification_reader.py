@@ -20,7 +20,9 @@ import numpy as np  # 🆕 Per supporto embedding
 
 # Import trace_all per debugging
 try:
-    from Pipeline.end_to_end_pipeline import trace_all
+    # TEMPORANEAMENTE DISABILITATO per evitare import circolare
+    # from Pipeline.end_to_end_pipeline import trace_all
+    raise ImportError("Import circolare temporaneamente disabilitato")
 except ImportError:
     # Fallback se trace_all non è disponibile
     def trace_all(*args, **kwargs):

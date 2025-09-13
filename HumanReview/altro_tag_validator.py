@@ -97,7 +97,7 @@ class AltroTagValidator:
         
         # Parametri da configurazione
         altro_config = self.config.get('altro_tag_validator', {})
-        self.similarity_threshold = altro_config.get('semantic_similarity_threshold', 0.85)
+        self.similarity_threshold = altro_config.get('semantic_similarity_threshold', 0.80)
         self.enable_cache = altro_config.get('enable_embedding_cache', True)
         self.max_cache_size = altro_config.get('max_embedding_cache_size', 1000)
         
@@ -150,7 +150,7 @@ class AltroTagValidator:
             # Configurazione di fallback
             return {
                 'altro_tag_validator': {
-                    'semantic_similarity_threshold': 0.85,
+                    'semantic_similarity_threshold': 0.80,
                     'enable_embedding_cache': True,
                     'max_embedding_cache_size': 1000
                 }

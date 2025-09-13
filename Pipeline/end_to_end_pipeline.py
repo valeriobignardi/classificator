@@ -35,10 +35,10 @@ from session_aggregator import SessionAggregator
 from hdbscan_clusterer import HDBSCANClusterer
 # RIMOSSO: from intent_clusterer import IntentBasedClusterer  # Sistema legacy eliminato
 from intelligent_intent_clusterer import IntelligentIntentClusterer
-from Clustering.hierarchical_adaptive_clusterer import HierarchicalAdaptiveClusterer  # Nuovo sistema gerarchico
+from hierarchical_adaptive_clusterer import HierarchicalAdaptiveClusterer  # Nuovo sistema gerarchico
 
 # Import per architettura UUID centralizzata
-from Utils.tenant import Tenant
+from tenant import Tenant
 # Aggiungi percorsi per gli import
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'MySql'))
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'TagDatabase'))
@@ -51,8 +51,7 @@ from tag_database_connector import TagDatabaseConnector
 from semantic_memory_manager import SemanticMemoryManager
 from interactive_trainer import InteractiveTrainer
 from intelligent_label_deduplicator import IntelligentLabelDeduplicator
-# Importa funzione di pulizia tag per prevenire caratteri speciali
-from Classification.intelligent_classifier import clean_label_text
+# RIMOSSO: Import circolare di clean_label_text - usa self._clean_label_text
 
 # Import del classificatore ensemble avanzato
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Classification'))
@@ -65,7 +64,6 @@ from mongo_classification_reader import MongoClassificationReader
 # 🆕 Import per gestione parametri tenant UMAP
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
 from tenant_config_helper import TenantConfigHelper
-from tenant import Tenant
 
 # Import BERTopic provider
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'TopicModeling'))
@@ -338,7 +336,6 @@ class EndToEndPipeline:
                  config_path=config_path, auto_mode=auto_mode)
         
         # 🎯 NUOVO SISTEMA: Crea oggetto Tenant UNA VOLTA con TUTTE le info
-        from Utils.tenant import Tenant
         
         # GESTIONE TENANT UUID CENTRALIZZATA
         if tenant is not None:
@@ -1855,7 +1852,7 @@ class EndToEndPipeline:
                     cluster_metadata['is_outlier'] = True
                 
                 # 🧹 PULIZIA CRITICA: Applica pulizia caratteri speciali a suggested_label
-                clean_suggested_label = clean_label_text(suggested_label)
+                clean_suggested_label = self._clean_label_text(suggested_label)
                 if clean_suggested_label != suggested_label:
                     print(f"🧹 Propagated label pulita: '{suggested_label}' → '{clean_suggested_label}'")
                     suggested_label = clean_suggested_label
@@ -2666,84 +2663,9 @@ class EndToEndPipeline:
                  total_individual_cases=total_individual_cases)
         return predictions
     
-    def classifica_e_salva_sessioni_new(self,
-                                       sessioni: Dict[str, Dict],
-                                       batch_size: int = 32,
-                                       use_ensemble: bool = True,
-                                       optimize_clusters: bool = True,
-                                       force_review: bool = False,
-                                       embeddings: Optional[np.ndarray] = None,
-                                       cluster_labels: Optional[np.ndarray] = None,
-                                       cluster_info: Optional[Dict] = None) -> Dict[str, Any]:
-        """
-        🚫 LEGACY-NON IN USO - SOSTITUITA DA classifica_e_salva_documenti_unified()
-        
-        ATTENZIONE: Questa funzione è stata SOSTITUITA dalla nuova implementazione 
-        DocumentoProcessing che offre gestione unificata completa.
-        
-        La nuova implementazione offre:
-        ✅ Oggetti DocumentoProcessing con tutti i metadati
-        ✅ Pipeline completa clustering→classificazione→salvataggio
-        ✅ Gestione rappresentanti con propagazione automatica
-        ✅ Controllo stato ML ensemble integrato
-        ✅ Debugging e logging avanzato
-        
-        NON UTILIZZARE QUESTA FUNZIONE - Mantenuta solo per riferimento storico.
-        
-        [DOCUMENTAZIONE ORIGINALE]
-        Funzione orchestratrice che combina classificazione e salvataggio.
-        Usa le nuove funzioni separate per mantenere compatibilità API.
-        
-        Args:
-            sessioni: Sessioni da classificare e salvare
-            batch_size: Dimensione del batch per la classificazione
-            use_ensemble: Se True, usa l'ensemble classifier
-            optimize_clusters: Se True, usa clustering ottimizzato
-            force_review: Se True, cancella MongoDB prima del salvataggio
-            embeddings: Embeddings precomputati (opzionale)
-            cluster_labels: Labels cluster precomputati (opzionale)
-            cluster_info: Info cluster precomputate (opzionale)
-            
-        Returns:
-            Statistiche del salvataggio
-            
-        Autore: Valerio Bignardi
-        Data creazione: 2025-09-07
-        Ultima modifica: 2025-09-07 - Orchestrazione funzioni separate
-        """
-        trace_all("classifica_e_salva_sessioni_new", "ENTER",
-                 sessioni_count=len(sessioni),
-                 batch_size=batch_size,
-                 use_ensemble=use_ensemble,
-                 optimize_clusters=optimize_clusters,
-                 force_review=force_review)
-        
-        print(f"🏷️  CLASSIFICAZIONE E SALVATAGGIO ORCHESTRATO di {len(sessioni)} sessioni...")
-        
-        # 1. FASE CLASSIFICAZIONE PURA
-        print(f"📊 FASE 1: Classificazione pura...")
-        predictions = self.classifica_sessioni_puro(
-            sessioni=sessioni,
-            batch_size=batch_size,
-            use_ensemble=use_ensemble,
-            optimize_clusters=optimize_clusters,
-            embeddings=embeddings,
-            cluster_labels=cluster_labels,
-            cluster_info=cluster_info
-        )
-        
-        # 2. FASE SALVATAGGIO PURO  
-        print(f"💾 FASE 2: Salvataggio puro...")
-        stats = self.salva_classificazioni_puro(
-            sessioni=sessioni,
-            predictions=predictions,
-            use_ensemble=use_ensemble,
-            force_review=force_review
-        )
-        
-        trace_all("classifica_e_salva_sessioni_new", "EXIT", return_value=stats)
-        return stats
-    
+   
+
+
     def classifica_e_salva_documenti_unified(self,
                                            documenti: List[DocumentoProcessing],
                                            batch_size: int = 32,
@@ -3321,7 +3243,7 @@ class EndToEndPipeline:
                     predicted_label = prediction['predicted_label']
                     
                     # 🧹 PULIZIA CRITICA: Applica pulizia caratteri speciali SUBITO dopo estrazione
-                    clean_predicted_label = clean_label_text(predicted_label)
+                    clean_predicted_label = self._clean_label_text(predicted_label)
                     if clean_predicted_label != predicted_label:
                         print(f"🧹 Label pulita (ensemble): '{predicted_label}' → '{clean_predicted_label}'")
                         predicted_label = clean_predicted_label
@@ -3330,7 +3252,7 @@ class EndToEndPipeline:
                     
                     # 🆕 VALIDAZIONE "ALTRO" CON LLM + BERTopic + SIMILARITÀ
                     print (f"   🔍 Verifica necessità validazione 'altro' per sessione {i+1}...")
-                    if predicted_label == 'altro' and hasattr(self, 'interactive_trainer') and self.interactive_trainer.altro_validator: # Abilita validazione altro se predict altro e validator attivo 
+                    if predicted_label.lower() == 'altro' and hasattr(self, 'interactive_trainer') and self.interactive_trainer.altro_validator: # Abilita validazione altro se predict altro e validator attivo 
                         print (f"   🔍 Predicted label è 'altro', avvio validazione...")
                         try:
                             conversation_text = sessioni[session_id].get('testo_completo', '')
@@ -3342,9 +3264,9 @@ class EndToEndPipeline:
                                 )
                                 
                                 # Usa il risultato della validazione se diverso da "altro"
-                                if validated_label != 'altro':
+                                if validated_label and validated_label.lower() != 'altro':
                                     # 🧹 PULIZIA CRITICA: Applica pulizia al validated_label (primo blocco)
-                                    clean_validated_label = clean_label_text(validated_label)
+                                    clean_validated_label = self._clean_label_text(validated_label)
                                     if clean_validated_label != validated_label:
                                         print(f"🧹 Validated label pulita (ensemble): '{validated_label}' → '{clean_validated_label}'")
                                     
@@ -3386,7 +3308,7 @@ class EndToEndPipeline:
                     predicted_label = prediction['predicted_label']
                     
                     # 🧹 PULIZIA CRITICA: Applica pulizia caratteri speciali per ML_AUTO
-                    clean_predicted_label = clean_label_text(predicted_label)
+                    clean_predicted_label = self._clean_label_text(predicted_label)
                     if clean_predicted_label != predicted_label:
                         print(f"🧹 Label pulita (ML_AUTO): '{predicted_label}' → '{clean_predicted_label}'")
                         predicted_label = clean_predicted_label
@@ -3394,7 +3316,7 @@ class EndToEndPipeline:
                         prediction['predicted_label'] = clean_predicted_label
                     
                     # 🆕 VALIDAZIONE "ALTRO" ANCHE PER ML_AUTO 
-                    if predicted_label == 'altro' and hasattr(self, 'interactive_trainer') and self.interactive_trainer.altro_validator:
+                    if predicted_label.lower() == 'altro' and hasattr(self, 'interactive_trainer') and self.interactive_trainer.altro_validator:
                         try:
                             conversation_text = sessioni[session_id].get('testo_completo', '')
                             if conversation_text:
@@ -3405,9 +3327,9 @@ class EndToEndPipeline:
                                 )
                                 
                                 # Usa il risultato della validazione se diverso da "altro"
-                                if validated_label != 'altro':
+                                if validated_label and validated_label.lower() != 'altro':
                                     # 🧹 PULIZIA CRITICA: Applica pulizia al validated_label (secondo blocco)
-                                    clean_validated_label = clean_label_text(validated_label)
+                                    clean_validated_label = self._clean_label_text(validated_label)
                                     if clean_validated_label != validated_label:
                                         print(f"🧹 Validated label pulita (ML_AUTO): '{validated_label}' → '{clean_validated_label}'")
                                     
@@ -4436,28 +4358,24 @@ class EndToEndPipeline:
             
             debug_logger.info(f"📊 AVVIO FASE 4 - Classificazione ensemble completa")
             
-            # Usa la funzione orchestratrice che fa tutto: ensemble, salvataggio, outlier, propagazione
-            classification_results = self.classifica_e_salva_sessioni_new(
-                sessioni=sessioni,
+            # 🚀 FIX REVIEW QUEUE: Usa la funzione corretta con DocumentoProcessing che ha needs_review logic
+            classification_results = self.classifica_e_salva_documenti_unified(
+                documenti=documenti,  # Usa oggetti DocumentoProcessing con needs_review fix
                 batch_size=32,
                 use_ensemble=True,
-                optimize_clusters=True,
-                force_review=False,
-                embeddings=embeddings,
-                cluster_labels=cluster_labels,
-                cluster_info=cluster_info
+                force_review=False
             )
             
             print(f"✅ Classificazione ensemble completa:")
-            print(f"  � Sessioni processate: {classification_results.get('total_sessions', 0)}")
-            print(f"  💾 Salvate con successo: {classification_results.get('saved_successfully', 0)}")
-            print(f"  🎯 Alta confidenza: {classification_results.get('high_confidence', 0)}")
-            print(f"  ⚠️ Bassa confidenza: {classification_results.get('low_confidence', 0)}")
+            print(f"  📊 Documenti processati: {classification_results.get('total_documents', 0)}")
+            print(f"  💾 Salvati con successo: {classification_results.get('saved_count', 0)}")
+            print(f"  🎯 Rappresentanti: {classification_results.get('representatives', 0)}")
+            print(f"  ⚠️ Errori: {classification_results.get('errors', 0)}")
             print(f"🚨 [DEBUG] FASE 4 COMPLETATA - Classificazione completa")
             
             debug_logger.info(f"📊 FASE 4 COMPLETATA - Classificazione completa")
-            debug_logger.info(f"   Sessioni processate: {classification_results.get('total_sessions', 0)}")
-            debug_logger.info(f"   Salvate con successo: {classification_results.get('saved_successfully', 0)}")
+            debug_logger.info(f"   Documenti processati: {classification_results.get('total_documents', 0)}")
+            debug_logger.info(f"   Salvati con successo: {classification_results.get('saved_count', 0)}")
             
             # Aggiorna le metriche di training per compatibilità
             training_metrics = {
@@ -6369,7 +6287,7 @@ class EndToEndPipeline:
                 if cluster_id in reviewed_labels:
                     # Usa l'etichetta dal cluster con pulizia caratteri speciali
                     raw_label = reviewed_labels[cluster_id]
-                    final_label = clean_label_text(raw_label)
+                    final_label = self._clean_label_text(raw_label)
                     if final_label != raw_label:
                         print(f"🧹 Label cluster pulita: '{raw_label}' → '{final_label}'")
                     
@@ -6402,7 +6320,7 @@ class EndToEndPipeline:
                 if cluster_id in reviewed_labels:
                     # Usa l'etichetta dal cluster con pulizia caratteri speciali
                     raw_label = reviewed_labels[cluster_id]
-                    final_label = clean_label_text(raw_label)
+                    final_label = self._clean_label_text(raw_label)
                     if final_label != raw_label:
                         print(f"🧹 Label cluster pulita (propagation): '{raw_label}' → '{final_label}'")
                     confidence = 0.85  # Alta confidenza per propagazione da cluster
@@ -7693,9 +7611,29 @@ class EndToEndPipeline:
                         'propagation_reason': None
                     }
                     
-                    # Determina review info
-                    needs_review = record['review_status'] == 'pending'
-                    review_reason = 'primo_avvio' if not ml_model_available else 'confidence_bassa' if needs_review else 'pipeline_processing'
+                    # 🚀 FIX REVIEW QUEUE: Usa logica DocumentoProcessing invece di review_status MongoDB
+                    from Models.documento_processing import DocumentoProcessing
+                    
+                    # Crea oggetto DocumentoProcessing per valutazione needs_review
+                    documento_temp = DocumentoProcessing(
+                        session_id=session_id,
+                        testo_completo=record['conversation_text'],
+                        is_representative=record['is_representative'],
+                        is_outlier=record['is_outlier'],
+                        is_propagated=False  # Questi sono documenti originali, non propagati
+                    )
+                    
+                    # Imposta classificazione e valuta needs_review automaticamente
+                    documento_temp.set_classification_result(
+                        predicted_label=final_decision['predicted_label'],
+                        confidence=final_decision['confidence'],
+                        method=final_decision['method'],
+                        reasoning=final_decision.get('reasoning', '')
+                    )
+                    
+                    # Usa la logica corretta per needs_review
+                    needs_review = documento_temp.needs_review
+                    review_reason = documento_temp.review_reason or ('primo_avvio' if not ml_model_available else 'confidence_bassa' if needs_review else 'pipeline_processing')
                     classified_by = 'training_supervisionato_fase1'
                     
                     # Ottieni embedding se disponibile (dalle sessioni originali)

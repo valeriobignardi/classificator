@@ -1,0 +1,82 @@
+ def classifica_e_salva_sessioni_new(self,
+                                       sessioni: Dict[str, Dict],
+                                       batch_size: int = 32,
+                                       use_ensemble: bool = True,
+                                       optimize_clusters: bool = True,
+                                       force_review: bool = False,
+                                       embeddings: Optional[np.ndarray] = None,
+                                       cluster_labels: Optional[np.ndarray] = None,
+                                       cluster_info: Optional[Dict] = None) -> Dict[str, Any]:
+        """
+        🚫 LEGACY-NON IN USO - SOSTITUITA DA classifica_e_salva_documenti_unified()
+        
+        ATTENZIONE: Questa funzione è stata SOSTITUITA dalla nuova implementazione 
+        DocumentoProcessing che offre gestione unificata completa.
+        
+        La nuova implementazione offre:
+        ✅ Oggetti DocumentoProcessing con tutti i metadati
+        ✅ Pipeline completa clustering→classificazione→salvataggio
+        ✅ Gestione rappresentanti con propagazione automatica
+        ✅ Controllo stato ML ensemble integrato
+        ✅ Debugging e logging avanzato
+        
+        NON UTILIZZARE QUESTA FUNZIONE - Mantenuta solo per riferimento storico.
+        
+        [DOCUMENTAZIONE ORIGINALE]
+        Funzione orchestratrice che combina classificazione e salvataggio.
+        Usa le nuove funzioni separate per mantenere compatibilità API.
+        
+        Args:
+            sessioni: Sessioni da classificare e salvare
+            batch_size: Dimensione del batch per la classificazione
+            use_ensemble: Se True, usa l'ensemble classifier
+            optimize_clusters: Se True, usa clustering ottimizzato
+            force_review: Se True, cancella MongoDB prima del salvataggio
+            embeddings: Embeddings precomputati (opzionale)
+            cluster_labels: Labels cluster precomputati (opzionale)
+            cluster_info: Info cluster precomputate (opzionale)
+            
+        Returns:
+            Statistiche del salvataggio
+            
+        Autore: Valerio Bignardi
+        Data creazione: 2025-09-07
+        Ultima modifica: 2025-09-07 - Orchestrazione funzioni separate
+        """
+        trace_all("classifica_e_salva_sessioni_new", "ENTER",
+                 sessioni_count=len(sessioni),
+                 batch_size=batch_size,
+                 use_ensemble=use_ensemble,
+                 optimize_clusters=optimize_clusters,
+                 force_review=force_review)
+        
+        print(f"🏷️  CLASSIFICAZIONE E SALVATAGGIO ORCHESTRATO di {len(sessioni)} sessioni...")
+        
+        # 1. FASE CLASSIFICAZIONE PURA
+        print(f"📊 FASE 1: Classificazione pura...")
+        predictions = self.classifica_sessioni_puro(
+            sessioni=sessioni,
+            batch_size=batch_size,
+            use_ensemble=use_ensemble,
+            optimize_clusters=optimize_clusters,
+            embeddings=embeddings,
+            cluster_labels=cluster_labels,
+            cluster_info=cluster_info
+        )
+        
+        # 2. FASE SALVATAGGIO PURO  
+        print(f"💾 FASE 2: Salvataggio puro...")
+        stats = self.salva_classificazioni_puro(
+            sessioni=sessioni,
+            predictions=predictions,
+            use_ensemble=use_ensemble,
+            force_review=force_review
+        )
+        
+        trace_all("classifica_e_salva_sessioni_new", "EXIT", return_value=stats)
+        return stats
+    
+
+
+
+

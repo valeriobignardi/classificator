@@ -12,7 +12,7 @@ from typing import Dict, List, Any, Optional, Tuple
 
 # Import della funzione di pulizia (import assoluto)
 sys.path.append(os.path.dirname(__file__))
-from intelligent_classifier import clean_label_text
+from intelligent_classifier import clean_label_text, ClassificationResult
 from datetime import datetime
 
 # Aggiungi il path per importare il modulo di supervisione umana
@@ -32,7 +32,9 @@ from Utils.numpy_serialization import convert_numpy_types
 
 # Import della funzione di tracing
 try:
-    from Pipeline.end_to_end_pipeline import trace_all
+    # TEMPORANEAMENTE DISABILITATO per evitare import circolare
+    # from Pipeline.end_to_end_pipeline import trace_all
+    raise ImportError("Import circolare temporaneamente disabilitato")
 except ImportError:
     # Fallback se il modulo non è disponibile
     def trace_all(function_name: str, action: str = "ENTER", called_from: str = None, **kwargs):
@@ -122,16 +124,18 @@ class AdvancedEnsembleClassifier:
                                     self.llm_classifier = llm_factory.get_llm_for_tenant("default")
                                     print(f"🏭 LLM classifier ottenuto tramite Factory per tenant default")
                                 
-                                if self.llm_classifier and self.llm_classifier.is_available():
+                                # CORREZIONE CRITICA: Non controllare is_available() qui - lascia che il classifier gestisca i fallback
+                                if self.llm_classifier:
                                     current_model = getattr(self.llm_classifier, 'model_name', 'unknown')
-                                    print(f"🤖 LLM classifier creato automaticamente nell'ensemble: {current_model}")
+                                    print(f"🤖 LLM classifier assegnato nell'ensemble: {current_model}")
                                     if client_name and hasattr(self.llm_classifier, 'has_finetuned_model'):
                                         if self.llm_classifier.has_finetuned_model():
                                             print(f"🎯 Modello fine-tuned attivo per {client_name}")
                                         else:
                                             print(f"💡 Possibile fine-tuning per {client_name}")
+                                    print(f"✅ LLM classifier configurato correttamente per ensemble")
                                 else:
-                                    print("⚠️ LLM da Factory non disponibile, ensemble userà solo ML")
+                                    print("⚠️ LLM Factory ha restituito None, ensemble userà solo ML")
                                     self.llm_classifier = None
                                     
                             except ImportError as factory_e:
@@ -501,7 +505,25 @@ class AdvancedEnsembleClassifier:
         print(f"🧪 DEBUG LLM:")
         print(f"   📊 self.llm_classifier: {self.llm_classifier is not None}")
         
-        if self.llm_classifier and self.llm_classifier.is_available():
+        # 🚨 CRITICAL: Per OpenAI non controlliamo is_available() - funziona sempre via API
+        # Solo per Ollama controlliamo is_available() perché richiede server locale
+        llm_is_usable = False
+        if self.llm_classifier:
+            # Determina se è OpenAI o Ollama
+            is_openai_model = (hasattr(self.llm_classifier, 'model_name') and 
+                             'gpt' in str(self.llm_classifier.model_name).lower())
+            
+            if is_openai_model:
+                # OpenAI: sempre usabile se esistente (non serve is_available)
+                llm_is_usable = True
+                print(f"   📊 LLM OpenAI sempre disponibile: {self.llm_classifier.model_name}")
+            else:
+                # Ollama: controlla is_available() per server locale
+                llm_is_usable = self.llm_classifier.is_available()
+                model_name = getattr(self.llm_classifier, 'model_name', 'unknown')
+                print(f"   📊 LLM Ollama ({model_name}) - is_available(): {llm_is_usable}")
+        
+        if llm_is_usable:
             print(f"   📊 LLM disponibile - procedo con classificazione")
             try:
                 llm_result = self.llm_classifier.classify_with_motivation(text)
@@ -1467,3 +1489,118 @@ class AdvancedEnsembleClassifier:
         self.bertopic_top_k = top_k
         self.bertopic_return_one_hot = return_one_hot
         print(f"🔗 BERTopic provider impostato (top_k={top_k}, one_hot={return_one_hot})")
+
+    def classify_batch(self, conversations: List[str], show_progress: bool = True, force_llm_only: bool = False, **kwargs) -> List[ClassificationResult]:
+        """
+        Metodo di compatibilità per classify_batch - interfaccia standard
+        
+        Args:
+            conversations: Lista di testi da classificare (compatibilità IntelligentClassifier)
+            show_progress: Se mostrare progress bar (compatibilità IntelligentClassifier) 
+            force_llm_only: Se True, usa solo LLM (parametro specifico ensemble)
+            **kwargs: Altri parametri per batch_predict
+            
+        Returns:
+            Lista di ClassificationResult (compatibilità IntelligentClassifier)
+            
+        Autore: Valerio Bignardi
+        Data: 2025-01-13
+        """
+        if force_llm_only and hasattr(self, 'llm_classifier') and self.llm_classifier:
+            # Modalità LLM only - DEVE usare OpenAI per batch processing
+            print(f"🔍 classify_batch con force_llm_only=True - {len(conversations)} testi")
+            
+            # 🚨 CRITICAL: Il batch processing funziona SOLO con OpenAI!
+            # Verifica che l'LLM sia OpenAI, altrimenti crea classifier OpenAI temporaneo
+            is_openai_model = (hasattr(self.llm_classifier, 'model_name') and 
+                             'gpt' in str(self.llm_classifier.model_name).lower())
+            
+            if not is_openai_model:
+                print(f"⚠️ LLM corrente non è OpenAI, creo classifier temporaneo per batch")
+                try:
+                    # Crea classifier OpenAI temporaneo per batch
+                    from LLMFactory.llm_factory import LLMFactory
+                    
+                    # Usa tenant corrente se disponibile
+                    current_tenant = getattr(self, 'tenant', None)
+                    if not current_tenant:
+                        # Fallback: crea tenant dal client_name se disponibile
+                        if hasattr(self, 'client_name') and self.client_name:
+                            from Core.tenant_manager import TenantManager
+                            tenant_manager = TenantManager()
+                            try:
+                                current_tenant = tenant_manager.resolve_tenant_by_slug(self.client_name.lower())
+                            except:
+                                current_tenant = tenant_manager.resolve_tenant_by_uuid('015007d9-d413-11ef-86a5-96000228e7fe')
+                        else:
+                            from Core.tenant_manager import TenantManager
+                            tenant_manager = TenantManager()
+                            current_tenant = tenant_manager.resolve_tenant_by_uuid('015007d9-d413-11ef-86a5-96000228e7fe')
+                    
+                    # FORZA modello OpenAI per batch
+                    temp_factory = LLMFactory(current_tenant)
+                    openai_classifier = temp_factory.get_llm_classifier_by_model('gpt-4o')
+                    
+                    if openai_classifier and hasattr(openai_classifier, 'classify_batch'):
+                        print(f"✅ Uso classifier OpenAI temporaneo per batch: gpt-4o")
+                        return openai_classifier.classify_batch(conversations, show_progress=show_progress)
+                    
+                except Exception as e:
+                    print(f"❌ Errore creazione classifier OpenAI temporaneo: {e}")
+                    # Fallback a singole chiamate
+                    pass
+            
+            # Usa classifier esistente se è OpenAI o fallback a singole chiamate
+            try:
+                if hasattr(self.llm_classifier, 'classify_batch') and is_openai_model:
+                    # LLM ha classify_batch ed è OpenAI, usalo direttamente
+                    print(f"✅ Uso classify_batch OpenAI esistente")
+                    return self.llm_classifier.classify_batch(conversations, show_progress=show_progress)
+                else:
+                    # Fallback a classificazione singola (anche per Ollama)
+                    print(f"⚠️ Fallback a classificazioni singole (no batch per Ollama)")
+                    results = []
+                    for i, text in enumerate(conversations):
+                        if show_progress and len(conversations) > 10 and i % max(1, len(conversations) // 10) == 0:
+                            print(f"Progress LLM-only singolo: {i}/{len(conversations)}")
+                        result = self.llm_classifier.classify_with_motivation(text)
+                        results.append(result)
+                    return results
+            except Exception as e:
+                print(f"❌ Errore in classify_batch force_llm_only: {e}")
+                raise
+        else:
+            # Modalità normale - usa batch_predict e converti risultati
+            dict_results = self.batch_predict(conversations, **kwargs)
+            
+            # Converti da Dict a ClassificationResult per compatibilità
+            classification_results = []
+            for dict_result in dict_results:
+                # Crea ClassificationResult da dict response
+                classification_result = ClassificationResult(
+                    predicted_label=dict_result.get('predicted_label', 'altro'),
+                    confidence=dict_result.get('confidence', 0.5),
+                    motivation=dict_result.get('motivation', 'Ensemble prediction'),
+                    method=dict_result.get('method', 'ENSEMBLE'),
+                    processing_time=dict_result.get('processing_time', 0.0),
+                    timestamp=dict_result.get('timestamp', datetime.now().isoformat())
+                )
+                classification_results.append(classification_result)
+            
+            return classification_results
+    
+    def classify_batch_llm_only(self, texts: List[str], **kwargs) -> List[Dict[str, Any]]:
+        """
+        Metodo di compatibilità per classify_batch_llm_only
+        
+        Args:
+            texts: Lista di testi da classificare
+            **kwargs: Altri parametri
+            
+        Returns:
+            Lista di predizioni usando solo LLM
+            
+        Autore: Valerio Bignardi
+        Data: 2025-01-13
+        """
+        return self.classify_batch(texts, force_llm_only=True, **kwargs)

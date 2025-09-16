@@ -18,6 +18,7 @@ import random
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 # Aggiungi path per la classe Tenant
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Utils'))
@@ -882,10 +883,18 @@ class QualityGateEngine:
         try:
             self.logger.info("🔄 Inizio riaddestramento automatico del modello ML...")
             
-            # 1. Carica decisioni umane dal log
-            training_data = self._load_human_decisions_for_training()
+            # Determina se è il primo addestramento o un riaddestramento
+            is_first_training = self._is_first_ml_training()
+            
+            if is_first_training:
+                self.logger.info("🚀 PRIMO ADDESTRAMENTO: Uso review umane + classificazioni LLM")
+                training_data = self._load_all_training_data_for_first_training()
+            else:
+                self.logger.info("🔄 RIADDESTRAMENTO: Uso solo review umane")
+                training_data = self._load_human_decisions_for_training()
+            
             if not training_data:
-                self.logger.warning("Nessun dato di training trovato nel log")
+                self.logger.warning("Nessun dato di training trovato")
                 return False
             
             # 2. Prepara dati per training
@@ -898,7 +907,8 @@ class QualityGateEngine:
             success = self._update_ml_model_with_new_data(X_new, y_new)
             
             if success:
-                self.logger.info(f"✅ Modello riaddestrato con {len(X_new)} esempi TOTALI (non incrementale)")
+                training_type = "primo addestramento" if is_first_training else "riaddestramento"
+                self.logger.info(f"✅ Modello {training_type} completato con {len(X_new)} esempi")
                 # Marca il log come processato (opzionale)
                 self._mark_training_data_processed()
                 return True
@@ -912,6 +922,238 @@ class QualityGateEngine:
             self.logger.error(traceback.format_exc())
             return False
     
+    def _is_first_ml_training(self) -> bool:
+        """
+        Determina se questo è il primo addestramento ML o un riaddestramento.
+        
+        Verifica:
+        1. Esistenza di modelli ML salvati precedentemente
+        2. Se il ML ensemble è stato allenato in precedenza
+        
+        Returns:
+            True se è il primo addestramento, False se è un riaddestramento
+        """
+        try:
+            # Verifica se il ML ensemble ha mai fatto training
+            if hasattr(self.ensemble_classifier, 'ml_classifier') and self.ensemble_classifier.ml_classifier:
+                # Verifica se il classificatore ML ha modelli salvati
+                ml_classifier = self.ensemble_classifier.ml_classifier
+                
+                # Controlla se esistono file di modelli salvati
+                if hasattr(ml_classifier, 'models_dir') and ml_classifier.models_dir:
+                    models_dir = Path(ml_classifier.models_dir)
+                    if models_dir.exists():
+                        # Cerca file di modelli (potrebbero essere .pkl, .joblib, .json, etc.)
+                        model_files = list(models_dir.glob('*.pkl')) + list(models_dir.glob('*.joblib')) + list(models_dir.glob('*.json'))
+                        if model_files:
+                            self.logger.info(f"Trovati {len(model_files)} file di modelli esistenti - RIADDESTRAMENTO")
+                            return False
+                
+                # Verifica se il classificatore ML ha attributi che indicano training precedente
+                if hasattr(ml_classifier, 'is_trained') and callable(ml_classifier.is_trained):
+                    if ml_classifier.is_trained():
+                        self.logger.info("ML classifier è già stato addestrato - RIADDESTRAMENTO")
+                        return False
+                
+                # Verifica se ci sono attributi di modelli salvati in memoria
+                if hasattr(ml_classifier, 'models') and ml_classifier.models:
+                    if isinstance(ml_classifier.models, dict) and ml_classifier.models:
+                        self.logger.info("Trovati modelli in memoria - RIADDESTRAMENTO")
+                        return False
+            
+            # Verifica file di training log per determinare se ci sono stati addestramenti precedenti
+            # Se esiste il log e ha voci, potrebbe essere un riaddestramento
+            if os.path.exists(self.training_log_path):
+                try:
+                    with open(self.training_log_path, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                        # Se il log è sostanzioso (> 10 righe), probabilmente non è il primo training
+                        if len(lines) > 10:
+                            self.logger.info(f"Log training esistente con {len(lines)} righe - Possibile RIADDESTRAMENTO")
+                            # Non possiamo essere certi, verifichiamo se ci sono state classificazioni ML
+                            return self._check_if_ml_has_ever_classified()
+                except Exception as e:
+                    self.logger.warning(f"Errore lettura training log: {e}")
+            
+            self.logger.info("Nessun evidence di training precedente - PRIMO ADDESTRAMENTO")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Errore nel determinare tipo di training: {e}")
+            # In caso di errore, assume primo addestramento per sicurezza
+            return True
+    
+    def _check_if_ml_has_ever_classified(self) -> bool:
+        """
+        Verifica se il ML ha mai fatto classificazioni controllando il database MongoDB.
+        
+        Returns:
+            True se è il primo training (ML non ha mai classificato)
+            False se è un riaddestramento (ML ha già classificato)
+        """
+        try:
+            from mongo_classification_reader import MongoClassificationReader
+            mongo_reader = MongoClassificationReader(tenant=self.tenant)
+            mongo_reader.connect()
+            
+            try:
+                # Cerca classificazioni fatte dal ML (non solo LLM)
+                # Cerca documenti con classification_method che contiene 'ml' o 'ensemble'
+                query = {
+                    'client_name': self.tenant.tenant_slug,
+                    '$or': [
+                        {'classification_method': {'$regex': 'ml', '$options': 'i'}},
+                        {'classification_method': {'$regex': 'ensemble', '$options': 'i'}},
+                        {'ml_prediction': {'$exists': True, '$ne': None}}
+                    ]
+                }
+                
+                ml_classifications = mongo_reader.collection.count_documents(query)
+                
+                if ml_classifications > 0:
+                    self.logger.info(f"Trovate {ml_classifications} classificazioni ML esistenti - RIADDESTRAMENTO")
+                    return False
+                else:
+                    self.logger.info("Nessuna classificazione ML precedente trovata - PRIMO ADDESTRAMENTO")
+                    return True
+                    
+            finally:
+                mongo_reader.disconnect()
+                
+        except Exception as e:
+            self.logger.error(f"Errore nel controllare classificazioni ML precedenti: {e}")
+            # In caso di errore, assume primo addestramento
+            return True
+    
+    def _load_all_training_data_for_first_training(self) -> List[Dict[str, Any]]:
+        """
+        Carica TUTTI i dati di training per il primo addestramento ML:
+        - Review umane dal training log
+        - Classificazioni LLM dal database MongoDB
+        
+        Returns:
+            Lista combinata di decisioni per training
+        """
+        training_data = []
+        
+        try:
+            # 1. Carica review umane dal log (come sempre)
+            human_decisions = self._load_human_decisions_for_training()
+            if human_decisions:
+                self.logger.info(f"Caricate {len(human_decisions)} decisioni umane dal log")
+                training_data.extend(human_decisions)
+            
+            # 2. Carica classificazioni LLM dal database MongoDB
+            llm_classifications = self._load_llm_classifications_from_mongodb()
+            if llm_classifications:
+                self.logger.info(f"Caricate {len(llm_classifications)} classificazioni LLM dal database")
+                training_data.extend(llm_classifications)
+            
+            # 3. Rimuovi duplicati per session_id (le review umane hanno priorità)
+            training_data = self._remove_duplicate_training_data(training_data)
+            
+            self.logger.info(f"Dataset primo addestramento: {len(training_data)} esempi totali")
+            return training_data
+            
+        except Exception as e:
+            self.logger.error(f"Errore nel caricamento dati primo addestramento: {e}")
+            return []
+    
+    def _load_llm_classifications_from_mongodb(self) -> List[Dict[str, Any]]:
+        """
+        Carica classificazioni LLM dal database MongoDB per il primo addestramento.
+        
+        Returns:
+            Lista di classificazioni LLM formattate come decisioni di training
+        """
+        llm_data = []
+        
+        try:
+            from mongo_classification_reader import MongoClassificationReader
+            mongo_reader = MongoClassificationReader(tenant=self.tenant)
+            mongo_reader.connect()
+            
+            try:
+                # Cerca classificazioni fatte SOLO da LLM (non review umane e non ML)
+                query = {
+                    'client_name': self.tenant.tenant_slug,
+                    '$and': [
+                        {'classification_method': {'$regex': 'llm', '$options': 'i'}},
+                        {'classification_method': {'$not': {'$regex': 'human', '$options': 'i'}}},
+                        {'classification_method': {'$not': {'$regex': 'ml', '$options': 'i'}}},
+                        {'llm_prediction': {'$exists': True, '$ne': None}},
+                        {'needs_review': {'$ne': True}}  # Non prendere quelli ancora in review
+                    ]
+                }
+                
+                llm_classifications = list(mongo_reader.collection.find(query))
+                
+                # Converte in formato compatibile con training log
+                for classification in llm_classifications:
+                    session_id = classification.get('session_id')
+                    llm_prediction = classification.get('llm_prediction')
+                    conversation_text = classification.get('conversation_text')
+                    
+                    if session_id and llm_prediction and conversation_text:
+                        training_entry = {
+                            'session_id': session_id,
+                            'human_decision': llm_prediction,  # Usa LLM prediction come "decisione"
+                            'conversation_text': conversation_text,  # 🔧 AGGIUNTO: Include il testo direttamente
+                            'source': 'llm_classification',
+                            'original_confidence': classification.get('confidence', 0.5)
+                        }
+                        llm_data.append(training_entry)
+                    elif session_id and llm_prediction:
+                        # Se manca conversation_text, logga per debug
+                        self.logger.warning(f"Classificazione LLM {session_id} senza conversation_text - saltata")
+                
+                self.logger.info(f"Trovate {len(llm_data)} classificazioni LLM utilizzabili per training")
+                
+            finally:
+                mongo_reader.disconnect()
+                
+        except Exception as e:
+            self.logger.error(f"Errore nel caricamento classificazioni LLM: {e}")
+            
+        return llm_data
+    
+    def _remove_duplicate_training_data(self, training_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Rimuove duplicati dal training data, dando priorità alle review umane.
+        
+        Args:
+            training_data: Lista di decisioni di training
+            
+        Returns:
+            Lista senza duplicati per session_id
+        """
+        seen_sessions = set()
+        unique_data = []
+        
+        # Prima passata: prendi tutte le review umane (senza 'source' o source != 'llm_classification')
+        for item in training_data:
+            session_id = item.get('session_id')
+            source = item.get('source', 'human_review')
+            
+            if session_id and session_id not in seen_sessions and source != 'llm_classification':
+                unique_data.append(item)
+                seen_sessions.add(session_id)
+        
+        # Seconda passata: aggiungi classificazioni LLM solo se session_id non già presente
+        for item in training_data:
+            session_id = item.get('session_id')
+            source = item.get('source', 'human_review')
+            
+            if session_id and session_id not in seen_sessions and source == 'llm_classification':
+                unique_data.append(item)
+                seen_sessions.add(session_id)
+        
+        removed_count = len(training_data) - len(unique_data)
+        if removed_count > 0:
+            self.logger.info(f"Rimossi {removed_count} duplicati dal training data")
+        
+        return unique_data
+
     def _load_human_decisions_for_training(self) -> List[Dict[str, Any]]:
         """
         Carica le decisioni umane dal log per il training.
@@ -992,20 +1234,26 @@ class QualityGateEngine:
                     session_id = decision['session_id']
                     human_label = decision['human_decision']
                     
-                    # Prima prova a trovare la conversazione originale per session_id
-                    if session_id in sessions_dict:
-                        # Trovata conversazione originale
+                    # 🔧 OTTIMIZZAZIONE: Usa conversation_text se già presente (es. da LLM classifications)
+                    if 'conversation_text' in decision and decision['conversation_text']:
+                        conversation_text = decision['conversation_text']
+                        conversations.append(conversation_text)
+                        labels.append(human_label)
+                        self.logger.debug(f"Usato conversation_text diretto per {session_id} (source: {decision.get('source', 'unknown')})")
+                    # Altrimenti, cerca la conversazione originale per session_id
+                    elif session_id in sessions_dict:
+                        # Trovata conversazione originale nel database
                         session_data = sessions_dict[session_id]
                         conversation_text = session_data['conversation_text']
                         conversations.append(conversation_text)
                         labels.append(human_label)
-                        self.logger.debug(f"Usata conversazione originale per {session_id}")
+                        self.logger.debug(f"Usata conversazione da database per {session_id}")
                     else:
                         # Session_id non trovato (probabilmente mock), usa campione reale per questa categoria
                         self.logger.debug(f"Session_id {session_id} non trovato, cerco campione reale per categoria {human_label}")
                         
                         # Cerca conversazioni reali già classificate con questa etichetta
-                        sample_sessions = mongo_reader.get_sessions_by_label("humanitas", human_label, limit=1)
+                        sample_sessions = mongo_reader.get_sessions_by_label(human_label, limit=1)
                         
                         if sample_sessions and len(sample_sessions) > 0:
                             # Trovato campione reale per questa categoria

@@ -1,7 +1,7 @@
 clustering_parameters:
   allow_single_cluster: false
   alpha: 0.4
-  cluster_selection_epsilon: 0.28
+  cluster_selection_epsilon: 0.21
   cluster_selection_method: eom
   confidence_threshold_priority: 0.95
   enable_smart_review: true
@@ -24,10 +24,10 @@ clustering_parameters:
   umap_metric: cosine
   umap_min_dist: 0
   umap_n_components: 17
-  umap_n_neighbors: 30
+  umap_n_neighbors: 35
   umap_random_state: 42
   use_umap: true
-last_updated: '2025-09-04T23:45:57.074978'
+last_updated: '2025-09-16T20:55:03.676935'
 previous_config_backup:
   allow_single_cluster: false
   alpha: 0.4

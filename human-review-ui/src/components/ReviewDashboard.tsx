@@ -1032,9 +1032,17 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
                           <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
                             <Box display="flex" alignItems="center" gap={1}>
                               {caseItem.is_representative === false ? <LinkIcon color="secondary" /> : <StarIcon color="primary" />}
-                              <Typography variant="h6" component="div">
-                                Sessione: {(caseItem.session_id || '').substring(0, 12)}...
-                              </Typography>
+                              <Box>
+                                <Typography variant="h6" component="div">
+                                  Sessione: {(caseItem.session_id || '').substring(0, 12)}...
+                                </Typography>
+                                {/* 🆕 CLUSTER INFO */}
+                                {caseItem.cluster_id && (
+                                  <Typography variant="body2" color="primary" fontWeight="bold">
+                                    📊 CLUSTER: {caseItem.cluster_id}
+                                  </Typography>
+                                )}
+                              </Box>
                             </Box>
                             <Box display="flex" flexDirection="column" alignItems="end">
                               <Typography variant="body2" color="text.secondary">

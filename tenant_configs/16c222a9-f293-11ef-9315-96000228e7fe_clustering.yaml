@@ -3,7 +3,6 @@ clustering_parameters:
   alpha: 0.5
   cluster_selection_epsilon: 0.15
   cluster_selection_method: eom
-  confidence_threshold_priority: 0.9
   enable_smart_review: true
   max_cluster_size: 0
   max_pending_per_batch: 250

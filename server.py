@@ -4,7 +4,7 @@ Servizio REST per la classificazione automatica delle conversazioni
 Supporta operazioni multi-cliente con tracking delle sessioni processate
 """
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import sys
 import os
@@ -572,7 +572,6 @@ class ClassificationService:
                     confidence_threshold=0.7, # Da verificare se ha senso perchè tanto viene sovrascritto
                     auto_mode=True,  # Modalità completamente automatica
                     shared_embedder=None  # LAZY LOADING: embedder caricato quando serve!
-                    # auto_retrain rimosso: ora gestito da config.yaml
                 )
                 
                 self.pipelines[client_name] = pipeline
@@ -1388,6 +1387,7 @@ def classify_all_sessions(client_name: str):
         force_review = False
         force_reprocess_all = False  # NUOVO parametro
         
+        # Parsing robusto dei parametri
         try:
             if request.is_json:
                 data = request.get_json() or {}
@@ -3805,7 +3805,8 @@ def get_all_sessions(client):
                         'confidence': float(session_doc.get('confidence', 0.0)),
                         'method': session_doc.get('method', 'unknown'),
                         'created_at': session_doc.get('timestamp', ''),
-                        'source': 'mongodb'  # Nuovo sistema unificato
+                        'source': 'mongodb',  # Nuovo sistema unificato
+                        'cluster_id': session_doc.get('metadata', {}).get('cluster_id')  # 🆕 AGGIUNTO CLUSTER ID
                     })
         except Exception as e:
             print(f"⚠️ Errore recupero classificazioni da MongoDB: {e}")
@@ -3829,7 +3830,8 @@ def get_all_sessions(client):
                     'confidence': float(auto_class.get('confidence', 0.0)),
                     'method': auto_class.get('method', 'auto'),
                     'created_at': auto_class.get('timestamp', ''),
-                    'source': 'cache_pending'  # Identificatore per classificazioni in cache
+                    'source': 'cache_pending',  # Identificatore per classificazioni in cache
+                    'cluster_id': auto_class.get('cluster_id')  # 🆕 AGGIUNTO CLUSTER ID per pending
                 })
         
         # Prepara lista delle sessioni con stato - USA SESSIONI DA MONGODB
@@ -3893,6 +3895,20 @@ def get_all_sessions(client):
                     'button_disabled': False  # CAMBIATO: ora attivo
                 })
             
+            # 🆕 RICERCA CLUSTER_ID ROBUSTO: Cerca il cluster_id nelle classificazioni o direttamente nella sessione
+            cluster_id = None
+            
+            # Prima opzione: cluster_id direttamente nei metadati della sessione MongoDB
+            cluster_id = session_doc.get('metadata', {}).get('cluster_id')
+            
+            # Seconda opzione: cluster_id da qualsiasi classificazione (MongoDB o pending)
+            if not cluster_id and all_classifications:
+                for classification in all_classifications:
+                    found_cluster_id = classification.get('cluster_id')
+                    if found_cluster_id is not None:
+                        cluster_id = found_cluster_id
+                        break
+            
             session_info = {
                 'session_id': session_id,
                 'conversation_text': conversation_text[:500] + '...' if len(conversation_text) > 500 else conversation_text,
@@ -3907,6 +3923,8 @@ def get_all_sessions(client):
                 'final_tag': final_tag,
                 'tag': final_tag,  # Alias per compatibilità
                 'confidence': confidence,
+                # 🆕 CLUSTER ID DIRETTO per React (ricerca robusta)
+                'cluster_id': cluster_id,
                 # INFORMAZIONI PULSANTE PER REACT
                 'review_button': button_info
             }
@@ -5698,7 +5716,6 @@ def get_review_queue_thresholds_from_db(tenant_id):
                     'representative_confidence_threshold': float(result['representative_confidence_threshold']),
                     
                     # PARAMETRI TRAINING SUPERVISIONATO
-                    'confidence_threshold_priority': float(result['confidence_threshold_priority']),
                     'max_representatives_per_cluster': result['max_representatives_per_cluster'],
                     'max_total_sessions': result['max_total_sessions'],
                     'min_representatives_per_cluster': result['min_representatives_per_cluster'],
@@ -6125,22 +6142,6 @@ def get_clustering_parameters(tenant_id):
             },
             
             # 🎓 PARAMETRI TRAINING SUPERVISIONATO
-            'confidence_threshold_priority': {
-                'value': clustering_config.get('confidence_threshold_priority', 0.7),
-                'default': 0.7,
-                'min': 0.1,
-                'max': 1.0,
-                'step': 0.05,
-                'description': 'Soglia confidenza priorità training',
-                'explanation': 'Soglia di confidenza per determinare la priorità nella selezione delle sessioni per il training supervisionato.',
-                'impact': {
-                    'low': 'Include più sessioni a bassa confidenza, training più completo',
-                    'medium': 'Bilanciamento tra completezza e qualità dei dati',
-                    'high': 'Solo sessioni ad alta confidenza, training più selettivo'
-                },
-                'recommendation': 'Usa 0.7-0.8 per bilanciare qualità e quantità',
-                'category': 'supervised_training'
-            },
             'max_representatives_per_cluster': {
                 'value': clustering_config.get('max_representatives_per_cluster', 5),
                 'default': 5,
@@ -6330,7 +6331,6 @@ def update_clustering_parameters(tenant_id):
             'max_pending_per_batch': (10, 1000),
             
             # 🎓 VALIDAZIONI PARAMETRI TRAINING SUPERVISIONATO
-            'confidence_threshold_priority': (0.1, 1.0),
             'max_representatives_per_cluster': (1, 20),
             'max_total_sessions': (10, 2000),
             'min_representatives_per_cluster': (1, 10),
@@ -6450,7 +6450,6 @@ def update_clustering_parameters(tenant_id):
                     normalized_params.get('umap_n_components', 3),
                     normalized_params.get('umap_random_state', 42),
                     # TRAINING SUPERVISIONATO parameters
-                    normalized_params.get('confidence_threshold_priority', 0.7),
                     normalized_params.get('max_representatives_per_cluster', 5),
                     normalized_params.get('max_total_sessions', 500),
                     normalized_params.get('min_representatives_per_cluster', 1),
@@ -6469,9 +6468,9 @@ def update_clustering_parameters(tenant_id):
                     min_cluster_size, min_samples, cluster_selection_epsilon, metric, cluster_selection_method,
                     alpha, max_cluster_size, allow_single_cluster, only_user,
                     use_umap, umap_n_neighbors, umap_min_dist, umap_metric, umap_n_components, umap_random_state,
-                    confidence_threshold_priority, max_representatives_per_cluster, max_total_sessions,
+                    max_representatives_per_cluster, max_total_sessions,
                     min_representatives_per_cluster, overflow_handling, representatives_per_cluster, selection_strategy
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     config_source = VALUES(config_source),
                     last_updated = VALUES(last_updated),
@@ -6496,7 +6495,6 @@ def update_clustering_parameters(tenant_id):
                     umap_metric = VALUES(umap_metric),
                     umap_n_components = VALUES(umap_n_components),
                     umap_random_state = VALUES(umap_random_state),
-                    confidence_threshold_priority = VALUES(confidence_threshold_priority),
                     max_representatives_per_cluster = VALUES(max_representatives_per_cluster),
                     max_total_sessions = VALUES(max_total_sessions),
                     min_representatives_per_cluster = VALUES(min_representatives_per_cluster),
@@ -8391,6 +8389,36 @@ def api_get_tenants_with_llm_config():
             'success': False,
             'error': error_msg
         }), 500
+
+
+@app.route('/cluster_visualizations/<filename>')
+def serve_cluster_visualization(filename):
+    """
+    Serve file di visualizzazione clustering statici
+    
+    Args:
+        filename: Nome del file HTML di visualizzazione
+        
+    Returns:
+        File HTML con la visualizzazione o errore 404
+    """
+    try:
+        # Directory delle visualizzazioni clustering
+        visualization_dir = os.path.join(os.path.dirname(__file__), 'cluster_visualizations')
+        
+        # Verifica che il file esista e sia un HTML
+        if not filename.endswith('.html'):
+            return jsonify({'error': 'Only HTML files are allowed'}), 400
+            
+        file_path = os.path.join(visualization_dir, filename)
+        if not os.path.exists(file_path):
+            return jsonify({'error': f'Visualization file {filename} not found'}), 404
+            
+        return send_from_directory(visualization_dir, filename)
+        
+    except Exception as e:
+        print(f"❌ [API] Errore serving visualization {filename}: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == "__main__":

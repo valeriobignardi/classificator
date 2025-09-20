@@ -444,6 +444,9 @@ class MongoClassificationReader:
                     'tenant_name': self.tenant.tenant_name,  # USA OGGETTO TENANT
                     'tenant_id': self.tenant.tenant_id,      # AGGIUNGI ANCHE TENANT_ID
                     
+                    # 🆕 METADATI CLUSTER per UI - AGGIUNTI
+                    'metadata': doc.get('metadata', {}),  # Include tutti i metadati MongoDB
+                    
                     # NUOVI CAMPI: Dettagli ML/LLM 
                     'ml_prediction': doc.get('ml_prediction', ''),
                     'ml_confidence': doc.get('ml_confidence', 0.0),
@@ -461,7 +464,9 @@ class MongoClassificationReader:
                         'ml_confidence': doc.get('ml_confidence', 0.0),
                         'llm_prediction': doc.get('llm_prediction', ''),
                         'llm_confidence': doc.get('llm_confidence', 0.0),
-                        'created_at': doc.get('classified_at', doc.get('timestamp'))
+                        'created_at': doc.get('classified_at', doc.get('timestamp')),
+                        # 🆕 CLUSTER_ID nelle classificazioni - AGGIUNTO
+                        'cluster_id': doc.get('metadata', {}).get('cluster_id')
                     }] if doc.get('classification') or doc.get('classificazione') else []
                 }
                 

@@ -339,7 +339,6 @@ supervised_training:
     ignore_session_limits: true
     use_full_dataset: true
   human_review:
-    confidence_threshold_priority: 0.7
     max_representatives_per_cluster: 5
     max_total_sessions: 500
     min_cluster_size_for_review: 2

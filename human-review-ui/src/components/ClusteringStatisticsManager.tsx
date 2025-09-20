@@ -30,7 +30,9 @@ import {
   Analytics as AnalyticsIcon,
   Refresh as RefreshIcon,
   DateRange as DateRangeIcon,
-  Assessment as AssessmentIcon
+  Assessment as AssessmentIcon,
+  ThreeDRotation as ViewIn3DIcon,
+  ScatterPlot as ScatterPlotIcon
 } from '@mui/icons-material';
 import { useTenant } from '../contexts/TenantContext';
 import { apiService } from '../services/apiService';
@@ -378,14 +380,101 @@ const ClusteringStatisticsManager: React.FC = () => {
 
       {/* Visualizzazione principale */}
       {statisticsData?.visualization_data && (
-        <ClusterVisualizationComponent
-          mode="statistics"
-          tenantId={selectedTenant.tenant_id}
-          visualizationData={statisticsData.visualization_data}
-          onRefresh={loadStatistics}
-          loading={loading}
-          height={700}
-        />
+        <>
+          <ClusterVisualizationComponent
+            mode="statistics"
+            tenantId={selectedTenant.tenant_id}
+            visualizationData={statisticsData.visualization_data}
+            onRefresh={loadStatistics}
+            loading={loading}
+            height={700}
+          />
+          
+          {/* Dettagli Etichette */}
+          <Paper sx={{ p: 2, mt: 2 }}>
+            <Typography variant="h6" gutterBottom>
+              📋 Dettagli Etichette
+            </Typography>
+            <Box display="flex" flexDirection="column" gap={2}>
+              {/* Cluster Details */}
+              {Object.entries(statisticsData.visualization_data.cluster_colors).map(([clusterId, color]) => {
+                const clusterPoints = statisticsData.visualization_data.points.filter(p => p.cluster_id === parseInt(clusterId));
+                const clusterLabel = clusterPoints[0]?.cluster_label || `Cluster ${clusterId}`;
+                const isOutlier = parseInt(clusterId) === -1;
+                
+                if (clusterPoints.length === 0) return null;
+                
+                return (
+                  <Box key={clusterId} display="flex" alignItems="center" gap={2}>
+                    <Box
+                      sx={{
+                        width: 20,
+                        height: 20,
+                        backgroundColor: color,
+                        borderRadius: '50%',
+                        border: '1px solid #ccc'
+                      }}
+                    />
+                    <Typography variant="body2" sx={{ minWidth: 100 }}>
+                      {isOutlier ? 'Outliers' : clusterLabel}
+                    </Typography>
+                    <Chip 
+                      label={`${clusterPoints.length} elementi`} 
+                      size="small" 
+                      variant="outlined"
+                    />
+                    <Typography variant="caption" color="text.secondary">
+                      {((clusterPoints.length / statisticsData.visualization_data.points.length) * 100).toFixed(1)}%
+                    </Typography>
+                  </Box>
+                );
+              })}
+            </Box>
+          </Paper>
+
+          {/* Grafici Clustering Pre-generati */}
+          <Paper sx={{ p: 2, mt: 2 }}>
+            <Typography variant="h6" gutterBottom>
+              📊 Grafici Clustering 2D/3D
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Visualizzazioni pre-generate dei cluster (PCA 2D, PCA 3D, t-SNE 2D)
+            </Typography>
+            
+            <Box display="flex" flexDirection="column" gap={2}>
+              {/* Links to static visualizations */}
+              {[
+                { type: '2D PCA', filename: 'clustering_2d_pca_20250917_005947.html', title: 'Visualizzazione PCA 2D' },
+                { type: '3D PCA', filename: 'clustering_3d_pca_20250917_005947.html', title: 'Visualizzazione PCA 3D' },
+                { type: '2D t-SNE', filename: 'clustering_2d_tsne_20250917_005947.html', title: 'Visualizzazione t-SNE 2D' },
+                { type: 'Dashboard', filename: 'clustering_dashboard_20250917_005947.html', title: 'Dashboard Completo' }
+              ].map(({ type, filename, title }) => (
+                <Button
+                  key={type}
+                  variant="outlined"
+                  color="primary"
+                  startIcon={type.includes('3D') ? <ViewIn3DIcon /> : <ScatterPlotIcon />}
+                  onClick={() => {
+                    // Open clustering visualization in new window
+                    const baseUrl = window.location.origin;
+                    window.open(`${baseUrl}/cluster_visualizations/${filename}`, '_blank');
+                  }}
+                  sx={{ justifyContent: 'flex-start' }}
+                >
+                  {title} ({type})
+                </Button>
+              ))}
+              
+              <Alert severity="info" sx={{ mt: 1 }}>
+                <Typography variant="caption">
+                  💡 I grafici si aprono in una nuova finestra e mostrano le visualizzazioni statiche 
+                  pre-generate dei cluster più recenti. Per visualizzazioni interattive in tempo reale, 
+                  utilizza la sezione "Visualizzazione principale" sopra.
+                </Typography>
+              </Alert>
+            </Box>
+          </Paper>
+        </>
       )}
 
       {/* Stato vuoto */}

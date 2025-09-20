@@ -1,5 +1,0 @@
-1. controllare che il modello di addestramenot ML sia salvato con un nome multi_tenant
-2. dire di modificare affinchè sia saltata l'addestramento su tutte le conversazioni a men oche l'utente non abbia 
-premuto su FORCE_review, dove a quel punto (Se esiste per quel tenant) cancella il modello di addestramento dell'ML e lo ricrea, altrimenti carica quello esiste con fallback, dove se non trova un modello per quel teant lo genera con la funzioen apposita. 
-
-PROVA

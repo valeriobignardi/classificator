@@ -371,7 +371,30 @@ const ClusterVisualizationComponent: React.FC<ClusterVisualizationProps> = ({
         {/* Filtri cluster */}
         <Box mt={2}>
           <Typography variant="subtitle2" mb={1}>Cluster Visibili:</Typography>
-          <Box display="flex" flexWrap="wrap" gap={1}>
+          <Box 
+            display="flex" 
+            flexWrap="nowrap" 
+            gap={1}
+            sx={{ 
+              overflowX: 'auto',
+              overflowY: 'hidden',
+              paddingBottom: 1,
+              '&::-webkit-scrollbar': {
+                height: '6px',
+              },
+              '&::-webkit-scrollbar-track': {
+                background: '#f1f1f1',
+                borderRadius: '3px',
+              },
+              '&::-webkit-scrollbar-thumb': {
+                background: '#c1c1c1',
+                borderRadius: '3px',
+              },
+              '&::-webkit-scrollbar-thumb:hover': {
+                background: '#a8a8a8',
+              }
+            }}
+          >
             {availableClusters.map(clusterId => {
               const isSelected = selectedClusters.includes(clusterId);
               const isOutlier = clusterId === -1;
@@ -390,6 +413,8 @@ const ClusterVisualizationComponent: React.FC<ClusterVisualizationProps> = ({
                     backgroundColor: isSelected 
                       ? visualizationData.cluster_colors[clusterId] || '#999'
                       : 'transparent',
+                    flexShrink: 0,
+                    minWidth: 'auto',
                     '&:hover': {
                       opacity: 0.8
                     }

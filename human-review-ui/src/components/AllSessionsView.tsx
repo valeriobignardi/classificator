@@ -50,6 +50,7 @@ interface Classification {
   source?: string;
   created_at: string;
   method?: string;
+  cluster_id?: string; // 🆕 AGGIUNTO CLUSTER ID
 }
 
 interface Session {
@@ -68,6 +69,7 @@ interface Session {
   confidence?: number;
   classification_date?: string;
   classifications?: Classification[];
+  cluster_id?: string;  // 🆕 AGGIUNTO CLUSTER_ID DIRETTO
 }
 
 interface AllSessionsViewProps {
@@ -426,9 +428,17 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
                 <CardContent>
                   {/* Header */}
                   <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-                    <Typography variant="h6" component="div">
-                      Sessione: {session.session_id.substring(0, 12)}...
-                    </Typography>
+                    <Box>
+                      <Typography variant="h6" component="div">
+                        Sessione: {session.session_id.substring(0, 12)}...
+                      </Typography>
+                      {/* 🆕 CLUSTER INFO - RICERCA ROBUSTA */}
+                      {(session.cluster_id || (session.classifications && session.classifications.length > 0 && session.classifications.find(c => c.cluster_id)?.cluster_id)) && (
+                        <Typography variant="body2" color="primary" fontWeight="bold">
+                          📊 CLUSTER: {session.cluster_id || session.classifications?.find(c => c.cluster_id)?.cluster_id}
+                        </Typography>
+                      )}
+                    </Box>
                     <Box display="flex" alignItems="center" gap={1}>
                       {/* Badge speciale per sessioni recentemente aggiunte */}
                       {recentlyAddedSessions.has(session.session_id) && (

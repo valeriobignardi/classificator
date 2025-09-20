@@ -110,7 +110,6 @@ def get_supervised_training_params_from_db(tenant_id: str) -> Dict[str, Any]:
     
     # Valori default
     default_params = {
-        'confidence_threshold_priority': 0.7,
         'max_representatives_per_cluster': 5,
         'max_total_sessions': 500,
         'min_representatives_per_cluster': 1,
@@ -142,7 +141,7 @@ def get_supervised_training_params_from_db(tenant_id: str) -> Dict[str, Any]:
             
             # Query per recuperare parametri training supervisionato
             query = """
-            SELECT confidence_threshold_priority, max_representatives_per_cluster, 
+            SELECT max_representatives_per_cluster, 
                    max_total_sessions, min_representatives_per_cluster,
                    overflow_handling, representatives_per_cluster, selection_strategy
             FROM soglie 
@@ -157,7 +156,6 @@ def get_supervised_training_params_from_db(tenant_id: str) -> Dict[str, Any]:
             if result:
                 print(f"✅ [TRAINING DB] Parametri trovati per tenant {tenant_id}")
                 result_params = {
-                    'confidence_threshold_priority': float(result['confidence_threshold_priority']),
                     'max_representatives_per_cluster': result['max_representatives_per_cluster'],
                     'max_total_sessions': result['max_total_sessions'],
                     'min_representatives_per_cluster': result['min_representatives_per_cluster'],
@@ -311,7 +309,7 @@ class EndToEndPipeline:
         self.auto_mode = (auto_mode if auto_mode is not None 
                          else pipeline_config.get('default_auto_mode', False))
         self.auto_retrain = pipeline_config.get('auto_retrain_on_init', False)
-        
+
         # Inizializza i componenti
         start_time = time.time()
         print(f"\n🚀 [FASE 1: INIZIALIZZAZIONE] Avvio pipeline...")
@@ -339,24 +337,29 @@ class EndToEndPipeline:
             print("🧠 [FASE 1: INIZIALIZZAZIONE] Sistema embedder dinamico (lazy loading)")
             self.embedder = None  # Sarà caricato quando serve tramite _get_embedder()
             
-        # Configurazione clustering
+        # 📊 PARAMETRI UNIFICATI da MySQL - UNICA SORGENTE DI VERITÀ
+        print(f"📊 [PIPELINE] Caricamento parametri esclusivamente da MySQL per tenant: {self.tenant_id}")
+        from Utils.tenant_config_helper import get_all_clustering_parameters_for_tenant
+        unified_params = get_all_clustering_parameters_for_tenant(self.tenant_id)
+        
+        print(f"🔧 [MYSQL ONLY] Configurazione clustering da database MySQL:")
+        
+        # 🎯 PARAMETRI BASE - SOLO da MySQL con fallback hardcoded minimi
         cluster_min_size = (min_cluster_size if min_cluster_size is not None 
-                           else clustering_config.get('min_cluster_size', 
-                                pipeline_config.get('default_min_cluster_size', 5)))
+                           else unified_params.get('min_cluster_size', 5))  # Fallback hardcoded minimo
         cluster_min_samples = (min_samples if min_samples is not None 
-                              else clustering_config.get('min_samples', 
-                                   pipeline_config.get('default_min_samples', 3)))
+                              else unified_params.get('min_samples', 3))  # Fallback hardcoded minimo
         
-        print(f"🔧 [FASE 1: INIZIALIZZAZIONE] Parametri clustering:")
-        print(f"   📊 Min cluster size: {cluster_min_size}")
-        print(f"   📊 Min samples: {cluster_min_samples}")
+        print(f"   📊 Min cluster size: {cluster_min_size} (MySQL: {unified_params.get('min_cluster_size', 'non definito')})")
+        print(f"   📊 Min samples: {cluster_min_samples} (MySQL: {unified_params.get('min_samples', 'non definito')})")
         
-        # 🔧 [FIX] Passa TUTTI i parametri tenant-specific all'HDBSCANClusterer
-        print(f"🐛 DEBUG CLUSTER_ALPHA - PRIMA:")
-        print(f"   📋 clustering_config.get('alpha', 1.0): {clustering_config.get('alpha', 1.0)}")
-        print(f"   📋 Type: {type(clustering_config.get('alpha', 1.0))}")
+        # 🎯 PARAMETRO ALPHA - SOLO da MySQL con validazione
+        cluster_alpha_raw = unified_params.get('alpha', 1.0)
+        print(f"🐛 DEBUG CLUSTER_ALPHA - DA MYSQL:")
+        print(f"   📋 unified_params.get('alpha', 1.0): {cluster_alpha_raw}")
+        print(f"   📋 Type: {type(cluster_alpha_raw)}")
         
-        cluster_alpha = float(clustering_config.get('alpha', 1.0))
+        cluster_alpha = float(cluster_alpha_raw)
         
         print(f"🐛 DEBUG CLUSTER_ALPHA - DOPO CONVERSIONE:")
         print(f"   📋 cluster_alpha: {cluster_alpha}")
@@ -370,13 +373,16 @@ class EndToEndPipeline:
         print(f"   📋 cluster_alpha finale: {cluster_alpha}")
         print(f"   📋 Type finale: {type(cluster_alpha)}")
         print(f"   📋 Alpha > 0: {cluster_alpha > 0}")
-        cluster_selection_method = clustering_config.get('cluster_selection_method', 'eom')
-        cluster_selection_epsilon = float(clustering_config.get('cluster_selection_epsilon', 0.05))
-        cluster_metric = clustering_config.get('metric', 'cosine')
-        cluster_allow_single = clustering_config.get('allow_single_cluster', False)
+        
+        # 🎯 ALTRI PARAMETRI - SOLO da MySQL
+        cluster_selection_method = unified_params.get('cluster_selection_method', 'eom')
+        cluster_selection_epsilon = float(unified_params.get('cluster_selection_epsilon', 0.05))
+        cluster_metric = unified_params.get('metric', 'cosine')
+        cluster_allow_single = unified_params.get('allow_single_cluster', False)
+        
         # 🔧 FIX CRITICO: max_cluster_size=None causa TypeError in HDBSCAN
         # Protezione robusta: None o 0 -> 0 (unlimited), altrimenti valore intero
-        max_cluster_raw = clustering_config.get('max_cluster_size', 0)
+        max_cluster_raw = unified_params.get('max_cluster_size', 0)
         # CAMBIO: None viene convertito a 0 invece che mantenuto None per evitare errori HDBSCAN
         if max_cluster_raw is None or max_cluster_raw == 0:
             cluster_max_size = 0  # 0 = unlimited in HDBSCAN (comportamento equivalente a None ma senza errori)
@@ -387,10 +393,11 @@ class EndToEndPipeline:
         if max_cluster_raw is None:
             print(f"🔧 [FIX] max_cluster_size: None -> 0 (protezione anti-errore HDBSCAN)")
         
-        # � PARAMETRI UNIFICATI da MySQL - tutti i parametri in una sola chiamata
-        print(f"📊 [PIPELINE] Caricamento parametri unificati per tenant: {self.tenant_id}")
-        from Utils.tenant_config_helper import get_all_clustering_parameters_for_tenant
-        unified_params = get_all_clustering_parameters_for_tenant(self.tenant_id)
+        print(f"   📊 Selection method: {cluster_selection_method} (MySQL: {unified_params.get('cluster_selection_method', 'non definito')})")
+        print(f"   📊 Selection epsilon: {cluster_selection_epsilon} (MySQL: {unified_params.get('cluster_selection_epsilon', 'non definito')})")
+        print(f"   📊 Metric: {cluster_metric} (MySQL: {unified_params.get('metric', 'non definito')})")
+        print(f"   📊 Allow single: {cluster_allow_single} (MySQL: {unified_params.get('allow_single_cluster', 'non definito')})")
+        print(f"   📊 Max cluster size: {cluster_max_size} (MySQL: {unified_params.get('max_cluster_size', 'non definito')})")
         
         # 🔍 Debug parametri caricati
         print(f"   ✅ Parametri HDBSCAN: {len([k for k in unified_params.keys() if not k.startswith('umap_') and not k.endswith('_threshold') and k not in ['enable_smart_review', 'max_pending_per_batch', 'minimum_consensus_threshold']])}")
@@ -481,6 +488,8 @@ class EndToEndPipeline:
         
         # Inizializza il gestore della memoria semantica
         print("🧠 Inizializzazione memoria semantica...")
+        print(f"   📁 Config path: {config_path}")
+
         self.semantic_memory = SemanticMemoryManager(
             tenant=self.tenant,  # Passa l'oggetto Tenant completo
             config_path=config_path,
@@ -564,7 +573,9 @@ class EndToEndPipeline:
         print(f"🎯 [FASE 1: INIZIALIZZAZIONE] Pipeline pronta per l'uso!")
         
         trace_all("__init__", "EXIT", initialization_time=initialization_time)
-    
+    # Fine __init__
+
+
     @property
     def intelligent_classifier(self):
         """
@@ -689,9 +700,56 @@ class EndToEndPipeline:
         
         return cluster_info
     
+    def _extract_statistics_from_documents(self, documenti: List[DocumentoProcessing]) -> Dict[str, Any]:
+        """
+        🔧 HELPER: Estrae statistiche dai DocumentoProcessing per compatibilità legacy
+        
+        Scopo: Converte lista DocumentoProcessing nelle statistiche richieste dal codice esistente
+        per mantenere formato compatibile nel return della pipeline
+        
+        Args:
+            documenti: Lista di oggetti DocumentoProcessing dal clustering
+            
+        Returns:
+            Dict con statistiche nel formato legacy: n_clusters, n_outliers, suggested_labels, etc
+            
+        Autore: Valerio Bignardi  
+        Data: 2025-09-19 - Creazione per refactoring statistiche
+        """
+        import numpy as np
+        
+        print(f"📊 [STATS EXTRACT] Estraendo statistiche da {len(documenti)} documenti...")
+        
+        # Calcola cluster_labels per statistiche n_clusters e n_outliers
+        cluster_labels = np.array([
+            -1 if doc.is_outlier else (doc.cluster_id if doc.cluster_id is not None else -1) 
+            for doc in documenti
+        ])
+        
+        # Calcola representatives per suggested_labels
+        representatives = {}
+        for doc in documenti:
+            if doc.is_representative and not doc.is_outlier and doc.cluster_id is not None:
+                if doc.cluster_id not in representatives:
+                    representatives[doc.cluster_id] = []
+                representatives[doc.cluster_id].append(doc)
+        
+        # Statistiche nel formato legacy
+        stats = {
+            'n_clusters': len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0),
+            'n_outliers': sum(1 for label in cluster_labels if label == -1),
+            'suggested_labels': len(representatives),
+            'total_documents': len(documenti),
+            'representatives_count': sum(len(reps) for reps in representatives.values()),
+            'propagated_count': sum(1 for doc in documenti if doc.is_propagated)
+        }
+        
+        print(f"   📊 Statistiche estratte: {stats['n_clusters']} cluster, {stats['n_outliers']} outlier")
+        return stats
+    
     def _generate_cluster_info_from_documenti(self, documenti):
         """
-        🚀 NUOVO: Genera cluster_info dai documenti DocumentoProcessing
+        NUOVO: Genera cluster_info dai documenti DocumentoProcessing
         
         Scopo: Converte l'architettura DocumentoProcessing al formato 
                cluster_info richiesto dal resto della pipeline legacy
@@ -1562,16 +1620,6 @@ class EndToEndPipeline:
 
 
 
-
-
-
-
-
-
-
-
-
-
     def _determine_propagated_status(self, 
                                    cluster_representatives: List[Dict],
                                    consensus_threshold: float = 0.7) -> Dict:
@@ -1815,7 +1863,6 @@ class EndToEndPipeline:
             import traceback
             traceback.print_exc()
             return 0
-
 
     def _classify_and_save_representatives_post_training(self,
                                                        sessioni: Dict[str, Dict],
@@ -2223,314 +2270,6 @@ class EndToEndPipeline:
         
         trace_all("salva_classificazioni_puro", "EXIT", return_value=stats)
         return stats
-    
-    def classifica_sessioni_puro(self,
-                                 sessioni: Dict[str, Dict],
-                                 batch_size: int = 32,
-                                 use_ensemble: bool = True,
-                                 optimize_clusters: bool = True,
-                                 embeddings: Optional[np.ndarray] = None,
-                                 cluster_labels: Optional[np.ndarray] = None,
-                                 cluster_info: Optional[Dict] = None) -> List[Dict]:
-        """
-        🚫 LEGACY-NON IN USO - SOSTITUITA DA _classify_documents_batch()
-        
-        ATTENZIONE: Questa funzione è stata SOSTITUITA dalla nuova implementazione 
-        DocumentoProcessing che usa _classify_documents_batch().
-        
-        La nuova implementazione offre:
-        ✅ Controllo stato ML ensemble
-        ✅ Gestione primo avvio vs successivi
-        ✅ Validazione speciale tag "altro"
-        ✅ Pulizia caratteri speciali automatica
-        ✅ Debug avanzato con pre-controlli
-        
-        NON UTILIZZARE QUESTA FUNZIONE - Mantenuta solo per riferimento storico.
-        """
-        """
-        Classifica solo le sessioni usando l'ensemble classifier.
-        Responsabilità: Solo classificazione, nessun salvataggio.
-        
-        LOGICA CLASSIFICAZIONE PURA:
-        - SEMPRE: Ensemble LLM+ML con clustering ottimizzato
-        - SEMPRE: altro_tag_validation abilitata
-        - SEMPRE: Auto-classificazione completa (mai human review)
-        - NON include salvataggio nel database
-        
-        Args:
-            sessioni: Sessioni da classificare
-            batch_size: Dimensione del batch per la classificazione
-            use_ensemble: Se True, usa l'ensemble classifier (SEMPRE True in produzione)
-            optimize_clusters: Se True, usa clustering ottimizzato (SEMPRE True in produzione)
-            embeddings: Embeddings precomputati (opzionale, evita duplicazione clustering)
-            cluster_labels: Labels cluster precomputati (opzionale, evita duplicazione clustering)
-            cluster_info: Info cluster precomputate (opzionale, evita duplicazione clustering)  
-            
-        Returns:
-            Lista delle predizioni (senza salvare nel database)
-            
-        Autore: Valerio Bignardi
-        Data creazione: 2025-09-07
-        Ultima modifica: 2025-09-07 - Separazione responsabilità classificazione pura
-        """
-        trace_all("classifica_sessioni_puro", "ENTER",
-                 sessioni_count=len(sessioni),
-                 batch_size=batch_size,
-                 use_ensemble=use_ensemble, 
-                 optimize_clusters=optimize_clusters)
-        
-        # 🔍 DEBUG: Import e trace della funzione
-        from Pipeline.debug_pipeline import debug_pipeline, debug_flow
-        
-        debug_pipeline("classifica_sessioni_puro", "ENTRY - Avvio classificazione pura", {
-            "num_sessioni": len(sessioni),
-            "batch_size": batch_size,
-            "use_ensemble": use_ensemble,
-            "optimize_clusters": optimize_clusters,
-            "tenant": self.tenant_slug
-        }, "ENTRY")
-        
-        print(f"🏷️  CLASSIFICAZIONE PURA di {len(sessioni)} sessioni...")
-        print(f"📊 Batch size: {batch_size}")
-        print(f"🎯 Optimize clusters: {optimize_clusters}")
-        print(f"🔗 Use ensemble: {use_ensemble}")
-        print(f"🎯 Optimize clusters: {optimize_clusters}")
-        print(f"🔗 Use ensemble: {use_ensemble}")
-        
-        # Forza sempre ensemble e clustering ottimizzato per classificazione post-training
-        use_ensemble = True
-        optimize_clusters = True
-        
-        # 🔍 CONTROLLO STATO ML ENSEMBLE (definizione anticipata per evitare UnboundLocalError)
-        ml_ensemble_trained = (
-            hasattr(self.ensemble_classifier, 'ml_ensemble') and 
-            self.ensemble_classifier.ml_ensemble is not None and
-            hasattr(self.ensemble_classifier.ml_ensemble, 'classes_')
-        )
-        
-        print(f"🎯 MODALITÀ UNIFICATA: {'Ensemble LLM+ML' if ml_ensemble_trained else 'LLM-only'} + Clustering Ottimizzato")
-        
-        # 🆕 GESTIONE PRIMO AVVIO: Se ML non è allenato, non dovrebbe arrivare qui
-        # La logica LLM-only dovrebbe essere gestita nel training supervisionato
-        if not ml_ensemble_trained:
-            print(f"⚠️ AVVERTIMENTO: Classificazione chiamata senza ML allenato")
-            print(f"🎯 Suggerimento: Eseguire prima training supervisionato con review umana")
-            # Continua comunque con solo LLM per compatibilità
-            print(f"🚀 Fallback: Classificazione LLM-only")
-        
-        # 🚨 DEBUG PARAMETRI: Verifica configurazione pre-classificazione
-        print(f"")
-        print(f"🔍 [PRE-CLASSIFICATION DEBUG]")
-        print(f"   📊 Sessioni da classificare: {len(sessioni)}")
-        print(f"   🎯 optimize_clusters: {optimize_clusters} (FORZA SEMPRE)")
-        print(f"   🔧 use_ensemble: {use_ensemble} (FORZA SEMPRE)")
-        print(f"   📦 batch_size: {batch_size}")
-        if len(sessioni) < 10:
-            print(f"   ⚠️  ATTENZIONE: Dataset piccolo ({len(sessioni)} < 10 sessioni)")
-            print(f"   ⚠️  Potrebbero esserci problemi di clustering")
-        print(f"🔍 [/PRE-CLASSIFICATION DEBUG]")
-        print(f"")
-        
-        # Connetti al database TAG (legacy, potrebbe non essere più necessario)
-        print(f"💾 Connessione al database TAG...")
-        try:
-            self.tag_db.connetti()
-        except Exception as e:
-            print(f"⚠️ Errore connessione TAG DB (ignorabile): {e}")
-        
-        # 🆕 CONTROLLO E TRAINING ML ENSEMBLE SE NECESSARIO
-        print(f"\n🔍 VERIFICA STATO ML ENSEMBLE...")
-        
-        print(f"📊 ML Ensemble già allenato: {ml_ensemble_trained}")
-        
-        if not ml_ensemble_trained:
-            print(f"🚨 ML ENSEMBLE NON ALLENATO - Modalità LLM-only con preparazione training")
-            print(f"📋 Sessioni disponibili: {len(sessioni)}")
-            
-            # 🎯 NUOVA SEQUENZA CORRETTA: 
-            # 1. Classifica PRIMA con LLM-only (senza training ML)
-            # 2. Salva i dati per training futuro
-            # 3. Training ML DOPO review umana
-            
-            print(f"🔄 PRIMO AVVIO - Sequenza corretta:")
-            print(f"   1️⃣ Classificazione LLM-only dei rappresentanti")
-            print(f"   2️⃣ Salvataggio dati per training futuro")
-            print(f"   3️⃣ Training ML dopo review umana")
-            
-            # IMPORTANTE: NON fare training automatico qui
-            # Il training ML avverrà quando ci saranno dati rivisti dall'umano
-        else:
-            print(f"✅ ML Ensemble già allenato - procedo con classificazione completa")
-            
-        print(f"🔍 [/VERIFICA ML ENSEMBLE]\n")
-        
-        # Prepara dati per classificazione
-        session_ids = list(sessioni.keys())
-        session_texts = [sessioni[sid]['testo_completo'] for sid in session_ids]
-        print(f"📦 Preparati {len(session_texts)} testi per classificazione")
-        
-        # 🎯 LOGICA UNIFICATA: SEMPRE Classificazione ottimizzata + ensemble
-        # La logica intelligente (20%/7 giorni) è gestita automaticamente nel clustering upstream
-        print(f"🚀 Classificazione ottimizzata con ensemble LLM+ML in corso...")
-        
-        try:
-            debug_pipeline("classifica_e_salva_sessioni", "TENTATIVO - Chiamata _classifica_ottimizzata_cluster", {
-                "num_sessioni": len(sessioni), 
-                "num_session_ids": len(session_ids), # Controllo incrociato
-                "num_session_texts": len(session_texts), # Controllo incrociato
-                "batch_size": batch_size, # Parametro critico che serve per debug
-                "optimize_clusters": optimize_clusters, # FORZATO True rappresenta la logica unificata post-training 
-                "use_ensemble": use_ensemble
-            }, "INFO")
-            
-            print(f"🎯 [CLUSTERING DEBUG] Iniziando classificazione ottimizzata...")
-            print(f"🎯 [CLUSTERING DEBUG] Sessioni: {len(sessioni)}, optimize_clusters: {optimize_clusters}")
-            
-            # 🚨 DEBUG SUPER CRITICO: Traccia chiamata cluster ottimizzato
-            print(f"🚨 [SUPER DEBUG] CHIAMATA _classifica_ottimizzata_cluster INIZIATA")
-            print(f"   📊 Input sessioni: {len(sessioni)}")
-            print(f"   📊 Input session_ids: {len(session_ids)}")
-            print(f"   📊 Input session_texts: {len(session_texts)}")
-            
-            # Chiamata alla funzione di classificazione ottimizzata
-            # Usa embeddings e cluster_info pre-calcolati se forniti
-            # Questo evita duplicazioni di calcolo se già eseguito in precedenza
-            # In un flusso di lavoro ideale, embeddings e cluster_info dovrebbero essere sempre forniti
-            # per evitare ricalcoli inutili
-            # Tuttavia, la funzione gestisce anche il calcolo interno se non forniti
-            # Garantendo flessibilità in diversi scenari di utilizzo
-            # La logica di clustering ottimizzato include la gestione intelligente del 20%/7 giorni
-            # e l'auto-classificazione completa senza review umana
-            predictions = self._classifica_ottimizzata_cluster(
-                sessioni, session_ids, session_texts,
-                embeddings=embeddings, cluster_labels=cluster_labels, cluster_info=cluster_info, batch_size=batch_size
-            )
-            
-            # 🚨 DEBUG SUPER CRITICO: Verifica risultato
-            print(f"🚨 [SUPER DEBUG] _classifica_ottimizzata_cluster COMPLETATA!")
-            print(f"   📊 Output predictions: {len(predictions)}")
-            print(f"   ✅ Con cluster_metadata: {sum(1 for p in predictions if p.get('cluster_metadata'))}")
-            print(f"   ❌ Senza cluster_metadata: {sum(1 for p in predictions if not p.get('cluster_metadata'))}")
-            
-            debug_pipeline("classifica_e_salva_sessioni", "SUCCESS - _classifica_ottimizzata_cluster completata", {
-                "num_predictions": len(predictions),
-                "predictions_with_cluster_metadata": sum(1 for p in predictions if p.get('cluster_metadata')),
-                "predictions_without_cluster_metadata": sum(1 for p in predictions if not p.get('cluster_metadata'))
-            }, "SUCCESS")
-            
-            print(f"✅ Classificazione ottimizzata completata: {len(predictions)} risultati")
-            
-        except Exception as e:
-            from Pipeline.debug_pipeline import debug_exception
-            
-            # 🚨 DEBUG FALLBACK: Cattura l'errore esatto
-            print(f"")
-            print(f"🚨🚨🚨 [FALLBACK TRIGGER] 🚨🚨🚨")
-            print(f"🚨 ERRORE NELLA CLASSIFICAZIONE OTTIMIZZATA!")
-            print(f"🚨 Tipo errore: {type(e).__name__}")
-            print(f"🚨 Messaggio: {str(e)}")
-            print(f"🚨 Parametri attuali:")
-            print(f"   📊 Sessioni: {len(sessioni)}")
-            print(f"   🎯 optimize_clusters: {optimize_clusters}")
-            print(f"   🔧 use_ensemble: {use_ensemble}")
-            print(f"   📦 batch_size: {batch_size}")
-            print(f"🚨 ATTIVANDO FALLBACK LLM_STRUCTURED")
-            print(f"🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨")
-            print(f"")
-            
-            debug_exception("classifica_e_salva_sessioni", e, {
-                "num_sessioni": len(sessioni),
-                "batch_size": batch_size,
-                "optimize_clusters": optimize_clusters,
-                "use_ensemble": use_ensemble,
-                "error_type": type(e).__name__,
-                "error_message": str(e),
-                "FALLBACK_REASON": "CLUSTERING_OPTIMIZATION_FAILED"
-            })
-            
-            print(f"❌ ERRORE nella classificazione ottimizzata: {e}")
-            print(f"🔄 Fallback alla classificazione ensemble tradizionale...")
-            
-            debug_pipeline("classifica_e_salva_sessioni", "FALLBACK - Tentativo batch_predict", {
-                "num_texts": len(session_texts),
-                "batch_size": batch_size,
-                "fallback_trigger": "clustering_optimization_failed",
-                "original_error": str(e)
-            }, "WARNING")
-            
-            # Fallback: classificazione ensemble tradizionale
-            try:
-                batch_predictions = self.ensemble_classifier.batch_predict(
-                    session_texts, 
-                    batch_size=batch_size,
-                    embedder=self.embedder
-                )
-                predictions = batch_predictions
-                
-                debug_pipeline("classifica_e_salva_sessioni", "FALLBACK SUCCESS - batch_predict completato", {
-                    "num_predictions": len(predictions),
-                    "predictions_type": "batch_predict_fallback"
-                }, "WARNING")
-                
-                print(f"✅ Fallback completato: {len(predictions)} risultati")
-                
-            except Exception as e2:
-                debug_exception("classifica_e_salva_sessioni_fallback", e2)
-                
-                print(f"❌ ERRORE anche nel fallback: {e2}")
-                # Fallback finale: predizioni singole
-                predictions = []
-                for i, text in enumerate(session_texts):
-                    try:
-                        prediction = self.ensemble_classifier.predict_with_ensemble(
-                            text, 
-                            return_details=True, 
-                            embedder=self.embedder
-                        )
-                        predictions.append(prediction)
-                    except Exception as e3:
-                        # Fallback assoluto
-                        predictions.append({
-                            'predicted_label': 'altro',
-                            'confidence': 0.1,
-                            'is_high_confidence': False,
-                            'method': 'FALLBACK_FINAL',
-                            'llm_prediction': None,
-                            'ml_prediction': {'predicted_label': 'altro', 'confidence': 0.1},
-                            'ensemble_confidence': 0.1
-                        })
-                print(f"⚠️ Fallback finale completato: {len(predictions)} risultati")
-        
-        # 🆕 CONTATORE DEBUG per RAPPRESENTANTI e OUTLIERS
-        # Conta solo i casi che vengono classificati individualmente (esclude PROPAGATI)
-        classification_counter = 0
-        total_individual_cases = 0
-        
-        # Pre-conta i casi individuali per il totale
-        for prediction in predictions:
-            method = prediction.get('method', '')
-            if method.startswith('REPRESENTATIVE') or method.startswith('OUTLIER'):
-                total_individual_cases += 1
-        
-        # Salva classificazioni nel database
-        print(f"✅ Classificazione pura completata!")
-        print(f"  📊 Sessioni classificate: {len(predictions)}")
-        print(f"  📋 Casi individuali: {total_individual_cases} (rappresentanti + outliers)")
-        print(f"  🔄 Casi propagati: {len(predictions) - total_individual_cases}")
-        
-        # Disconnetti dal database TAG (se connesso)
-        try:
-            self.tag_db.disconnetti()
-        except:
-            pass
-        
-        trace_all("classifica_sessioni_puro", "EXIT", 
-                 predictions_count=len(predictions),
-                 total_individual_cases=total_individual_cases)
-        return predictions
-    
-   
-
 
     def classifica_e_salva_documenti_unified(self,
                                            documenti: List[DocumentoProcessing],
@@ -3533,24 +3272,6 @@ class EndToEndPipeline:
         
         trace_all("classifica_e_salva_sessioni", "EXIT", return_value=stats)
         return stats
-    
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     def esegui_pipeline_completa(self,
                                giorni_indietro: int = 7, #mai utilizzato
@@ -3620,8 +3341,10 @@ class EndToEndPipeline:
             elif len(sessioni) < 10:
                 print(f"⚠️ Attenzione: Solo {len(sessioni)} sessioni trovate. Risultati potrebbero essere limitati.")
             
-            # 2. Clustering
-            embeddings, cluster_labels, representatives, suggested_labels = self.esegui_clustering(sessioni)
+            # 2. 🚀 CLUSTERING UNIFICATO: Una sola chiamata al clustering
+            print(f"🚀 CLUSTERING UNIFICATO: Esecuzione clustering con DocumentoProcessing...")
+            documenti = self.esegui_clustering(sessioni, force_reprocess=False)
+            print(f"   ✅ Creati {len(documenti)} oggetti DocumentoProcessing")
             
             # 3. Verifica se ML è già allenato per decidere il flusso
             ml_ensemble_trained = (
@@ -3635,13 +3358,16 @@ class EndToEndPipeline:
             if not ml_ensemble_trained:
                 # PRIMO AVVIO: Classificazione LLM-only + preparazione training
                 print(f"🚀 PRIMO AVVIO: Classificazione LLM-only con preparazione training")
-                llm_classification_result = self._classifica_llm_only_e_prepara_training(
-                    sessioni, cluster_labels, representatives, suggested_labels
+                llm_classification_result = self._classifica_llm_only_e_prepara_training_v2(
+                    sessioni, documenti
                 )
                 
                 print(f"✅ Classificazione LLM-only completata")
                 print(f"👤 Prossimo step: Review umana → Training ML")
                 print(f"📋 Sessioni in review queue: {llm_classification_result.get('saved_for_review', 0)}")
+                
+                # Estrai statistiche per compatibilità return 
+                stats = self._extract_statistics_from_documents(documenti)
                 
                 # Prepara risultato per PRIMO AVVIO (senza training ML ancora)
                 return {
@@ -3650,7 +3376,7 @@ class EndToEndPipeline:
                     'ml_training_needed': True,
                     'human_review_needed': True,
                     'total_sessions': len(sessioni),
-                    'clusters_found': len(representatives),
+                    'clusters_found': stats['n_clusters'],
                     'representatives_classified': llm_classification_result.get('representatives_classified', 0),
                     'outliers_classified': llm_classification_result.get('outliers_classified', 0),
                     'next_action': 'human_review_then_ml_training'
@@ -3661,10 +3387,9 @@ class EndToEndPipeline:
                 # NOTA: Il training supervisionato viene gestito separatamente tramite esegui_training_interattivo()
                 training_metrics = {'note': 'Training supervisionato gestito separatamente', 'accuracy': 0.0}
             
-            # 4. 🚀 FIX: Clustering per creare DocumentoProcessing
-            print(f"🔗 Creazione DocumentoProcessing dal clustering...")
-            documenti = self.esegui_clustering(sessioni, force_reprocess=False)
-            print(f"   ✅ Creati {len(documenti)} oggetti DocumentoProcessing")
+            # 4. 🚀 CLASSIFICAZIONE UNIFICATA: Usa documenti già esistenti
+            print(f"🔗 Uso documenti DocumentoProcessing già creati dal clustering...")
+            print(f"   ✅ Riutilizzo {len(documenti)} oggetti DocumentoProcessing esistenti")
             
             # 5. 🚀 FIX: Classificazione unificata con metadati preservati
             if use_ensemble:
@@ -3692,6 +3417,9 @@ class EndToEndPipeline:
             end_time = datetime.now()
             duration = end_time - start_time
             
+            # Estrai statistiche per compatibilità
+            clustering_stats = self._extract_statistics_from_documents(documenti)
+            
             results = {
                 'pipeline_info': {
                     'tenant_slug': self.tenant_slug,
@@ -3706,9 +3434,9 @@ class EndToEndPipeline:
                     'total_sessions': len(sessioni)
                 },
                 'clustering': {
-                    'n_clusters': len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0),
-                    'n_outliers': sum(1 for label in cluster_labels if label == -1),
-                    'suggested_labels': len(suggested_labels)
+                    'n_clusters': clustering_stats['n_clusters'],
+                    'n_outliers': clustering_stats['n_outliers'],
+                    'suggested_labels': clustering_stats['suggested_labels']
                 },
                 'training_metrics': training_metrics,
                 'classification_stats': classification_stats,
@@ -3807,227 +3535,6 @@ class EndToEndPipeline:
         finally:
             self.tag_db.disconnetti()
     
-    def analizza_e_consolida_etichette(self, dry_run: bool = True) -> Dict[str, Any]:
-        """
-        Analizza le etichette esistenti e propone/applica consolidamenti per eliminare duplicati semantici
-        
-        Args:
-            dry_run: Se True, mostra solo le proposte senza applicarle
-            
-        Returns:
-            Risultati dell'analisi e consolidamento
-            
-        Autore: Valerio Bignardi
-        Data creazione: 2025-09-06
-        Ultima modifica: 2025-09-06 - Aggiunta del tracing completo
-        """
-        trace_all("analizza_e_consolida_etichette", "ENTER", dry_run=dry_run)
-        
-        print(f"🔍 Analisi etichette esistenti per consolidamento...")
-        
-        # 1. Recupera tutte le etichette esistenti
-        self.tag_db.connetti()
-        try:
-            query = """
-            SELECT tag_name, COUNT(*) as count
-            FROM session_classifications 
-            GROUP BY tag_name
-            ORDER BY count DESC
-            """
-            etichette_stats = self.tag_db.esegui_query(query)
-            
-            if not etichette_stats:
-                print("❌ Nessuna etichetta trovata")
-                return {}
-            
-            etichette_list = [(tag, count) for tag, count in etichette_stats]
-            print(f"📊 Trovate {len(etichette_list)} etichette uniche")
-            
-        finally:
-            self.tag_db.disconnetti()
-        
-        # 2. Definisci regole di consolidamento semantico
-        consolidation_rules = {
-            # Accesso - tutte le varianti di accesso
-            'accesso_portale': [
-                'accesso_app_personale',
-                'accesso_ospedale',  # Potrebbe essere diverso, da valutare
-                'accesso_sistema'
-            ],
-            
-            # Fatturazione - tutte le varianti di pagamenti
-            'fatturazione_pagamenti': [
-                'pagamenti_parcheggio',  # Specifico ma sempre fatturazione
-                'fatturazione',
-                'pagamenti'
-            ],
-            
-            # Referti - tutti i tipi di ritiro referti
-            'ritiro_referti': [
-                'ritiro_referti_istologici',
-                'ritiro_esami',
-                'download_referti'
-            ],
-            
-            # Prenotazioni - tutte le varianti
-            'prenotazione_esami': [
-                'prenotazione_privata',
-                'prenotazione_visite',
-                'prenota_appuntamento'
-            ],
-            
-            # Contatti e orari - informazioni generali
-            'orari_contatti': [
-                'contatti_info',
-                'informazioni_orari',
-                'info_struttura'
-            ],
-            
-            # Trasporti e alloggi - servizi di supporto
-            'servizi_supporto': [
-                'prenotazione_trasporti',
-                'alloggio_accompagnatore',
-                'servizi_accompagnamento'
-            ],
-            
-            # Assistenza medica specializzata
-            'assistenza_medica_specializzata': [
-                'riabilitazione_neurologica',
-                'trattamento_cistite_chronic',
-                'medicamenti_farmaci',
-                'informazioni_esami_gravidanza_aborti_spontanei',
-                'invito_medico_procedura_chirurgica'
-            ]
-        }
-        
-        # 3. Analizza consolidamenti possibili
-        consolidation_plan = {}
-        total_consolidations = 0
-        
-        for target_label, source_labels in consolidation_rules.items():
-            # Trova etichette esistenti che matchano le regole
-            found_sources = []
-            target_count = 0
-            
-            for etichetta, count in etichette_list:
-                if etichetta == target_label:
-                    target_count = count
-                elif etichetta in source_labels:
-                    found_sources.append((etichetta, count))
-            
-            if found_sources:
-                total_source_count = sum(count for _, count in found_sources)
-                consolidation_plan[target_label] = {
-                    'target_existing_count': target_count,
-                    'sources_to_merge': found_sources,
-                    'total_source_count': total_source_count,
-                    'final_count': target_count + total_source_count
-                }
-                total_consolidations += len(found_sources)
-        
-        # 4. Mostra piano di consolidamento
-        print(f"\n📋 PIANO DI CONSOLIDAMENTO:")
-        print(f"🔧 {total_consolidations} etichette da consolidare")
-        print("-" * 60)
-        
-        for target, plan in consolidation_plan.items():
-            print(f"\n🎯 Target: {target}")
-            print(f"  📊 Esistenti: {plan['target_existing_count']} classificazioni")
-            print(f"  🔄 Da consolidare:")
-            for source, count in plan['sources_to_merge']:
-                print(f"    - {source}: {count} classificazioni")
-            print(f"  ✅ Totale finale: {plan['final_count']} classificazioni")
-        
-        # 5. Applica consolidamento se non è dry_run
-        if not dry_run:
-            print(f"\n🚀 APPLICAZIONE CONSOLIDAMENTO...")
-            applied_consolidations = 0
-            
-            self.tag_db.connetti()
-            try:
-                for target, plan in consolidation_plan.items():
-                    for source_label, count in plan['sources_to_merge']:
-                        print(f"  🔄 Consolidando {source_label} → {target}...")
-                        
-                        # Update query per cambiare tutte le occorrenze
-                        update_query = """
-                        UPDATE session_classifications 
-                        SET tag_name = %s, 
-                            notes = CONCAT(COALESCE(notes, ''), ' [Consolidato da: ', %s, ']'),
-                            updated_at = NOW()
-                        WHERE tag_name = %s
-                        """
-                        
-                        risultato = self.tag_db.esegui_update(
-                            update_query, 
-                            (target, source_label, source_label)
-                        )
-                        
-                        if risultato:
-                            applied_consolidations += 1
-                            print(f"    ✅ {count} classificazioni aggiornate")
-                        else:
-                            print(f"    ❌ Errore nell'aggiornamento")
-                
-            finally:
-                self.tag_db.disconnetti()
-            
-            print(f"\n✅ CONSOLIDAMENTO COMPLETATO!")
-            print(f"🔧 {applied_consolidations} etichette consolidate con successo")
-            
-            # Aggiorna memoria semantica per riflettere i cambiamenti
-            print(f"🧠 Aggiornamento memoria semantica...")
-            self.semantic_memory.load_semantic_memory()
-            
-        else:
-            print(f"\n💡 MODALITÀ PREVIEW - Nessun cambiamento applicato")
-            print(f"📝 Usa dry_run=False per applicare le modifiche")
-        
-        # 6. Statistiche finali
-        results = {
-            'total_labels_analyzed': len(etichette_list),
-            'consolidation_plan': consolidation_plan,
-            'total_consolidations_possible': total_consolidations,
-            'applied': not dry_run,
-            'applied_consolidations': applied_consolidations if not dry_run else 0
-        }
-        
-        trace_all("analizza_e_consolida_etichette", "EXIT", 
-                 total_labels_analyzed=len(etichette_list),
-                 total_consolidations_possible=total_consolidations,
-                 applied=not dry_run,
-                 applied_consolidations=applied_consolidations if not dry_run else 0)
-        
-        return results
-
-    def test_consolidamento_etichette(self) -> None:
-        """
-        Testa il sistema di consolidamento delle etichette
-        """
-        print("=== TEST SISTEMA CONSOLIDAMENTO ETICHETTE ===\n")
-        
-        # 1. Mostra situazione attuale
-        print("📊 SITUAZIONE ATTUALE:")
-        stats_prima = self.get_statistiche_database()
-        print(f"  Totale classificazioni: {stats_prima['total_classificazioni']}")
-        print("  Distribuzione etichette:")
-        for item in stats_prima['per_tag'][:10]:  # Top 10
-            print(f"    {item['tag']}: {item['count']}")
-        
-        # 2. Analizza consolidamento (dry run)
-        print(f"\n🔍 ANALISI CONSOLIDAMENTO (PREVIEW):")
-        risultati_analisi = self.analizza_e_consolida_etichette(dry_run=True)
-        
-        # 3. Chiede conferma per applicare
-        if risultati_analisi['total_consolidations_possible'] > 0:
-            print(f"\n❓ Vuoi applicare i consolidamenti? (Questo modificherà il database)")
-            print(f"📝 Per applicare, chiama: pipeline.analizza_e_consolida_etichette(dry_run=False)")
-        else:
-            print(f"\n✅ Nessun consolidamento necessario!")
-        
-        return risultati_analisi
-    
-
 #funzione richiamata dalla rotta training supervised 
 
     def esegui_training_interattivo(self,
@@ -4102,9 +3609,7 @@ class EndToEndPipeline:
             if training_params:
                 # Usa parametri dal database
                 human_limit = training_params.get('max_total_sessions', max_human_review_sessions)
-                confidence_threshold_priority = training_params.get('confidence_threshold_priority', confidence_threshold)
                 print(f"📊 [ESEGUI TRAINING INTERATTIVO] max_total_sessions: {human_limit}")
-                print(f"📊 [ESEGUI TRAINING INTERATTIVO] confidence_threshold_priority: {confidence_threshold_priority}")
             else:
                 # Fallback a config.yaml
                 with open(self.config_path, 'r', encoding='utf-8') as file:
@@ -4114,9 +3619,7 @@ class EndToEndPipeline:
                 human_review_config = supervised_config.get('human_review', {}) # Sezione review umana get config 
                 
                 human_limit = human_review_config.get('max_total_sessions', max_human_review_sessions)
-                confidence_threshold_priority = human_review_config.get('confidence_threshold_priority',confidence_threshold_priority)
                 print(f"📊 [CONFIG YAML] max_total_sessions: {human_limit}")
-                print(f"📊 [CONFIG YAML] confidence_threshold_priority: {confidence_threshold_priority}")
             
             # Gestione parametri legacy
             if max_human_review_sessions is not None:
@@ -4346,13 +3849,6 @@ class EndToEndPipeline:
             import traceback
             traceback.print_exc()
             raise
-    
-
-
-
-
-
-
 
     def _select_representatives_for_human_review(self,
                                                representatives: Dict[int, List[Dict]],
@@ -4500,12 +3996,10 @@ class EndToEndPipeline:
                 max_reps_per_cluster = training_params.get('max_representatives_per_cluster', 5)
                 default_reps_per_cluster = training_params.get('representatives_per_cluster', 3)
                 selection_strategy = training_params.get('selection_strategy', 'prioritize_by_size')
-                confidence_threshold_priority = training_params.get('confidence_threshold_priority', 0.7)
                 print(f"📊 [DB MYSQL] min_representatives_per_cluster: {min_reps_per_cluster}")
                 print(f"📊 [DB MYSQL] max_representatives_per_cluster: {max_reps_per_cluster}")
                 print(f"📊 [DB MYSQL] representatives_per_cluster: {default_reps_per_cluster}")
                 print(f"📊 [DB MYSQL] selection_strategy: {selection_strategy}")
-                print(f"📊 [DB MYSQL] confidence_threshold_priority: {confidence_threshold_priority}")
                 min_cluster_size = 2  # Fisso, non configurabile
                 
                 # Debug parametri estratti dal database
@@ -4515,7 +4009,6 @@ class EndToEndPipeline:
                     debug_file.write(f"   - max_reps_per_cluster: {max_reps_per_cluster}\n")
                     debug_file.write(f"   - default_reps_per_cluster: {default_reps_per_cluster}\n")
                     debug_file.write(f"   - selection_strategy: {selection_strategy}\n")
-                    debug_file.write(f"   - confidence_threshold_priority: {confidence_threshold_priority}\n")
                     debug_file.write(f"   - min_cluster_size: {min_cluster_size}\n")
             else:
                 # Fallback a config.yaml
@@ -4902,7 +4395,6 @@ class EndToEndPipeline:
                 max_reps_per_cluster = training_params.get('max_representatives_per_cluster', 5)
                 default_reps_per_cluster = training_params.get('representatives_per_cluster', 3)
                 selection_strategy = training_params.get('selection_strategy', 'prioritize_by_size')
-                confidence_threshold_priority = training_params.get('confidence_threshold_priority', 0.7)
                 min_cluster_size = 2  # Fisso, non configurabile
                 
                 print(f"📊 [DB] min_reps_per_cluster: {min_reps_per_cluster}")
@@ -4921,7 +4413,6 @@ class EndToEndPipeline:
                 default_reps_per_cluster = human_review_config.get('representatives_per_cluster', 3)
                 selection_strategy = human_review_config.get('selection_strategy', 'prioritize_by_size')
                 min_cluster_size = human_review_config.get('min_cluster_size_for_review', 2)
-                confidence_threshold_priority = 0.7
                 
                 print(f"📊 [CONFIG] Parametri da config.yaml")
                 
@@ -4932,7 +4423,6 @@ class EndToEndPipeline:
             default_reps_per_cluster = 3
             selection_strategy = 'prioritize_by_size'
             min_cluster_size = 2
-            confidence_threshold_priority = 0.7
         
         # 2. FILTRA SOLO I RAPPRESENTANTI
         rappresentanti = [doc for doc in documenti if doc.is_representative]
@@ -5377,149 +4867,6 @@ class EndToEndPipeline:
         except Exception as e:
             print(f"⚠️ Errore nel caricamento del modello: {e}")
             print("   Il sistema continuerà con modelli non addestrati")
-
-    def _recluster_outliers_with_history(self, 
-                                         nuove_sessioni: Dict[str, Dict],
-                                         cluster_labels: np.ndarray,
-                                         embeddings: np.ndarray) -> Tuple[Dict[str, Dict], np.ndarray]:
-        """
-        Re-clustering intelligente che include gli outlier storici
-        
-        Args:
-            nuove_sessioni: Nuove sessioni da processare
-            cluster_labels: Labels dal clustering corrente
-            embeddings: Embeddings delle nuove sessioni
-            
-        Returns:
-            Tuple (sessioni_aggiornate, labels_aggiornati)
-        """
-        print("🔄 Re-clustering outlier con storico...")
-        
-        # 1. Identifica outlier nelle nuove sessioni
-        nuovi_outlier_indices = [i for i, label in enumerate(cluster_labels) if label == -1]
-        session_ids = list(nuove_sessioni.keys())
-        nuovi_outlier_ids = [session_ids[i] for i in nuovi_outlier_indices]
-        
-        if not nuovi_outlier_ids:
-            print("  ✅ Nessun nuovo outlier da processare")
-            return nuove_sessioni, cluster_labels
-        
-        print(f"  🔍 Trovati {len(nuovi_outlier_ids)} nuovi outlier")
-        
-        # 2. Recupera outlier storici dal database
-        self.tag_db.connetti()
-        try:
-            # Query per trovare sessioni non classificate o con bassa confidenza
-            query = """
-            SELECT session_id, confidence_score 
-            FROM session_classifications 
-            WHERE tenant_name = %s 
-            AND (confidence_score < 0.5 OR tag_name = 'outlier' OR tag_name = 'altro')
-            ORDER BY confidence_score ASC
-            LIMIT 50
-            """
-            
-            outlier_storico = self.tag_db.esegui_query(query, (self.tenant_slug,))
-            outlier_storico_ids = [row[0] for row in outlier_storico] if outlier_storico else []
-            
-        finally:
-            self.tag_db.disconnetti()
-        
-        print(f"  📚 Trovati {len(outlier_storico_ids)} outlier storici")
-        
-        # 3. Se abbiamo abbastanza outlier totali, tenta re-clustering
-        total_outliers = len(nuovi_outlier_ids) + len(outlier_storico_ids)
-        
-        if total_outliers < 5:
-            print(f"  ⚠️ Troppo pochi outlier totali ({total_outliers}) per re-clustering")
-            return nuove_sessioni, cluster_labels
-        
-        # 4. Recupera dati degli outlier storici
-        sessioni_outlier_storici = {}
-        for outlier_id in outlier_storico_ids[:20]:  # Limita a 20 per performance
-            try:
-                # Recupera dati sessione dal database originale
-                session_data = self.aggregator.get_session_by_id(outlier_id)
-                if session_data:
-                    sessioni_outlier_storici[outlier_id] = session_data
-            except Exception as e:
-                print(f"    ⚠️ Errore recupero outlier {outlier_id}: {e}")
-        
-        print(f"  📊 Recuperati dati per {len(sessioni_outlier_storici)} outlier storici")
-        
-        # 5. Combina tutti gli outlier per re-clustering
-        tutte_sessioni_outlier = {}
-        
-        # Aggiungi nuovi outlier
-        for outlier_id in nuovi_outlier_ids:
-            tutte_sessioni_outlier[outlier_id] = nuove_sessioni[outlier_id]
-        
-        # Aggiungi outlier storici
-        tutte_sessioni_outlier.update(sessioni_outlier_storici)
-        
-        # 6. Re-clustering solo degli outlier
-        print(f"  🧩 Re-clustering di {len(tutte_sessioni_outlier)} outlier...")
-        
-        outlier_texts = [dati['testo_completo'] for dati in tutte_sessioni_outlier.values()]
-        outlier_session_ids = list(tutte_sessioni_outlier.keys())
-        outlier_embeddings = self._get_embedder().encode(outlier_texts, session_ids=outlier_session_ids)
-        
-        # Usa parametri più permissivi per outlier
-        from Clustering.hdbscan_clusterer import HDBSCANClusterer
-        outlier_clusterer = HDBSCANClusterer(
-            min_cluster_size=2,  # Molto più basso
-            min_samples=1,       # Molto più basso
-            cluster_selection_epsilon=0.1,  # Più permissivo
-            tenant=self.tenant  # 🔧 PASSA OGGETTO TENANT
-        )
-        
-        outlier_cluster_labels = outlier_clusterer.fit_predict(outlier_embeddings)
-        
-        # 7. Analizza risultati re-clustering
-        nuovi_cluster_trovati = len(set(outlier_cluster_labels)) - (1 if -1 in outlier_cluster_labels else 0)
-        outlier_rimanenti = sum(1 for label in outlier_cluster_labels if label == -1)
-        
-        print(f"  ✅ Re-clustering completato:")
-        print(f"    🆕 Nuovi cluster: {nuovi_cluster_trovati}")
-        print(f"    🔍 Outlier rimanenti: {outlier_rimanenti}")
-        
-        # 8. Aggiorna le labels originali
-        updated_labels = cluster_labels.copy()
-        max_existing_cluster = max(cluster_labels) if len(cluster_labels) > 0 else -1
-        
-        # Mappa nuovi cluster agli ID originali
-        for i, (session_id, new_label) in enumerate(zip(tutte_sessioni_outlier.keys(), outlier_cluster_labels)):
-            if session_id in nuove_sessioni:
-                # Trova l'indice originale nella lista nuove_sessioni
-                original_index = session_ids.index(session_id)
-                
-                if new_label != -1:
-                    # Assegna nuovo cluster ID
-                    updated_labels[original_index] = max_existing_cluster + 1 + new_label
-                    print(f"    🎯 {session_id}: outlier → cluster {updated_labels[original_index]}")
-        
-        # 9. Gestisci outlier storici che hanno formato nuovi cluster
-        for i, (session_id, new_label) in enumerate(zip(tutte_sessioni_outlier.keys(), outlier_cluster_labels)):
-            if session_id not in nuove_sessioni and new_label != -1:
-                # Outlier storico che ora fa parte di un cluster
-                new_cluster_id = max_existing_cluster + 1 + new_label
-                print(f"    📚 Outlier storico {session_id} ora in cluster {new_cluster_id}")
-                
-                # Aggiorna nel database (marca per re-classificazione)
-                self.tag_db.connetti()
-                try:
-                    update_query = """
-                    UPDATE session_classifications 
-                    SET tag_name = 'recluster_needed', 
-                        notes = CONCAT(COALESCE(notes, ''), ' [Re-cluster candidate]'),
-                        confidence_score = 0.5
-                    WHERE session_id = %s AND tenant_name = %s
-                    """
-                    self.tag_db.esegui_update(update_query, (session_id, self.tenant_slug))
-                finally:
-                    self.tag_db.disconnetti()
-        
-        return nuove_sessioni, updated_labels
 
     def _classifica_ottimizzata_cluster(self, 
                                       sessioni: Dict[str, Dict], 
@@ -6701,256 +6048,96 @@ class EndToEndPipeline:
             print(f"Stack trace: {traceback.format_exc()}")
             return False
 
-    def _classifica_llm_only_e_prepara_training(self, 
-                                              sessioni: Dict[str, Dict],
-                                              cluster_labels: np.ndarray,
-                                              representatives: Dict[int, List[Dict]],
-                                              suggested_labels: Dict[int, str]) -> Dict[str, Any]:
+    def _classifica_llm_only_e_prepara_training_v2(self, 
+                                                   sessioni: Dict[str, Dict],
+                                                   documenti: List[DocumentoProcessing]) -> Dict[str, Any]:
         """
-        Classifica usando SOLO LLM quando ML non è allenato e prepara dati per training futuro.
+        🚀 VERSIONE REFACTORIZZATA: Classifica usando SOLO LLM con DocumentoProcessing
         
-        RICEVE I DATI DEL CLUSTERING GIÀ FATTI - NON RICALCOLA
-        
-        Sequenza corretta per PRIMO AVVIO:
-        1. Classificazione LLM-only dei rappresentanti (GIÀ identificati dal clustering)
-        2. Classificazione LLM-only degli outlier (GIÀ identificati dal clustering)  
-        3. Salvataggio immediato per training futuro e review umana
-        
-        Scopo della funzione: Gestire primo avvio quando ML ensemble non è disponibile
-        Parametri di input: sessioni, cluster_labels, representatives, suggested_labels (GIÀ CALCOLATI)
+        Scopo: Gestire primo avvio quando ML ensemble non è disponibile usando architettura unificata
+        Parametri di input: sessioni, documenti DocumentoProcessing (GIÀ processati dal clustering)
         Parametri di output: risultati classificazione con dati preparati per training
         Valori di ritorno: Dict con statistiche e dati preparati
-        Tracciamento aggiornamenti: 2025-09-06 - Valerio Bignardi - Corretto per non ricalcolare clustering
         
         Args:
-            sessioni: Dizionario con le sessioni da classificare
-            cluster_labels: Array con etichette cluster (GIÀ CALCOLATE)
-            representatives: Dict con rappresentanti per cluster (GIÀ SELEZIONATI)  
-            suggested_labels: Dict con etichette suggerite per cluster (GIÀ CALCOLATE)
+            sessioni: Dizionario con le sessioni originali
+            documenti: Lista di oggetti DocumentoProcessing dal clustering
             
         Returns:
-            Dict con risultati classificazione e dati preparati per training
+            Dict[str, Any]: Risultati della classificazione LLM-only
             
         Autore: Valerio Bignardi
-        Data: 2025-09-06
+        Data: 2025-09-19 - Refactoring per architettura DocumentoProcessing unificata
         """
-        trace_all("_classifica_llm_only_e_prepara_training", "ENTER", 
-                 sessioni_count=len(sessioni),
-                 cluster_labels_count=len(cluster_labels),
-                 representatives_count=len(representatives),
-                 suggested_labels_count=len(suggested_labels))
+        trace_all("_classifica_llm_only_e_prepara_training_v2", "ENTER", 
+                 sessioni_count=len(sessioni), documenti_count=len(documenti))
         
-        start_time = time.time()
-        print(f"\n🚀 [LLM-ONLY PRIMO AVVIO] Avvio classificazione preparatoria...")
-        print(f"📊 [LLM-ONLY PRIMO AVVIO] Sessioni da processare: {len(sessioni)}")
-        print(f"📊 [LLM-ONLY PRIMO AVVIO] Rappresentanti ricevuti: {sum(len(reps) for reps in representatives.values())}")
-        print(f"📊 [LLM-ONLY PRIMO AVVIO] Cluster trovati: {len(representatives)}")
-        print(f"🎯 [LLM-ONLY PRIMO AVVIO] Modalità: Classificazione + Preparazione Training")
+        print(f"\n🚀 [LLM-ONLY PRIMO AVVIO] Classificazione con DocumentoProcessing...")
+        print(f"   📊 Sessioni: {len(sessioni)}")
+        print(f"   📄 Documenti: {len(documenti)}")
+        
+        # Statistiche iniziali dai documenti
+        representatives = [doc for doc in documenti if doc.is_representative]
+        outliers = [doc for doc in documenti if doc.is_outlier]
+        propagated = [doc for doc in documenti if doc.is_propagated]
+        
+        print(f"   👥 Rappresentanti: {len(representatives)}")
+        print(f"   🔍 Outliers: {len(outliers)}")
+        print(f"   🔄 Propagati: {len(propagated)}")
+        
+        # 1. CLASSIFICAZIONE LLM-ONLY per rappresentanti e outlier
+        docs_to_classify = representatives + outliers
+        print(f"\n🏷️ [FASE 1: CLASSIFICAZIONE LLM] Classificando {len(docs_to_classify)} documenti...")
+        
+        classified_count = 0
+        saved_for_review = 0
         
         try:
-            # Verifica che LLM sia disponibile
-            if not self.ensemble_classifier.llm_classifier or not self.ensemble_classifier.llm_classifier.is_available():
-                raise RuntimeError("LLM classifier non disponibile per classificazione primo avvio")
+            # Usa il nuovo sistema di classificazione batch
+            classified_docs = self._classify_documents_batch(
+                documenti=docs_to_classify,
+                batch_size=32,
+                use_ensemble=False  # FORCE LLM-only per primo avvio
+            )
             
-            n_outliers = list(cluster_labels).count(-1)
-            total_representatives = sum(len(reps) for reps in representatives.values())
+            classified_count = len(classified_docs)
+            print(f"   ✅ Classificati: {classified_count} documenti")
             
-            print(f"   ✅ Dati clustering ricevuti:")
-            print(f"   📊 Cluster: {len(representatives)}")
-            print(f"   🔍 Outliers nel dataset: {n_outliers}")
-            print(f"   👥 Rappresentanti totali: {total_representatives}")
+            # 2. PROPAGAZIONE etichette dai rappresentanti ai membri cluster
+            print(f"\n🔄 [FASE 2: PROPAGAZIONE] Propagando etichette ai membri cluster...")
+            propagated_count = self._propagate_labels_from_representatives(documenti)
+            print(f"   ✅ Propagati: {propagated_count} documenti")
             
-            # 1. CLASSIFICAZIONE LLM-ONLY DEI RAPPRESENTANTI
-            print(f"\n� FASE 1: CLASSIFICAZIONE LLM-ONLY RAPPRESENTANTI")
-            training_data_list = []
-            saved_count = 0
-            
-            # Istanza MongoClassificationReader per salvataggio
-            mongo_reader = self._get_mongo_reader()
-            
-            for cluster_id, cluster_reps in representatives.items():
-                print(f"   📋 Cluster {cluster_id}: {len(cluster_reps)} rappresentanti")
-                
-                for rep in cluster_reps:
-                    session_id = rep['session_id']
-                    conversation_text = rep['testo_completo']
-                    
-                    # Classificazione LLM-only
-                    llm_result = self.ensemble_classifier.predict_with_llm_only(
-                        conversation_text, 
-                        return_details=True
-                    )
-                    
-                    # 🔧 FORZARE CONFIDENZA 0.5 per primo avvio (tutto in review)
-                    forced_confidence = 0.5
-                    
-                    # Prepara dati per training futuro
-                    embeddings = self._get_embedder().encode([conversation_text])[0]
-                    
-                    training_data = {
-                        'session_id': session_id,
-                        'text': conversation_text,
-                        'embeddings': embeddings,
-                        'llm_label': llm_result['predicted_label'],
-                        'llm_confidence': forced_confidence,  # 🔧 Forzata a 0.5
-                        'cluster_id': cluster_id,
-                        'is_representative': True,
-                        'human_reviewed': False,  # Sarà aggiornato dopo review
-                        'final_label': llm_result['predicted_label'],  # Inizialmente = LLM
-                        'training_ready': True,
-                        'source': 'llm_only_primo_avvio',
-                        'needs_review': True  # 🔧 Tutto in review per primo avvio
-                    }
-                    
-                    training_data_list.append(training_data)
-                    
-                    # Salva in MongoDB per review
-                    success = mongo_reader.save_classification_result(
-                        session_id=session_id,
-                        client_name=self.tenant.tenant_slug,
-                        final_decision={
-                            'predicted_label': llm_result['predicted_label'],
-                            'confidence': llm_result['confidence'],
-                            'method': 'llm_only_primo_avvio_rappresentante'
-                        },
-                        conversation_text=conversation_text,
-                        needs_review=True,  # Tutti i rappresentanti necessitano review
-                        review_reason='primo_avvio_rappresentante',
-                        classified_by='pipeline_llm_only',
-                        cluster_metadata={
-                            'cluster_id': cluster_id,
-                            'is_representative': True,
-                            'training_ready': True
-                        }
-                    )
-                    
-                    if success:
-                        saved_count += 1
-            
-            # 2. CLASSIFICAZIONE LLM-ONLY DEGLI OUTLIER
-            print(f"\n� FASE 2: CLASSIFICAZIONE LLM-ONLY OUTLIERS")
-            outlier_sessions = []
-            
-            # Trova sessioni outlier dai cluster_labels
-            session_ids = list(sessioni.keys())
-            for i, session_id in enumerate(session_ids):
-                if i < len(cluster_labels) and cluster_labels[i] == -1:
-                    outlier_sessions.append(session_id)
-            
-            print(f"   📊 Outliers da classificare: {len(outlier_sessions)}")
-            
-            for session_id in outlier_sessions:
-                conversation_text = sessioni[session_id]['testo_completo']
-                
-                # Classificazione LLM-only
-                llm_result = self.ensemble_classifier.predict_with_llm_only(
-                    conversation_text,
-                    return_details=True
-                )
-                
-                # 🔧 FORZARE CONFIDENZA 0.5 per primo avvio (tutto in review)
-                forced_confidence = 0.5
-                
-                # Prepara dati per training futuro
-                embeddings = self._get_embedder().encode([conversation_text])[0]
-                
-                training_data = {
-                    'session_id': session_id,
-                    'text': conversation_text,
-                    'embeddings': embeddings,
-                    'llm_label': llm_result['predicted_label'],
-                    'llm_confidence': forced_confidence,  # 🔧 Forzata a 0.5
-                    'cluster_id': -1,
-                    'is_representative': False,
-                    'human_reviewed': False,
-                    'final_label': llm_result['predicted_label'],
-                    'training_ready': True,
-                    'source': 'llm_only_primo_avvio',
-                    'needs_review': True  # 🔧 Tutto in review per primo avvio
-                }
-                
-                training_data_list.append(training_data)
-                
-                # Salva in MongoDB per review
-                success = mongo_reader.save_classification_result(
-                    session_id=session_id,
-                    client_name=self.tenant.tenant_slug,
-                    final_decision={
-                        'predicted_label': llm_result['predicted_label'],
-                        'confidence': llm_result['confidence'],
-                        'method': 'llm_only_primo_avvio_outlier'
-                    },
-                    conversation_text=conversation_text,
-                    needs_review=True,  # Tutti gli outlier necessitano review
-                    review_reason='primo_avvio_outlier',
-                    classified_by='pipeline_llm_only',
-                    cluster_metadata={
-                        'cluster_id': -1,
-                        'is_representative': False,
-                        'training_ready': True
-                    }
-                )
-                
-                if success:
-                    saved_count += 1
-            
-            elapsed_time = time.time() - start_time
-            
-            # Salva dati per training futuro come attributi della classe
-            self._llm_training_data = training_data_list
-            self._last_cluster_labels = cluster_labels
-            self._last_representatives = representatives
-            self._last_suggested_labels = suggested_labels
-            
-            # 🆕 FASE 1.5: Crea file training per correzioni umane future
-            print(f"\n📁 FASE 1.5: CREAZIONE FILE TRAINING")
-            training_file_path = self.create_ml_training_file(training_data_list)
-            
-            # Prepara risultato finale
-            result = {
-                'status': 'llm_only_success',
-                'total_sessions': len(sessioni),
-                'representatives_classified': total_representatives,
-                'outliers_classified': len(outlier_sessions),
-                'total_classified': len(training_data_list),
-                'saved_for_training': len(training_data_list),
-                'saved_for_review': saved_count,
-                'training_data_ready': True,
-                'training_file_path': training_file_path,  # 🆕 Path del file training
-                'needs_human_review': True,
-                'next_step': 'human_review_then_ml_training',
-                'processing_time': elapsed_time
-            }
-            
-            print(f"✅ [LLM-ONLY PRIMO AVVIO] Completata in {elapsed_time:.2f}s")
-            print(f"📊 [LLM-ONLY PRIMO AVVIO] Risultati:")
-            print(f"   🎯 Classificazioni totali: {result['total_classified']}")
-            print(f"   👥 Rappresentanti: {result['representatives_classified']}")
-            print(f"   🔍 Outlier: {result['outliers_classified']}")
-            print(f"   💾 Dati training preparati: {result['saved_for_training']}")
-            print(f"   📋 Salvati per review: {result['saved_for_review']}")
-            print(f"   👤 Necessitano review umana: SÌ")
-            print(f"   🎯 Prossimo step: Review umana → Training ML")
-            
-            trace_all("_classifica_llm_only_e_prepara_training", "EXIT", return_value=result)
-            return result
+            # 3. SALVATAGGIO per training futuro
+            print(f"\n💾 [FASE 3: SALVATAGGIO] Salvando per training futuro...")
+            saved_count = self._save_documents_to_mongodb(documenti)
+            saved_for_review = saved_count  # Tutti i documenti vanno in review per primo avvio
+            print(f"   ✅ Salvati per review: {saved_for_review} documenti")
             
         except Exception as e:
-            elapsed_time = time.time() - start_time
-            print(f"❌ [LLM-ONLY PRIMO AVVIO] ERRORE dopo {elapsed_time:.2f}s: {e}")
-            import traceback
-            traceback.print_exc()
-            
-            trace_all("_classifica_llm_only_e_prepara_training", "ERROR", error=str(e))
-            
-            # Ritorna errore strutturato
-            return {
-                'status': 'error',
-                'error': str(e),
-                'training_data_ready': False,
-                'processing_time': elapsed_time
-            }
-
+            print(f"❌ Errore nella classificazione LLM-only: {e}")
+            classified_count = 0
+            saved_for_review = 0
+        
+        # Risultati finali
+        result = {
+            'representatives_classified': len(representatives),
+            'outliers_classified': len(outliers),
+            'propagated_count': len(propagated),
+            'total_classified': classified_count,
+            'saved_for_review': saved_for_review,
+            'classification_method': 'llm_only_primo_avvio',
+            'status': 'completed'
+        }
+        
+        print(f"\n✅ [LLM-ONLY COMPLETATO]")
+        print(f"   🏷️ Classificati: {result['total_classified']}")
+        print(f"   💾 Salvati per review: {result['saved_for_review']}")
+        print(f"   📋 Pronti per training ML futuro")
+        
+        trace_all("_classifica_llm_only_e_prepara_training_v2", "EXIT", return_value=result)
+        return result
+ 
     def create_ml_training_file(self, training_data_list: List[Dict[str, Any]]) -> str:
         """
         Crea file per addestramento ML con identificatori univoci per aggiornamenti umani.
@@ -7674,53 +6861,6 @@ class EndToEndPipeline:
             trace_all("esegui_training_supervisionato_fase1", "ERROR", 
                      error_message=error_msg, exception=str(e))
             return result
-
-    def _classify_sessions_batch_ensemble(self, session_texts: List[str], 
-                                        cluster_ids: List[int],
-                                        suggested_labels: Dict[int, str]) -> List[Dict[str, Any]]:
-        """
-        Classifica sessioni in batch usando ensemble ML+LLM
-        
-        Scopo: Classificazione batch con modello ML disponibile
-        Input: session_texts, cluster_ids, suggested_labels
-        Output: Lista risultati classificazione
-        Data ultima modifica: 2025-09-07
-        """
-        results = []
-        
-        print(f"   🔄 Classificazione ensemble per {len(session_texts)} sessioni...")
-        
-        # Usa il metodo predict_with_ensemble se disponibile
-        try:
-            for i, text in enumerate(session_texts):
-                cluster_id = cluster_ids[i]
-                
-                # Usa suggested label come baseline se disponibile
-                suggested_label = suggested_labels.get(cluster_id, 'ALTRO')
-                
-                # Classifica con ensemble
-                ensemble_result = self.ensemble_classifier.predict_with_ensemble([text])
-                
-                if ensemble_result and len(ensemble_result) > 0:
-                    classification = ensemble_result[0].get('classification', suggested_label)
-                    confidence = ensemble_result[0].get('confidence', 0.7)
-                else:
-                    # Fallback al suggested label
-                    classification = suggested_label
-                    confidence = 0.6
-                
-                results.append({
-                    'classification': classification,
-                    'confidence': confidence,
-                    'method': 'ensemble_ml_llm'
-                })
-                
-        except Exception as e:
-            print(f"   ⚠️ Errore ensemble, fallback a solo LLM: {e}")
-            # Fallback a solo LLM
-            return self._classify_sessions_batch_llm_only(session_texts, cluster_ids, suggested_labels, 0.6)
-        
-        return results
 
     def _classify_sessions_batch_llm_only(self, session_texts: List[str],
                                         cluster_ids: List[int], 

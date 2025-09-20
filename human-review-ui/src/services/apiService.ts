@@ -198,6 +198,7 @@ class ApiService {
         confidence: number;
         method: string;
         created_at: string;
+        cluster_id?: string; // 🆕 AGGIUNTO CLUSTER ID
       }>;
     }>;
     count: number;

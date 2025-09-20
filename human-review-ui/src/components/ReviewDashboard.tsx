@@ -1037,7 +1037,7 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
                                   Sessione: {(caseItem.session_id || '').substring(0, 12)}...
                                 </Typography>
                                 {/* 🆕 CLUSTER INFO */}
-                                {caseItem.cluster_id && (
+                                {(caseItem.cluster_id !== undefined && caseItem.cluster_id !== null) && (
                                   <Typography variant="body2" color="primary" fontWeight="bold">
                                     📊 CLUSTER: {caseItem.cluster_id}
                                   </Typography>

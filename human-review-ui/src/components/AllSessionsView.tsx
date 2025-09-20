@@ -433,11 +433,11 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
                         Sessione: {session.session_id.substring(0, 12)}...
                       </Typography>
                       {/* 🆕 CLUSTER INFO - RICERCA ROBUSTA */}
-                      {(session.cluster_id || (session.classifications && session.classifications.length > 0 && session.classifications.find(c => c.cluster_id)?.cluster_id)) && (
+                      {(session.cluster_id !== undefined && session.cluster_id !== null) || (session.classifications && session.classifications.length > 0 && session.classifications.find(c => c.cluster_id !== undefined && c.cluster_id !== null)?.cluster_id !== undefined) ? (
                         <Typography variant="body2" color="primary" fontWeight="bold">
-                          📊 CLUSTER: {session.cluster_id || session.classifications?.find(c => c.cluster_id)?.cluster_id}
+                          📊 CLUSTER: {session.cluster_id !== undefined && session.cluster_id !== null ? session.cluster_id : session.classifications?.find(c => c.cluster_id !== undefined && c.cluster_id !== null)?.cluster_id}
                         </Typography>
-                      )}
+                      ) : null}
                     </Box>
                     <Box display="flex" alignItems="center" gap={1}>
                       {/* Badge speciale per sessioni recentemente aggiunte */}

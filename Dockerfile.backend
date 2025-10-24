@@ -1,0 +1,86 @@
+# Docker configuration per il backend del sistema di classificazione Humanitas
+# Autore: GitHub Copilot
+# Data: 2025-09-24
+# Scopo: Containerizzazione del servizio di classificazione automatica con supporto GPU/cuML
+
+# Base image con Python 3.11 
+FROM python:3.11-slim-bullseye
+
+# Imposta variabili di ambiente per Python
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    CUDA_VISIBLE_DEVICES=0
+
+# Aggiorna sistema e installa dipendenze di sistema per ML
+RUN apt-get update && apt-get install -y \
+    # Build tools essenziali
+    build-essential \
+    gcc \
+    g++ \
+    git \
+    curl \
+    # Librerie per machine learning e processamento
+    libffi-dev \
+    libssl-dev \
+    libxml2-dev \
+    libxslt1-dev \
+    libjpeg-dev \
+    libpng-dev \
+    zlib1g-dev \
+    # Database client libraries
+    default-libmysqlclient-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Crea utente non-root per sicurezza
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+# Crea directory di lavoro
+WORKDIR /app
+
+# Copia requirements prima per sfruttare cache Docker layer
+COPY requirements.txt .
+
+# Aggiorna pip e installa dipendenze Python
+RUN python -m pip install --upgrade pip setuptools wheel && \
+    python -m pip install -r requirements.txt
+
+# Copia tutto il codice del progetto
+COPY --chown=appuser:appuser . .
+
+# Crea directory necessarie con permessi corretti
+RUN mkdir -p \
+    /app/debug_logs \
+    /app/training_logs \
+    /app/semantic_cache \
+    /app/bertopic \
+    /app/backup \
+    /app/tests && \
+    chown -R appuser:appuser /app
+
+# Esponi porta del server Flask
+EXPOSE 5000
+
+# Cambia all'utente non-root
+USER appuser
+
+# Comandi di salute per verificare servizi critici
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:5000/health || exit 1
+
+# Variabili di ambiente per la configurazione
+ENV FLASK_APP=server.py \
+    FLASK_ENV=production \
+    FLASK_DEBUG=0 \
+    PYTHONPATH=/app
+
+# Script di avvio con controlli pre-esecuzione
+COPY --chown=appuser:appuser docker-entrypoint.sh /app/
+RUN chmod +x /app/docker-entrypoint.sh
+
+# Comando di default - avvia il server Flask
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["python", "server.py"]

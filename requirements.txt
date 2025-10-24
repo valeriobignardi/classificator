@@ -13,6 +13,9 @@ mysql-connector-python>=8.0.28
 PyYAML>=5.4.1
 requests>=2.25.1
 
+# GPU Acceleration - RAPIDS cuML per HDBSCAN GPU
+cuml-cu12>=23.10.0
+
 # Environment and configuration
 python-dotenv>=1.0.0
 

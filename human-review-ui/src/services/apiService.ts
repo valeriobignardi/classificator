@@ -2,14 +2,10 @@ import axios from 'axios';
 import { ReviewCase, ReviewStats } from '../types/ReviewCase';
 import { Tenant } from '../types/Tenant';
 
-// Usa URL relativi in development con proxy, URL assoluti in production
-const API_BASE_URL = process.env.NODE_ENV === 'development' 
-  ? '/api' 
-  : 'http://localhost:5000/api';
+// Usa sempre URL relativi per passare attraverso il proxy nginx
+const API_BASE_URL = '/api';
 
-const DEV_BASE_URL = process.env.NODE_ENV === 'development' 
-  ? '' 
-  : 'http://localhost:5000';
+const DEV_BASE_URL = '';
 
 class ApiService {
   private async handleRequest<T>(request: Promise<any>): Promise<T> {
@@ -138,8 +134,9 @@ class ApiService {
     force_review?: boolean;
     max_review_cases?: number | null;
   }): Promise<any> {
+    // Instrada sempre tramite proxy /api per evitare problemi di CORS/proxy
     return this.handleRequest(
-      axios.post(`${DEV_BASE_URL}/train/supervised/${tenant}`, options || {})
+      axios.post(`${API_BASE_URL}/train/supervised/${tenant}`, options || {})
     );
   }
 
@@ -616,7 +613,9 @@ class ApiService {
       
       console.log('🧪 [DEBUG] Payload:', payload);
       
-      const response = await axios.post(url, payload);
+      const response = await axios.post(url, payload, {
+        timeout: 0, // Nessun timeout - può durare quanto necessario
+      });
       console.log('✅ [DEBUG] Test clustering completato:', response.status);
       console.log('✅ [DEBUG] Risultati clustering:', response.data);
       

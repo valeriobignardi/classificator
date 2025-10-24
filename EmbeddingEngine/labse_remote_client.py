@@ -30,7 +30,7 @@ class LaBSERemoteClient(BaseEmbedder):
     
     def __init__(self, 
                  service_url: str = "http://localhost:8081",  # Aggiornato per servizio Docker
-                 timeout: int = 300,
+                 timeout: int = 14400,  # 4 ore per batch grandi
                  max_retries: int = 3,
                  fallback_local: bool = True):
         """
@@ -38,7 +38,7 @@ class LaBSERemoteClient(BaseEmbedder):
         
         Args:
             service_url: URL del servizio embedding
-            timeout: Timeout richieste HTTP (secondi)
+            timeout: Timeout richieste HTTP (secondi) - Default 4 ore per batch grandi
             max_retries: Numero massimo tentativi
             fallback_local: Se usare LaBSEEmbedder locale come fallback
         """

@@ -1,0 +1,81 @@
+# Docker Compose configuration per il sistema di classificazione
+# Autore: GitHub Copilot  
+# Data: 2025-09-22
+# Scopo: Orchestrazione essenziale di backend e frontend
+
+networks:
+  classificatore-network:
+    driver: bridge
+    name: classificatore-classification-network
+
+volumes:
+  semantic-cache:
+    name: classificatore-semantic-cache
+  training-logs:
+    name: classificatore-training-logs
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      args:
+        - CUDA_VERSION=${CUDA_VERSION:-12.1}
+    container_name: classificatore-backend
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      PYTHONPATH: /app
+      TZ: ${TZ:-Europe/Rome}
+      FLASK_ENV: production
+      FLASK_DEBUG: "0"
+      MONGODB_URL: mongodb://localhost:27017/classificazioni
+      MYSQL_HOST: localhost
+      MYSQL_PORT: 3306
+      MYSQL_USER: ${MYSQL_USER:-taggenerator}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-zsRxiYmcVG9XX7Q3TvAT}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-TAG}
+      OLLAMA_URL: http://localhost:11434
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      NUMBA_DISABLE_JIT: "0"
+      NUMBA_CACHE_DIR: /tmp/numba_cache
+      PRELOAD_MODELS: "false"
+    volumes:
+      - semantic-cache:/app/semantic_cache
+      - training-logs:/app/training_logs
+      - ./config.yaml:/app/config.yaml:ro
+      - ./debug_logs:/app/debug_logs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 2m
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: classificatore-frontend
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      REACT_APP_BACKEND_URL: http://localhost:5000
+      REACT_APP_VERSION: ${APP_VERSION:-1.0.0}
+      TZ: ${TZ:-Europe/Rome}
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

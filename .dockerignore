@@ -1,0 +1,174 @@
+# =============================================================================
+# .dockerignore per ottimizzazione build Docker - Backend Python
+# Autore: GitHub Copilot
+# Data: 2025-09-20
+# Scopo: Escludere file non necessari dal context Docker per build più veloci
+# =============================================================================
+
+# =============================================================================
+# VERSION CONTROL & DEVELOPMENT
+# =============================================================================
+.git/
+.gitignore
+.gitattributes
+.gitmodules
+*.git*
+
+# =============================================================================
+# PYTHON DEVELOPMENT
+# =============================================================================
+
+# Bytecode e cache Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+.ENV/
+.env
+pip-selfcheck.json
+
+# PyCharm
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# VS Code
+.vscode/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# =============================================================================
+# MACHINE LEARNING & DATA
+# =============================================================================
+
+# Modelli trained (da escludere se troppo grandi)
+*.pkl
+*.joblib
+*.model
+*.h5
+*.onnx
+
+# Cache e dati temporanei
+semantic_cache/
+training_logs/
+debug_logs/
+*.log
+*.tmp
+
+# Dataset e file di esempio (per ridurre dimensioni)
+data/
+datasets/
+examples/
+samples/
+
+# =============================================================================
+# FRONTEND BUILD ARTIFACTS
+# =============================================================================
+human-review-ui/node_modules/
+human-review-ui/build/
+human-review-ui/.cache/
+human-review-ui/dist/
+
+# =============================================================================
+# DOCKER & DEPLOYMENT
+# =============================================================================
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+*.dockerfile
+
+# =============================================================================
+# DOCUMENTATION & README
+# =============================================================================
+README.md
+*.md
+docs/
+documentation/
+
+# =============================================================================
+# BACKUP & TEMPORARY FILES
+# =============================================================================
+backup/
+*.backup
+*.bak
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# =============================================================================
+# LOGS & MONITORING
+# =============================================================================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# =============================================================================
+# CONFIGURATION FILES (da valutare caso per caso)
+# =============================================================================
+# Mantieni config.yaml poiché necessario per l'applicazione
+# config.yaml
+
+# Escludi file di configurazione locale
+.env.local
+.env.development
+.env.test
+.env.production
+
+# =============================================================================
+# TEST FILES
+# =============================================================================
+tests/
+test/
+*.test.py
+*_test.py
+test_*.py
+
+# =============================================================================
+# CI/CD
+# =============================================================================
+.github/
+.gitlab-ci.yml
+.travis.yml
+.circleci/
+
+# =============================================================================
+# MISC
+# =============================================================================
+.cache/
+.npm/
+.yarn/
+node_modules/

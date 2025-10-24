@@ -1,0 +1,57 @@
+# Docker configuration per il frontend React del sistema Humanitas
+# Autore: GitHub Copilot
+# Data: 2025-09-20
+# Scopo: Containerizzazione dell'interfaccia web di revisione
+
+# Stage 1: Build dell'applicazione React/TypeScript
+FROM node:18-alpine AS build-stage
+
+# Imposta variabili di ambiente per ottimizzazione build
+ENV NODE_ENV=production \
+    DISABLE_ESLINT_PLUGIN=true \
+    GENERATE_SOURCEMAP=false \
+    CI=true
+
+# Imposta directory di lavoro
+WORKDIR /app
+
+# Copia package files per sfruttare cache Docker layer
+COPY human-review-ui/package*.json ./
+
+# Installa dipendenze Node.js
+RUN npm ci --silent && \
+    npm cache clean --force
+
+# Copia il codice sorgente dell'applicazione
+COPY human-review-ui/ .
+
+# Build dell'applicazione React per produzione
+RUN npm run build
+
+# Stage 2: Nginx per servire l'applicazione statica
+FROM nginx:alpine AS production-stage
+
+# Installa curl per health checks
+RUN apk add --no-cache curl
+
+# Copia build dell'applicazione da stage precedente
+COPY --from=build-stage /app/build /usr/share/nginx/html
+
+# Configurazione Nginx personalizzata per React SPA
+RUN rm /etc/nginx/conf.d/default.conf
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Crea directory per logs con permessi corretti
+RUN mkdir -p /var/log/nginx && \
+    touch /var/log/nginx/access.log /var/log/nginx/error.log && \
+    chown -R nginx:nginx /var/log/nginx /usr/share/nginx/html
+
+# Health check per verificare che Nginx stia servendo correttamente
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost/health || exit 1
+
+# Esponi porta 80
+EXPOSE 80
+
+# Comando di default - avvia Nginx in foreground
+CMD ["nginx", "-g", "daemon off;"]

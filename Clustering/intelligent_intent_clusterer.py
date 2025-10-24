@@ -496,7 +496,13 @@ class IntelligentIntentClusterer:
             debug_logger.removeHandler(handler)
         
         # Setup file handler per suggested_labels.log
-        log_file_path = '/home/ubuntu/classificatore/suggested_labels.log'
+        import os
+        log_dir = os.environ.get('TRAINING_LOG_DIR', '/app/training_logs')
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+        except Exception:
+            log_dir = '/tmp'
+        log_file_path = os.path.join(log_dir, 'suggested_labels.log')
         file_handler = logging.FileHandler(log_file_path, mode='a', encoding='utf-8')
         file_handler.setLevel(logging.DEBUG)
         

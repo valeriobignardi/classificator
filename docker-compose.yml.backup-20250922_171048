@@ -1,0 +1,189 @@
+# Docker Compose configuration per il sistema di classificazione
+# Autore: GitHub Copilot
+# Data: 2025-09-20
+# Scopo: Orchestrazione completa di backend, frontend, database e servizi LLM
+#
+# Servizi inclusi:
+# - Backend (Flask + ML/AI) - connesso a servizi locali
+# - Frontend (React + Nginx)
+# - Redis (cache e session management)
+#
+# Servizi esterni utilizzati (non containerizzati):
+# - MongoDB locale (porta 27017)
+# - MySQL locale (porta 3306)  
+# - Ollama locale (porta 11434)
+
+# Configurazione network per comunicazione inter-service
+networks:
+  classificatore-network:
+    driver: bridge
+    name: classificatore-classification-network
+
+# Volumi persistenti per dati critici
+volumes:
+  redis-data:
+    name: classificatore-redis-data
+  semantic-cache:
+    name: classificatore-semantic-cache
+  training-logs:
+    name: classificatore-training-logs
+
+services:
+  # ==========================================
+  # DATABASE SERVICES
+  # ==========================================
+  
+  redis:
+    image: redis:7-alpine
+    container_name: classificatore-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - classificatore-network
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ==========================================
+  # APPLICATION SERVICES
+  # ==========================================
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      args:
+        - CUDA_VERSION=${CUDA_VERSION:-12.1}
+    container_name: classificatore-backend
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      # Database configurations  
+      MONGODB_URL: mongodb://localhost:27017/classificazioni
+      MYSQL_HOST: localhost
+      MYSQL_PORT: 3306
+      MYSQL_USER: ${MYSQL_USER:-taggenerator}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-zsRxiYmcVG9XX7Q3TvAT}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-TAG}
+      
+      # Redis configuration
+      REDIS_URL: redis://localhost:${REDIS_PORT:-6380}/0
+      
+      # LLM services
+      OLLAMA_URL: http://localhost:11434
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      
+      # Flask configuration
+      FLASK_ENV: ${FLASK_ENV:-production}
+      FLASK_DEBUG: ${FLASK_DEBUG:-0}
+      
+      # Performance tuning
+      PRELOAD_MODELS: ${PRELOAD_MODELS:-false}
+      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-0}
+      
+      # Numba cache fix per ambiente Docker
+      NUMBA_CACHE_DIR: /tmp/numba_cache
+      NUMBA_DISABLE_JIT: 0
+      
+      # Custom configurations
+      PYTHONPATH: /app
+      TZ: ${TZ:-Europe/Rome}
+    volumes:
+      - semantic-cache:/app/semantic_cache
+      - training-logs:/app/training_logs
+      - ./debug_logs:/app/debug_logs
+      - ./config.yaml:/app/config.yaml:ro
+    ports:
+      - "${BACKEND_PORT:-5000}:5000"
+    # GPU support se disponibile
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: classificatore-frontend
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - REACT_APP_BACKEND_URL=http://backend:5000
+      - REACT_APP_VERSION=${APP_VERSION:-1.0.0}
+      - TZ=${TZ:-Europe/Rome}
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    networks:
+      - classificatore-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ==========================================
+  # MONITORING & MANAGEMENT (opzionali)
+  # ==========================================
+
+  # Monitoring MongoDB
+  mongo-express:
+    image: mongo-express:latest
+    container_name: classificatore-mongo-express
+    restart: unless-stopped
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGODB_USER:-admin}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGODB_PASSWORD:-humanitas2025}
+      ME_CONFIG_MONGODB_URL: mongodb://${MONGODB_USER:-admin}:${MONGODB_PASSWORD:-humanitas2025}@mongodb:27017/
+      ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_EXPRESS_USER:-admin}
+      ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_EXPRESS_PASSWORD:-humanitas2025}
+    ports:
+      - "${MONGO_EXPRESS_PORT:-8081}:8081"
+    networks:
+      - classificatore-network
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    profiles:
+      - monitoring
+
+  # Monitoring MySQL
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: classificatore-phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_USER: ${MYSQL_USER:-taggenerator}
+      PMA_PASSWORD: ${MYSQL_PASSWORD:-zsRxiYmcVG9XX7Q3TvAT}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-Valerio220693!}
+    ports:
+      - "${PHPMYADMIN_PORT:-8080}:80"
+    networks:
+      - classificatore-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+    profiles:
+      - monitoring

@@ -303,6 +303,8 @@ class HDBSCANClusterer:
         # 🔧 BUGFIX: Usa controllo esplicito per evitare sovrascrittura con default
         self.cluster_selection_method = cluster_selection_method if cluster_selection_method is not None else clustering_config.get('cluster_selection_method', 'eom')
         self.alpha = alpha if alpha is not None else clustering_config.get('alpha', 1.0)  # Controllo noise/outlier - BUGFIX
+        # 🔧 BUGFIX: Assicura che alpha sia sempre un float per HDBSCAN
+        self.alpha = float(self.alpha) if self.alpha is not None else 1.0
         self.max_cluster_size = max_cluster_size if max_cluster_size is not None else clustering_config.get('max_cluster_size', 0)  # 0 = unlimited 
         self.allow_single_cluster = allow_single_cluster if allow_single_cluster is not None else clustering_config.get('allow_single_cluster', False)
         
@@ -964,19 +966,27 @@ class HDBSCANClusterer:
             
         Ultima modifica: 26 Agosto 2025
         """
+        # Costruisci parametri dinamicamente per HDBSCAN
+        hdbscan_params = {
+            'min_cluster_size': self.min_cluster_size,
+            'min_samples': self.min_samples,
+            'cluster_selection_epsilon': self.cluster_selection_epsilon,
+            'metric': metric,
+            'cluster_selection_method': self.cluster_selection_method,
+            'allow_single_cluster': self.allow_single_cluster,
+            'alpha': self.alpha,  # Controllo noise - VALIDATO
+            'leaf_size': self.leaf_size,  # NUOVO
+            'prediction_data': True  # 🆕 ABILITATO per predizioni incrementali
+        }
+        
+        # FIX: Aggiungi max_cluster_size SOLO se > 0 (per evitare errore NoneType)
+        if self.max_cluster_size and self.max_cluster_size > 0:
+            hdbscan_params['max_cluster_size'] = self.max_cluster_size
+            
+        print(f"🔍 [HDBSCAN DEBUG] Parametri finali: alpha={hdbscan_params['alpha']}, min_cluster_size={hdbscan_params['min_cluster_size']}")
+            
         # Inizializza clusterer CPU standard
-        self.clusterer = hdbscan.HDBSCAN(
-            min_cluster_size=self.min_cluster_size,
-            min_samples=self.min_samples,
-            cluster_selection_epsilon=self.cluster_selection_epsilon,
-            metric=metric,
-            cluster_selection_method=self.cluster_selection_method,
-            allow_single_cluster=self.allow_single_cluster,
-            alpha=self.alpha,  # Controllo noise - NUOVO
-            max_cluster_size=self.max_cluster_size if (self.max_cluster_size and self.max_cluster_size > 0) else None,  # CORRETTO
-            leaf_size=self.leaf_size,  # NUOVO
-            prediction_data=True  # 🆕 ABILITATO per predizioni incrementali
-        )
+        self.clusterer = hdbscan.HDBSCAN(**hdbscan_params)
         
         cluster_labels = self.clusterer.fit_predict(embeddings_norm)
         

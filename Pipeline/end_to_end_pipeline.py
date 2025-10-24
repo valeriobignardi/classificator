@@ -3571,10 +3571,19 @@ class EndToEndPipeline:
         
         # 🔍 DEBUG: Setup logging dettagliato
         import logging
+        import os
         debug_logger = logging.getLogger('training_debug')
         debug_logger.setLevel(logging.DEBUG)
         if not debug_logger.handlers:
-            fh = logging.FileHandler('/home/ubuntu/classificatore/logging.log') # Percorso fisso per debug avanzato
+            # Usa directory di log interna al container (montata come volume)
+            log_dir = os.environ.get('TRAINING_LOG_DIR', '/app/training_logs')
+            try:
+                os.makedirs(log_dir, exist_ok=True)
+            except Exception:
+                # Fallback a directory temporanea se la creazione fallisce
+                log_dir = '/tmp'
+            log_path = os.path.join(log_dir, 'training_debug.log')
+            fh = logging.FileHandler(log_path)
             fh.setLevel(logging.DEBUG)
             formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
             fh.setFormatter(formatter)
@@ -3902,7 +3911,12 @@ class EndToEndPipeline:
         import os
         from datetime import datetime
         
-        debug_log_path = "/home/ubuntu/classificatore/rappresentanti.log"
+        log_dir = os.environ.get('TRAINING_LOG_DIR', '/app/training_logs')
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+        except Exception:
+            log_dir = '/tmp'
+        debug_log_path = os.path.join(log_dir, 'rappresentanti.log')
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         
         with open(debug_log_path, "a", encoding="utf-8") as debug_file:

@@ -86,6 +86,7 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
   const [addingToQueue, setAddingToQueue] = useState<string | null>(null);
   const [currentLimit, setCurrentLimit] = useState<number>(50);
   const [selectedLabel, setSelectedLabel] = useState<string>('all');
+  const [selectedCluster, setSelectedCluster] = useState<string>('all');
   const [recentlyAddedSessions, setRecentlyAddedSessions] = useState<Set<string>>(new Set());
   
   // Stati per classificazione completa
@@ -216,6 +217,24 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
     return Array.from(labels).sort();
   };
 
+  const getUniqueClusters = (): string[] => {
+    const clusters = new Set<string>();
+    sessions.forEach(session => {
+      // Prendi cluster_id direttamente dalla sessione
+      if (session.cluster_id !== undefined && session.cluster_id !== null) {
+        clusters.add(session.cluster_id.toString());
+      }
+      // Fallback: prendi cluster_id dalle classificazioni
+      session.classifications?.forEach(classification => {
+        if (classification.cluster_id !== undefined && classification.cluster_id !== null) {
+          clusters.add(classification.cluster_id.toString());
+        }
+      });
+    });
+    // Ordina numericamente: -1, 0, 1, 2, 3, ...
+    return Array.from(clusters).sort((a, b) => parseInt(a) - parseInt(b));
+  };
+
   const filteredSessions = sessions.filter(session => {
     // Mostra sempre le sessioni recentemente aggiunte per 3 secondi
     if (recentlyAddedSessions.has(session.session_id)) {
@@ -233,6 +252,17 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
         classification => classification.tag_name === selectedLabel
       );
       if (!hasSelectedLabel) {
+        return false;
+      }
+    }
+    
+    // Filtro per cluster
+    if (selectedCluster !== 'all') {
+      const sessionClusterId = session.cluster_id !== undefined && session.cluster_id !== null 
+        ? session.cluster_id.toString()
+        : session.classifications?.find(c => c.cluster_id !== undefined && c.cluster_id !== null)?.cluster_id?.toString();
+      
+      if (sessionClusterId !== selectedCluster) {
         return false;
       }
     }
@@ -370,6 +400,25 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
                 {getUniqueLabels().map((label) => (
                   <MenuItem key={label} value={label}>
                     {label}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+
+            {/* 🆕 Filtro Cluster */}
+            <FormControl size="small" sx={{ minWidth: 180 }}>
+              <InputLabel>Filtra per Cluster</InputLabel>
+              <Select
+                value={selectedCluster}
+                onChange={(e) => setSelectedCluster(e.target.value)}
+                label="Filtra per Cluster"
+              >
+                <MenuItem value="all">
+                  <em>Tutti i Cluster</em>
+                </MenuItem>
+                {getUniqueClusters().map((clusterId) => (
+                  <MenuItem key={clusterId} value={clusterId}>
+                    📊 Cluster {clusterId} {clusterId === '-1' ? '(Outlier)' : ''}
                   </MenuItem>
                 ))}
               </Select>

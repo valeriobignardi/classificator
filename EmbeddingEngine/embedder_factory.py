@@ -133,7 +133,7 @@ class EmbedderFactory:
             # Mappa parametri config per client remoto
             remote_config = {
                 'service_url': config.get('service_url', 'http://localhost:8081'),
-                'timeout': config.get('timeout', 300),
+                'timeout': config.get('timeout', int(os.getenv('LABSE_EMBED_TIMEOUT_SECONDS', '14400'))),
                 'max_retries': config.get('max_retries', 3),
                 'fallback_local': True  # Sempre fallback abilitato
             }
@@ -165,8 +165,8 @@ class EmbedderFactory:
             
             # Parametri default
             remote_config = {
-                'service_url': config.get('service_url', 'http://localhost:8080'),
-                'timeout': config.get('timeout', 300),
+                'service_url': config.get('service_url', 'http://localhost:8081'),
+                'timeout': config.get('timeout', int(os.getenv('LABSE_EMBED_TIMEOUT_SECONDS', '14400'))),
                 'max_retries': config.get('max_retries', 3),
                 'fallback_local': config.get('fallback_local', False)  # Solo remoto
             }
@@ -198,8 +198,8 @@ class EmbedderFactory:
             
             # Configurazione auto con fallback
             auto_config = {
-                'service_url': config.get('service_url', 'http://localhost:8080'),
-                'timeout': config.get('timeout', 300),
+                'service_url': config.get('service_url', 'http://localhost:8081'),
+                'timeout': config.get('timeout', int(os.getenv('LABSE_EMBED_TIMEOUT_SECONDS', '14400'))),
                 'max_retries': config.get('max_retries', 2),  # Meno retry per auto
                 'fallback_local': True  # Sempre abilitato per auto
             }

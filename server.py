@@ -15,6 +15,9 @@ from datetime import datetime
 import traceback
 import numpy as np
 import re
+import uuid
+import time
+from collections import defaultdict
 
 # Import della classe Tenant
 sys.path.append(os.path.join(os.path.dirname(__file__), 'Utils'))
@@ -262,6 +265,57 @@ CORS(app,
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
      allow_headers=["Content-Type", "Authorization"],
      supports_credentials=False)
+
+# ============================================================================
+# SISTEMA GESTIONE JOB ASINCRONI PER CLUSTERING TEST
+# ============================================================================
+# Job storage in-memory per tracking operazioni lunghe (clustering test)
+# Struttura: {job_id: {status, result, error, start_time, tenant_id, progress}}
+clustering_jobs = {}
+clustering_jobs_lock = threading.Lock()
+
+# TTL per pulizia automatica job completati (24 ore)
+JOB_TTL_SECONDS = 86400
+
+def cleanup_old_jobs():
+    """Rimuove job completati più vecchi di JOB_TTL_SECONDS"""
+    with clustering_jobs_lock:
+        current_time = time.time()
+        expired_jobs = [
+            job_id for job_id, job_data in clustering_jobs.items()
+            if job_data.get('status') in ['completed', 'failed'] 
+            and (current_time - job_data.get('start_time', 0)) > JOB_TTL_SECONDS
+        ]
+        for job_id in expired_jobs:
+            del clustering_jobs[job_id]
+            print(f"🧹 [JOB CLEANUP] Rimosso job scaduto: {job_id}")
+
+def get_job_status(job_id: str) -> Optional[Dict]:
+    """Recupera lo stato di un job in modo thread-safe"""
+    with clustering_jobs_lock:
+        return clustering_jobs.get(job_id)
+
+def update_job_status(job_id: str, status: str, **kwargs):
+    """Aggiorna lo stato di un job in modo thread-safe"""
+    with clustering_jobs_lock:
+        if job_id in clustering_jobs:
+            clustering_jobs[job_id]['status'] = status
+            clustering_jobs[job_id].update(kwargs)
+            print(f"📊 [JOB {job_id[:8]}] Status: {status}")
+
+def create_job(tenant_id: str) -> str:
+    """Crea un nuovo job e restituisce il job_id"""
+    job_id = str(uuid.uuid4())
+    with clustering_jobs_lock:
+        clustering_jobs[job_id] = {
+            'status': 'in_progress',
+            'tenant_id': tenant_id,
+            'start_time': time.time(),
+            'progress': 0,
+            'phase': 'initialization'
+        }
+    print(f"🆕 [JOB {job_id[:8]}] Creato per tenant: {tenant_id}")
+    return job_id
 
 # HELPER FUNCTIONS PER GESTIONE TENANT
 import re
@@ -1586,6 +1640,8 @@ def get_client_status(client_name: str):
 
 
 @app.route('/train/supervised/<client_name>', methods=['POST'])
+# Alias sotto /api per passare sempre dal proxy NGINX del frontend
+@app.route('/api/train/supervised/<client_name>', methods=['POST'])
 def supervised_training(client_name: str):
     """
     Avvia il processo di training supervisionato per un cliente
@@ -1662,6 +1718,13 @@ def supervised_training(client_name: str):
                 # È uno slug, risolvi in UUID
                 tenant = Tenant.from_slug(client_name)
                 tenant_id = tenant.tenant_id
+            # Risolvi sempre oggetto Tenant completo per avere slug coerente
+            try:
+                if 'tenant' not in locals():
+                    tenant = Tenant.from_uuid(tenant_id)
+            except Exception:
+                # Se fallisce, mantieni client_name originale come slug best-effort
+                tenant = None
             
             # Carica SOLO le soglie review queue dal database
             print(f"📊 Caricamento soglie review queue da database TAG.soglie per tenant: {tenant_id}")
@@ -1706,7 +1769,8 @@ def supervised_training(client_name: str):
             if db_result:
                 # Parametri soglie review dal database
                 confidence_threshold = float(db_result['representative_confidence_threshold'])
-                disagreement_threshold = 1.0 - float(db_result['minimum_consensus_threshold']) / 2.0
+                # FIX LOGICO: il "disagreement" è (1 - consensus), non dimezzato
+                disagreement_threshold = 1.0 - float(db_result['minimum_consensus_threshold'])
                 max_sessions = db_result['max_pending_per_batch']
                 
                 print(f"✅ Soglie review queue caricate dal database (record per tenant {tenant_id}):")
@@ -1734,9 +1798,9 @@ def supervised_training(client_name: str):
             disagreement_threshold = 0.3
             max_sessions = 300
 
-        
-        # Ottieni la pipeline per questo cliente
-        pipeline = classification_service.get_pipeline(client_name) # 
+        # Ottieni la pipeline per questo cliente (usa sempre lo slug, non l'UUID)
+        pipeline_key = (tenant.tenant_slug if tenant else client_name)
+        pipeline = classification_service.get_pipeline(pipeline_key)
         
         if not pipeline:
             return jsonify({
@@ -6607,11 +6671,73 @@ def reset_clustering_parameters(tenant_id):
         }), 500
 
 
+def _run_clustering_test_background(job_id: str, tenant: Any, custom_parameters: Optional[Dict], sample_size: Optional[int]):
+    """
+    Funzione background per eseguire test clustering in modo asincrono
+    Aggiorna lo stato del job durante l'esecuzione
+    
+    Args:
+        job_id: ID del job per tracking
+        tenant: Oggetto Tenant completo
+        custom_parameters: Parametri clustering personalizzati
+        sample_size: Numero conversazioni da testare
+    """
+    try:
+        update_job_status(job_id, 'in_progress', phase='starting', progress=5)
+        
+        # Importa il servizio di test clustering
+        import sys
+        import os
+        sys.path.append(os.path.join(os.path.dirname(__file__), 'Clustering'))
+        from clustering_test_service import ClusteringTestService
+        
+        update_job_status(job_id, 'in_progress', phase='initialization', progress=10)
+        
+        # Inizializza servizio test
+        test_service = ClusteringTestService()
+        
+        update_job_status(job_id, 'in_progress', phase='running_clustering', progress=20)
+        
+        # Esegue test clustering
+        print(f"⚡ [JOB {job_id[:8]}] Esecuzione test clustering...")
+        result = test_service.run_clustering_test(
+            tenant=tenant,
+            custom_parameters=custom_parameters,
+            sample_size=sample_size
+        )
+        
+        # Aggiunge informazioni tenant al risultato
+        if 'tenant_id' in result:
+            result['tenant_id'] = tenant.tenant_id
+            result['tenant_slug'] = tenant.tenant_slug
+            result['tenant_name'] = tenant.tenant_name
+        
+        if result['success']:
+            print(f"✅ [JOB {job_id[:8]}] Test clustering completato con successo")
+            print(f"   📊 Cluster: {result['statistics']['n_clusters']}")
+            print(f"   🔍 Outliers: {result['statistics']['n_outliers']}")
+            print(f"   ⏱️ Tempo: {result['execution_time']}s")
+            
+            # Sanifica per JSON serialization
+            sanitized_result = sanitize_for_json(result)
+            update_job_status(job_id, 'completed', result=sanitized_result, progress=100, phase='completed')
+        else:
+            print(f"❌ [JOB {job_id[:8]}] Test clustering fallito: {result.get('error', 'Unknown error')}")
+            sanitized_result = sanitize_for_json(result)
+            update_job_status(job_id, 'failed', error=result.get('error'), result=sanitized_result, progress=100, phase='failed')
+            
+    except Exception as e:
+        error_msg = f'Errore test clustering: {str(e)}'
+        print(f"❌ [JOB {job_id[:8]}] {error_msg}")
+        print(traceback.format_exc())
+        update_job_status(job_id, 'failed', error=error_msg, progress=100, phase='failed')
+
+
 @app.route('/api/clustering/<tenant_id>/test', methods=['POST'])
 def test_clustering_preview(tenant_id):
     """
-    Esegue un test di clustering HDBSCAN usando i parametri attuali del tenant
-    senza coinvolgere LLM - solo per preview e ottimizzazione parametri
+    Esegue un test di clustering HDBSCAN in modo ASINCRONO
+    Restituisce immediatamente un job_id per il polling dello stato
     
     Args:
         tenant_id: ID del tenant
@@ -6621,22 +6747,26 @@ def test_clustering_preview(tenant_id):
         - sample_size: numero conversazioni da testare (default: 1000)
         
     Returns:
-        JSON con risultati clustering test:
-        - cluster_statistics: numero cluster, outliers, dimensioni
-        - detailed_clusters: cluster con conversazioni associate  
-        - quality_metrics: metriche qualità clustering
-        - outlier_analysis: analisi outliers con raccomandazioni
+        JSON con job_id per tracking:
+        - success: true
+        - job_id: ID per polling stato
+        - status: 'in_progress'
+        - message: Descrizione operazione
+        - polling_endpoint: URL per controllare stato
         
     Autore: Sistema di Classificazione
-    Data: 2025-08-25
+    Data: 2025-10-24 - Implementazione asincrona
     """
     try:
+        # Pulizia job scaduti
+        cleanup_old_jobs()
+        
         # Carica oggetto tenant completo usando la classe Tenant
         from Utils.tenant import Tenant
         
         try:
             # Carica tenant completo dall'UUID
-            tenant = Tenant.from_uuid(tenant_id)  # Metodo corretto
+            tenant = Tenant.from_uuid(tenant_id)
             if not tenant:
                 raise ValueError(f"Tenant con ID {tenant_id} non trovato")
                 
@@ -6650,17 +6780,10 @@ def test_clustering_preview(tenant_id):
                 'details': str(e)
             }), 404
         
-        # Importa il servizio di test clustering
-        import sys
-        import os
-        sys.path.append(os.path.join(os.path.dirname(__file__), 'Clustering'))
-        from clustering_test_service import ClusteringTestService
-        
         # PROTEZIONE: Verifica se è una chiamata accidentale durante cambio LLM
         request_data = request.get_json() or {}
         source_context = request_data.get('source_context', None)
         
-        # Se la chiamata arriva dal contesto LLM, blocca
         if source_context == 'llm_change' or 'llm' in str(request_data).lower():
             print(f"🚫 [API] BLOCCATO test clustering accidentale durante cambio LLM per tenant: {tenant_id}")
             return jsonify({
@@ -6669,7 +6792,7 @@ def test_clustering_preview(tenant_id):
                 'blocked_reason': 'llm_change_protection'
             }), 400
         
-        print(f"🧪 [API] Test clustering richiesto per tenant: {tenant.tenant_slug} ({tenant.tenant_name})")
+        print(f"🧪 [API] Test clustering ASINCRONO richiesto per tenant: {tenant.tenant_slug} ({tenant.tenant_name})")
         
         # Parse parametri dalla richiesta
         custom_parameters = request_data.get('parameters', None)
@@ -6680,53 +6803,116 @@ def test_clustering_preview(tenant_id):
         if sample_size:
             print(f"📊 [API] Sample size richiesto: {sample_size}")
         
-        # Inizializza servizio test
-        test_service = ClusteringTestService()
+        # Crea job e avvia background thread
+        job_id = create_job(tenant_id)
         
-        # Esegue test clustering PASSANDO L'OGGETTO TENANT COMPLETO
-        print(f"⚡ [API] Avvio test clustering...")
-        result = test_service.run_clustering_test(
-            tenant=tenant,  # 🎯 PASSA L'OGGETTO TENANT COMPLETO
-            custom_parameters=custom_parameters,
-            sample_size=sample_size
+        # Avvia clustering in background
+        thread = threading.Thread(
+            target=_run_clustering_test_background,
+            args=(job_id, tenant, custom_parameters, sample_size),
+            daemon=True
         )
+        thread.start()
         
-        # Aggiunge informazioni tenant al risultato per il frontend
-        if 'tenant_id' in result:
-            result['tenant_id'] = tenant.tenant_id  # UUID originale
-            result['tenant_slug'] = tenant.tenant_slug  # Slug
-            result['tenant_name'] = tenant.tenant_name  # Nome
+        print(f"🚀 [API] Test clustering avviato in background - Job ID: {job_id[:8]}...")
         
-        if result['success']:
-            print(f"✅ [API] Test clustering completato con successo")
-            print(f"   📊 Cluster: {result['statistics']['n_clusters']}")
-            print(f"   🔍 Outliers: {result['statistics']['n_outliers']}")
-            print(f"   ⏱️ Tempo: {result['execution_time']}s")
+        # Restituisci immediatamente il job_id
+        return jsonify({
+            'success': True,
+            'job_id': job_id,
+            'status': 'in_progress',
+            'message': 'Test clustering avviato in background',
+            'tenant_id': tenant_id,
+            'tenant_name': tenant.tenant_name,
+            'polling_endpoint': f'/api/clustering/{tenant_id}/job/{job_id}',
+            'estimated_time_minutes': 20  # Stima basata su performance osservate
+        }), 202  # 202 Accepted
             
-            # Sanifica per JSON serialization (risolve numpy.int64 errors)
-            sanitized_result = sanitize_for_json(result)
-            return jsonify(sanitized_result), 200
-        else:
-            print(f"❌ [API] Test clustering fallito: {result.get('error', 'Unknown error')}")
-            # Sanifica anche gli errori
-            sanitized_result = sanitize_for_json(result)
-            return jsonify(sanitized_result), 400
-            
-    except ImportError as ie:
-        error_msg = f'Errore importazione ClusteringTestService: {str(ie)}'
+    except Exception as e:
+        error_msg = f'Errore avvio test clustering: {str(e)}'
         print(f"❌ [API] {error_msg}")
+        print(traceback.format_exc())
         return jsonify({
             'success': False,
             'error': error_msg,
             'tenant_id': tenant_id
         }), 500
+
+
+@app.route('/api/clustering/<tenant_id>/job/<job_id>', methods=['GET'])
+def get_clustering_job_status_endpoint(tenant_id, job_id):
+    """
+    Endpoint per polling dello stato di un job di clustering test
+    
+    Args:
+        tenant_id: ID del tenant
+        job_id: ID del job da controllare
         
+    Returns:
+        JSON con stato job:
+        - success: true/false
+        - status: 'in_progress' | 'completed' | 'failed'
+        - progress: percentuale completamento (0-100)
+        - phase: fase corrente (es. 'initialization', 'running_clustering')
+        - result: risultati (solo se completed)
+        - error: messaggio errore (solo se failed)
+        
+    Autore: Sistema di Classificazione
+    Data: 2025-10-24
+    """
+    try:
+        job_data = get_job_status(job_id)
+        
+        if not job_data:
+            return jsonify({
+                'success': False,
+                'error': f'Job {job_id} non trovato. Potrebbe essere scaduto o non esistere.',
+                'tenant_id': tenant_id
+            }), 404
+        
+        # Verifica che il job appartenga al tenant
+        if job_data.get('tenant_id') != tenant_id:
+            return jsonify({
+                'success': False,
+                'error': 'Job non appartiene al tenant specificato',
+                'tenant_id': tenant_id
+            }), 403
+        
+        status = job_data.get('status')
+        response = {
+            'success': True,
+            'job_id': job_id,
+            'status': status,
+            'progress': job_data.get('progress', 0),
+            'phase': job_data.get('phase', 'unknown'),
+            'tenant_id': tenant_id
+        }
+        
+        if status == 'completed':
+            response['result'] = job_data.get('result')
+            elapsed_time = time.time() - job_data.get('start_time', 0)
+            response['elapsed_time_seconds'] = int(elapsed_time)
+            return jsonify(response), 200
+            
+        elif status == 'failed':
+            response['error'] = job_data.get('error', 'Unknown error')
+            elapsed_time = time.time() - job_data.get('start_time', 0)
+            response['elapsed_time_seconds'] = int(elapsed_time)
+            return jsonify(response), 200
+            
+        else:  # in_progress
+            elapsed_time = time.time() - job_data.get('start_time', 0)
+            response['elapsed_time_seconds'] = int(elapsed_time)
+            response['estimated_remaining_minutes'] = max(0, 20 - int(elapsed_time / 60))
+            return jsonify(response), 200
+            
     except Exception as e:
-        error_msg = f'Errore test clustering: {str(e)}'
+        error_msg = f'Errore recupero stato job: {str(e)}'
         print(f"❌ [API] {error_msg}")
         return jsonify({
             'success': False,
             'error': error_msg,
+            'job_id': job_id,
             'tenant_id': tenant_id
         }), 500
 

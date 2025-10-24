@@ -77,6 +77,8 @@ class SimpleEmbeddingManager:
         self._initialized = True
         
         print(f"🎯 SimpleEmbeddingManager inizializzato")
+        # Timeout embedding configurabile via ENV (default 4 ore)
+        self._embed_timeout = int(os.getenv('LABSE_EMBED_TIMEOUT_SECONDS', '14400'))
     
     def get_embedder_for_tenant(self, tenant: 'Tenant') -> BaseEmbedder:
         """
@@ -212,7 +214,7 @@ class SimpleEmbeddingManager:
                 # Configura client per servizio Docker (porta 8081)
                 remote_client = LaBSERemoteClient(
                     service_url="http://localhost:8081",
-                    timeout=300,
+                    timeout=self._embed_timeout,
                     max_retries=3,
                     fallback_local=False  # 🚫 NESSUN FALLBACK LOCALE
                 )
@@ -261,7 +263,7 @@ class SimpleEmbeddingManager:
             
             remote_client = LaBSERemoteClient(
                 service_url="http://localhost:8081",
-                timeout=300,
+                timeout=self._embed_timeout,
                 max_retries=2,  # Meno retry per fallback
                 fallback_local=False  # 🚫 NESSUN FALLBACK LOCALE
             )

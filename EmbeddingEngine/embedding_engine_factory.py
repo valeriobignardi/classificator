@@ -195,9 +195,10 @@ class EmbeddingEngineFactory:
                 from labse_remote_client import LaBSERemoteClient
                 
                 # Configura client remoto (ignora config locale per ora)
+                default_timeout = int(os.getenv('LABSE_EMBED_TIMEOUT_SECONDS', '14400'))
                 embedder = LaBSERemoteClient(
                     service_url="http://localhost:8081",
-                    timeout=config.get('timeout', 300),
+                    timeout=config.get('timeout', default_timeout),
                     max_retries=config.get('max_retries', 3),
                     fallback_local=config.get('fallback_local', True)
                 )

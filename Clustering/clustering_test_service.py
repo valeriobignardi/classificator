@@ -634,6 +634,16 @@ class ClusteringTestService:
             
             # 5. Esegue clustering HDBSCAN
             print(f"🔗 Avvio clustering HDBSCAN...")
+            
+            # 🔍 DEBUG: Controlla valore alpha prima di passarlo
+            alpha_value = clustering_config.get('alpha', 1.0)
+            print(f"🔍 [DEBUG ALPHA] Valore alpha ricevuto: {alpha_value} (tipo: {type(alpha_value)})")
+            
+            # Validazione alpha prima di passarlo al clusterer
+            if not isinstance(alpha_value, (int, float)) or alpha_value <= 0:
+                print(f"⚠️  [ALPHA FIX] Alpha non valido: {alpha_value}, uso default 1.0")
+                alpha_value = 1.0
+            
             try:
                 # 🆕 Includere parametri UMAP dal clustering config
                 clusterer = HDBSCANClusterer(
@@ -643,7 +653,7 @@ class ClusteringTestService:
                     metric=clustering_config.get('metric', 'cosine'),
                     # Parametri HDBSCAN avanzati
                     cluster_selection_method=clustering_config.get('cluster_selection_method', 'eom'),
-                    alpha=clustering_config.get('alpha', 1.0),
+                    alpha=alpha_value,  # USA ALPHA VALIDATO
                     max_cluster_size=clustering_config.get('max_cluster_size', 0),
                     allow_single_cluster=clustering_config.get('allow_single_cluster', False),
                     

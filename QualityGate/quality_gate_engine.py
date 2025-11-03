@@ -1343,13 +1343,16 @@ class QualityGateEngine:
             # Usa embedder dinamico condiviso
             embedder = self._get_dynamic_embedder()
             
-            # Trova il modello più recente
+            # Trova il modello più recente - supporta sia slug che name per compatibilità
             model_files = []
             models_dir = os.path.join(os.path.dirname(self.training_log_path), 'models')
             
             if os.path.exists(models_dir):
                 for f in os.listdir(models_dir):
-                    if f.startswith(f'{self.tenant_name}_classifier_') and f.endswith('_ml_ensemble.pkl'):
+                    # 🔧 FIX: Cerca sia con tenant_slug che con tenant_name (retrocompatibilità)
+                    if ((f.startswith(f'{self.tenant.tenant_slug}_classifier_') or 
+                         f.startswith(f'{self.tenant_name}_classifier_')) and 
+                        f.endswith('_ml_ensemble.pkl')):
                         model_files.append(os.path.join(models_dir, f))
             
             if not model_files:
@@ -1381,12 +1384,22 @@ class QualityGateEngine:
             classifier = self._create_ensemble_classifier_with_correct_mistral_mode()
             classifier.ml_ensemble = ml_ensemble
             
-            # Riallena con tutti i dati
-            training_result = classifier.train_ml_ensemble(X_combined, y_combined)
+            # Riallena con tutti i dati con validazione out-of-sample
+            try:
+                training_result = classifier.train_ml_ensemble_with_validation(
+                    X_combined, y_combined
+                )
+            except Exception as e:
+                self.logger.warning(
+                    f"Validazione non disponibile ({e}), fallback training diretto"
+                )
+                training_result = classifier.train_ml_ensemble(
+                    X_combined, y_combined
+                )
             
-            # 5. Salva il modello aggiornato
+            # 5. Salva il modello aggiornato con tenant_slug (nuovo standard)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            new_model_path = os.path.join(models_dir, f'{self.tenant_name}_classifier_{timestamp}_ml_ensemble.pkl')
+            new_model_path = os.path.join(models_dir, f'{self.tenant.tenant_slug}_classifier_{timestamp}_ml_ensemble.pkl')
             
             # Backup del modello precedente
             backup_path = latest_model + '.backup'
@@ -1404,6 +1417,7 @@ class QualityGateEngine:
                 'new_samples': len(X_new),
                 'classes': list(classifier.ml_ensemble.classes_),
                 'training_accuracy': training_result.get('training_accuracy', 0.0),
+                'validation_metrics': training_result.get('validation_metrics', {}),
                 'previous_model': os.path.basename(latest_model),
                 'retraining_trigger': 'automatic_human_feedback'
             }
@@ -1454,14 +1468,20 @@ class QualityGateEngine:
             from Classification.advanced_ensemble_classifier import AdvancedEnsembleClassifier
             
             classifier = self._create_ensemble_classifier_with_correct_mistral_mode()
-            training_result = classifier.train_ml_ensemble(X, y)
+            try:
+                training_result = classifier.train_ml_ensemble_with_validation(X, y)
+            except Exception as e:
+                self.logger.warning(
+                    f"Validazione non disponibile ({e}), fallback training diretto"
+                )
+                training_result = classifier.train_ml_ensemble(X, y)
             
-            # Salva il nuovo modello
+            # Salva il nuovo modello con tenant_slug (nuovo standard)
             models_dir = os.path.join(os.path.dirname(self.training_log_path), 'models')
             os.makedirs(models_dir, exist_ok=True)
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            model_path = os.path.join(models_dir, f'{self.tenant_name}_classifier_{timestamp}_ml_ensemble.pkl')
+            model_path = os.path.join(models_dir, f'{self.tenant.tenant_slug}_classifier_{timestamp}_ml_ensemble.pkl')
             
             import joblib
             joblib.dump(classifier.ml_ensemble, model_path)
@@ -1473,6 +1493,7 @@ class QualityGateEngine:
                 'training_samples': len(X),
                 'classes': list(classifier.ml_ensemble.classes_),
                 'training_accuracy': training_result.get('training_accuracy', 0.0),
+                'validation_metrics': training_result.get('validation_metrics', {}),
                 'created_from': 'human_feedback_only'
             }
             
@@ -1776,13 +1797,16 @@ class QualityGateEngine:
             self.logger.info(f"Parametri: batch_size={batch_size}, min_confidence={min_confidence}")
             self.logger.info(f"Modalità richiesta: {analyze_all_or_new_only}")
 
-            # Controlla se esiste un modello ML per questo cliente
+            # Controlla se esiste un modello ML per questo cliente - supporta slug e name
             models_dir = os.path.join(os.path.dirname(self.training_log_path), 'models')
             model_files = []
             
             if os.path.exists(models_dir):
                 for f in os.listdir(models_dir):
-                    if f.startswith(f'{self.tenant_name}_classifier_') and f.endswith('_ml_ensemble.pkl'):
+                    # 🔧 FIX: Cerca sia con tenant_slug che con tenant_name (retrocompatibilità)
+                    if ((f.startswith(f'{self.tenant.tenant_slug}_classifier_') or 
+                         f.startswith(f'{self.tenant_name}_classifier_')) and 
+                        f.endswith('_ml_ensemble.pkl')):
                         model_files.append(os.path.join(models_dir, f))
             
             has_ml_model = len(model_files) > 0

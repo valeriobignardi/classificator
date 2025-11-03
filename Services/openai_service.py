@@ -438,6 +438,240 @@ class OpenAIService:
                 return response
     
     
+    async def responses_completion(
+        self,
+        model: str,
+        input_data: Union[str, List[Dict[str, Any]]],
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Effettua chiamata GPT-5 Responses API con controllo parallelismo
+        
+        NOTA: GPT-5 usa una nuova API 'responses' invece di 'chat/completions':
+        - NON supporta: temperature, top_p, frequency_penalty, presence_penalty, max_tokens, tools, tool_choice
+        - Supporta SOLO: model, input
+        - Usa 'input' invece di 'messages'
+        - Ritorna 'output_text' invece di 'choices[0].message.content'
+        
+        Args:
+            model: Nome modello (deve essere 'gpt-5')
+            input_data: Input per il modello - può essere:
+                       - stringa semplice
+                       - lista di dict con role/content (convertita internamente)
+            **kwargs: Altri parametri (verranno filtrati, GPT-5 accetta solo model+input)
+            
+        Returns:
+            Risposta API OpenAI con output_text generato
+            
+    Data ultima modifica: 2025-10-25 - Fix: rimosso max_tokens (non supportato)
+        """
+        # Genera chiave cache
+        cache_key = self._generate_cache_key(model, input_data)
+        
+        # Controlla cache
+        cached_response = self._get_cached_response(cache_key)
+        if cached_response:
+            return cached_response
+        
+        # Controllo rate limiting
+        while not self._check_rate_limit():
+            print("⏳ [OpenAIService] Rate limit raggiunto, attendo...")
+            await asyncio.sleep(1.0)
+        
+        # Acquisci semaforo per controllo concorrenza
+        async with self.semaphore:
+            # Converti input se è una lista di messaggi (formato chat)
+            if isinstance(input_data, list):
+                # Converti da formato messages a formato input per GPT-5
+                input_text = self._convert_messages_to_input(input_data)
+            else:
+                input_text = input_data
+            
+            payload = {
+                'model': model,
+                'input': input_text,
+            }
+
+            # Mappa max_tokens -> max_output_tokens se presente
+            if 'max_tokens' in kwargs and kwargs['max_tokens'] is not None:
+                payload['max_output_tokens'] = kwargs.pop('max_tokens')
+
+            # Aggiungi tools e tool_choice se forniti
+            tools = kwargs.pop('tools', None)
+            tool_choice = kwargs.pop('tool_choice', None)
+            if tools:
+                payload['tools'] = tools
+            if tool_choice:
+                payload['tool_choice'] = tool_choice
+
+            # Aggiungi altri kwargs ammessi senza imporre parametri obsoleti
+            # Nota: per tua richiesta, possiamo ignorare temperature esplicitamente
+            allowed_passthrough = ['top_p', 'reasoning', 'metadata', 'prompt_cache_key',
+                                   'previous_response_id', 'conversation', 'background',
+                                   'service_tier', 'user', 'text']
+            for k in list(kwargs.keys()):
+                if k in allowed_passthrough and kwargs[k] is not None:
+                    payload[k] = kwargs.pop(k)
+            
+            # 🆕 GPT-5: Rimuovi TUTTI i parametri non supportati
+            # GPT-5 API 'responses' supporta SOLO: model, input
+            unsupported_params = ['temperature', 'frequency_penalty', 'presence_penalty',
+                                   'max_tokens', 'max_completion_tokens']
+            for param in unsupported_params:
+                payload.pop(param, None)
+            
+            # Effettua chiamata con sessione HTTP ottimizzata
+            connector = aiohttp.TCPConnector(limit=self.max_parallel_calls)
+            timeout = aiohttp.ClientTimeout(total=60)
+            
+            async with aiohttp.ClientSession(
+                connector=connector, 
+                timeout=timeout
+            ) as session:
+                response = await self._make_api_call(
+                    session, 
+                    'responses',  # Nuovo endpoint per GPT-5
+                    payload
+                )
+                
+                # Normalizza la risposta Responses API aggiungendo 'output_text' se assente
+                try:
+                    if isinstance(response, dict) and 'output_text' not in response:
+                        text_parts: List[str] = []
+
+                        # Preferisci il campo 'output' standard della Responses API
+                        output = response.get('output')
+                        if isinstance(output, list):
+                            for item in output:
+                                # Ogni item può essere un messaggio con 'content'
+                                content = item.get('content') if isinstance(item, dict) else None
+                                if isinstance(content, list):
+                                    for block in content:
+                                        if isinstance(block, dict):
+                                            # Formati possibili: {'type': 'text', 'text': {'value': '...'}}
+                                            # oppure {'type': 'output_text', 'text': {'value': '...'}}
+                                            text_obj = block.get('text')
+                                            if isinstance(text_obj, dict):
+                                                val = text_obj.get('value')
+                                                if isinstance(val, str):
+                                                    text_parts.append(val)
+                                            elif isinstance(text_obj, str):
+                                                text_parts.append(text_obj)
+                                            # Fallback: alcuni SDK espongono direttamente 'value'
+                                            elif 'value' in block and isinstance(block.get('value'), str):
+                                                text_parts.append(block.get('value'))
+
+                        # Alcune varianti possono mettere direttamente 'content' in root
+                        if not text_parts:
+                            root_content = response.get('content')
+                            if isinstance(root_content, list):
+                                for block in root_content:
+                                    if isinstance(block, dict):
+                                        text_obj = block.get('text')
+                                        if isinstance(text_obj, dict) and isinstance(text_obj.get('value'), str):
+                                            text_parts.append(text_obj['value'])
+                                        elif isinstance(text_obj, str):
+                                            text_parts.append(text_obj)
+
+                        normalized_text = ''.join(text_parts).strip()
+                        # Imposta sempre il campo per semplificare i chiamanti
+                        response['output_text'] = normalized_text
+                except Exception as _normalize_err:
+                    # Non bloccare la risposta in caso di formati inattesi
+                    print(f"⚠️ [OpenAIService] Impossibile normalizzare Responses API: {_normalize_err}")
+
+                # Cache la risposta
+                self._cache_response(cache_key, response)
+                
+                return response
+
+
+    def extract_responses_tool_calls(self, response: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Estrae function tool calls da una risposta della Responses API.
+
+        Args:
+            response: Dizionario risposta (Responses API)
+
+        Returns:
+            Lista di dict con struttura {"function": {"name": str, "arguments": str}}
+
+        Data ultima modifica: 2025-10-25
+        """
+        tool_calls: List[Dict[str, Any]] = []
+        try:
+            output_items = response.get('output')
+            if not isinstance(output_items, list):
+                return tool_calls
+
+            for item in output_items:
+                if not isinstance(item, dict):
+                    continue
+                item_type = item.get('type', '')
+
+                # Varianti possibili: 'function_call', 'response_function_tool_call', 'tool_call'
+                if item_type in ('function_call', 'response_function_tool_call', 'tool_call'):
+                    name = item.get('name') or item.get('function', {}).get('name')
+                    arguments = item.get('arguments') or item.get('function', {}).get('arguments')
+                    if name and arguments is not None:
+                        tool_calls.append({
+                            'function': {
+                                'name': name,
+                                'arguments': arguments
+                            }
+                        })
+
+                # Alcuni modelli possono annidare in 'content' la chiamata tool
+                content = item.get('content')
+                if isinstance(content, list):
+                    for block in content:
+                        if not isinstance(block, dict):
+                            continue
+                        btype = block.get('type', '')
+                        if btype in ('function_call', 'response_function_tool_call', 'tool_call'):
+                            name = block.get('name') or block.get('function', {}).get('name')
+                            arguments = block.get('arguments') or block.get('function', {}).get('arguments')
+                            if name and arguments is not None:
+                                tool_calls.append({
+                                    'function': {
+                                        'name': name,
+                                        'arguments': arguments
+                                    }
+                                })
+        except Exception as e:
+            print(f"⚠️ [OpenAIService] Errore estrazione tool calls (Responses): {e}")
+        return tool_calls
+    
+    
+    def _convert_messages_to_input(self, messages: List[Dict[str, str]]) -> str:
+        """
+        Converte formato messages (chat) in formato input per GPT-5
+        
+        Args:
+            messages: Lista di dict con 'role' e 'content'
+            
+        Returns:
+            Stringa formattata per GPT-5
+            
+        Data ultima modifica: 2025-10-25
+        """
+        # Converti messaggi in formato leggibile per GPT-5
+        input_parts = []
+        for msg in messages:
+            role = msg.get('role', 'user')
+            content = msg.get('content', '')
+            
+            # Formatta in base al ruolo
+            if role == 'system':
+                input_parts.append(f"<|system|>\n{content}")
+            elif role == 'user':
+                input_parts.append(f"<|user|>\n{content}")
+            elif role == 'assistant':
+                input_parts.append(f"<|assistant|>\n{content}")
+        
+        return "\n\n".join(input_parts)
+    
+    
     async def batch_chat_completions(
         self,
         requests: List[Dict[str, Any]],

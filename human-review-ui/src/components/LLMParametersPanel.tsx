@@ -338,89 +338,108 @@ const LLMParametersPanel: React.FC<LLMParametersPanelProps> = ({
             </div>
           </div>
 
-          <div className="param-control">
-            <label>
-              Temperature: <strong>{(parameters.generation?.temperature || 0.1).toFixed(2)}</strong>
-              <span className="param-desc">(Creatività: 0=rigido, 2=creativo)</span>
-            </label>
-            <input
-              type="range"
-              min="0"
-              max="2"
-              step="0.01"
-              value={parameters.generation?.temperature || 0.1}
-              onChange={(e) => updateParameter('generation', 'temperature', parseFloat(e.target.value))}
-              disabled={disabled}
-              className="slider"
-            />
-            <div className="range-labels">
-              <span>0.0</span>
-              <span>2.0</span>
+          {/* 🆕 Nasconde temperature per GPT-5 (non supportato) */}
+          {selectedModel?.name?.toLowerCase() !== 'gpt-5' && (
+            <div className="param-control">
+              <label>
+                Temperature: <strong>{(parameters.generation?.temperature || 0.1).toFixed(2)}</strong>
+                <span className="param-desc">(Creatività: 0=rigido, 2=creativo)</span>
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="2"
+                step="0.01"
+                value={parameters.generation?.temperature || 0.1}
+                onChange={(e) => updateParameter('generation', 'temperature', parseFloat(e.target.value))}
+                disabled={disabled}
+                className="slider"
+              />
+              <div className="range-labels">
+                <span>0.0</span>
+                <span>2.0</span>
+              </div>
             </div>
-          </div>
+          )}
+          
+          {/* 🆕 Mostra avviso GPT-5 */}
+          {selectedModel?.name?.toLowerCase() === 'gpt-5' && (
+            <div className="info-box" style={{ marginTop: '10px', padding: '12px', backgroundColor: '#e3f2fd', borderLeft: '4px solid #2196f3', borderRadius: '4px' }}>
+              <strong>ℹ️ GPT-5:</strong> Questo modello non supporta temperature, top_p, top_k e repeat_penalty. I parametri vengono gestiti automaticamente dall'API.
+            </div>
+          )}
 
-          <div className="param-control">
-            <label>
-              Top K: <strong>{parameters.generation?.top_k}</strong>
-              <span className="param-desc">(Token considerati)</span>
-            </label>
-            <input
-              type="range"
-              min="1"
-              max="100"
-              step="1"
-              value={parameters.generation?.top_k || 40}
-              onChange={(e) => updateParameter('generation', 'top_k', parseInt(e.target.value))}
-              disabled={disabled}
-              className="slider"
-            />
-            <div className="range-labels">
-              <span>1</span>
-              <span>100</span>
+          {/* 🆕 Nasconde top_k per GPT-5 */}
+          {selectedModel?.name?.toLowerCase() !== 'gpt-5' && (
+            <div className="param-control">
+              <label>
+                Top K: <strong>{parameters.generation?.top_k}</strong>
+                <span className="param-desc">(Token considerati)</span>
+              </label>
+              <input
+                type="range"
+                min="1"
+                max="100"
+                step="1"
+                value={parameters.generation?.top_k || 40}
+                onChange={(e) => updateParameter('generation', 'top_k', parseInt(e.target.value))}
+                disabled={disabled}
+                className="slider"
+              />
+              <div className="range-labels">
+                <span>1</span>
+                <span>100</span>
+              </div>
             </div>
-          </div>
+          )}
 
-          <div className="param-control">
-            <label>
-              Top P: <strong>{(parameters.generation?.top_p || 0.9).toFixed(2)}</strong>
-              <span className="param-desc">(Soglia probabilità cumulativa)</span>
-            </label>
-            <input
-              type="range"
-              min="0.1"
-              max="1"
-              step="0.01"
-              value={parameters.generation?.top_p || 0.9}
-              onChange={(e) => updateParameter('generation', 'top_p', parseFloat(e.target.value))}
-              disabled={disabled}
-              className="slider"
-            />
-            <div className="range-labels">
-              <span>0.1</span>
-              <span>1.0</span>
+          {/* 🆕 Nasconde top_p per GPT-5 */}
+          {selectedModel?.name?.toLowerCase() !== 'gpt-5' && (
+            <div className="param-control">
+              <label>
+                Top P: <strong>{(parameters.generation?.top_p || 0.9).toFixed(2)}</strong>
+                <span className="param-desc">(Soglia probabilità cumulativa)</span>
+              </label>
+              <input
+                type="range"
+                min="0.1"
+                max="1"
+                step="0.01"
+                value={parameters.generation?.top_p || 0.9}
+                onChange={(e) => updateParameter('generation', 'top_p', parseFloat(e.target.value))}
+                disabled={disabled}
+                className="slider"
+              />
+              <div className="range-labels">
+                <span>0.1</span>
+                <span>1.0</span>
+              </div>
             </div>
-          </div>
+          )}
 
-          <div className="param-control">
-            <label>
-              Repeat Penalty: <strong>{(parameters.generation?.repeat_penalty || 1.1).toFixed(2)}</strong>
-              <span className="param-desc">(Penalità ripetizione)</span>
-            </label>
-            <input
-              type="range"
-              min="0.8"
-              max="1.5"
-              step="0.01"
-              value={parameters.generation?.repeat_penalty || 1.1}
-              onChange={(e) => updateParameter('generation', 'repeat_penalty', parseFloat(e.target.value))}
-              disabled={disabled}
-              className="slider"
-            />
-            <div className="range-labels">
-              <span>0.8</span>
-              <span>1.5</span>
+          {/* 🆕 Nasconde repeat_penalty per GPT-5 */}
+          {selectedModel?.name?.toLowerCase() !== 'gpt-5' && (
+            <div className="param-control">
+              <label>
+                Repeat Penalty: <strong>{(parameters.generation?.repeat_penalty || 1.1).toFixed(2)}</strong>
+                <span className="param-desc">(Penalità ripetizione)</span>
+              </label>
+              <input
+                type="range"
+                min="0.8"
+                max="1.5"
+                step="0.01"
+                value={parameters.generation?.repeat_penalty || 1.1}
+                onChange={(e) => updateParameter('generation', 'repeat_penalty', parseFloat(e.target.value))}
+                disabled={disabled}
+                className="slider"
+              />
+              <div className="range-labels">
+                <span>0.8</span>
+                <span>1.5</span>
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         {/* Sezione Connection */}

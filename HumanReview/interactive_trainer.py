@@ -208,12 +208,13 @@ class InteractiveTrainer:
         
         return final_label, human_confidence
     
-    def handle_altro_classification(self, conversation_text: str, force_human_decision: bool = False) -> Tuple[str, float, Dict[str, Any]]:
+    def handle_altro_classification(self, conversation_text: str, conversation_id: Optional[str] = None, force_human_decision: bool = False) -> Tuple[str, float, Dict[str, Any]]:
         """
-        Gestisce una classificazione "ALTRO" con validazione incrociata LLM + BERTopic
+        Gestisce una classificazione "ALTRO" con validazione semantica embedding-based
         
         Args:
             conversation_text: Testo della conversazione classificata come "altro"
+            conversation_id: ID della conversazione (opzionale, per tracking)
             force_human_decision: Se True, forza la decisione umana
             
         Returns:
@@ -228,12 +229,23 @@ class InteractiveTrainer:
             print(f"🏷️  VALERIO - VALIDAZIONE CLASSIFICAZIONE 'ALTRO'")
             print("🔍" * 80)
             
-            # Esegui validazione con LLM + BERTopic + Similarità
+            # 🔧 FIX: Prima chiama LLM per ottenere raw response con suggerimento tag
+            print(f"📡 Chiamata LLM per ottenere suggerimento tag...")
+            llm_result = self.llm_classifier.classify_conversation(conversation_text)
+            
+            # Estrai raw response (motivazione completa del LLM con tag suggerito)
+            if hasattr(llm_result, 'motivation'):
+                llm_raw_response = llm_result.motivation
+            elif isinstance(llm_result, dict):
+                llm_raw_response = llm_result.get('reasoning', llm_result.get('motivation', ''))
+            else:
+                llm_raw_response = str(llm_result)
+            
+            # 🔧 FIX: Chiama validator con signature corretta (conversation_id, llm_raw_response, conversation_data)
             validation_result = self.altro_validator.validate_altro_classification(
-                conversation_text=conversation_text,
-                llm_classifier=self.llm_classifier,
-                bertopic_model=self.bertopic_model,
-                force_human_decision=force_human_decision
+                conversation_id=conversation_id or "unknown",
+                llm_raw_response=llm_raw_response,
+                conversation_data={"text": conversation_text}
             )
             
             print(f"\n📊 RISULTATO VALIDAZIONE:")
@@ -246,16 +258,17 @@ class InteractiveTrainer:
                 if validation_result.matched_existing_tag:
                     print(f"   Tag simile trovato: '{validation_result.matched_existing_tag}'")
             
-            if validation_result.bertopic_suggestion:
-                print(f"   Suggerimento BERTopic: '{validation_result.bertopic_suggestion}'")
+            if validation_result.llm_suggested_tag:
+                print(f"   Tag suggerito da LLM: '{validation_result.llm_suggested_tag}'")
             
             # Se dobbiamo aggiungere nuovo tag, fallo immediatamente
             if validation_result.should_add_new_tag:
                 print(f"\n➕ AGGIUNGENDO NUOVO TAG: '{validation_result.final_tag}'")
                 
-                success = self.altro_validator.add_new_tag_immediately(
-                    validation_result.final_tag,
-                    validation_result.confidence
+                # 🔧 FIX: Usa add_new_tag_to_database con signature corretta (new_tag, conversation_id)
+                success = self.altro_validator.add_new_tag_to_database(
+                    new_tag=validation_result.final_tag,
+                    conversation_id=conversation_id or "unknown"
                 )
                 
                 if success:
@@ -271,12 +284,11 @@ class InteractiveTrainer:
                 print(f"\n👤 REVIEW UMANA NECESSARIA")
                 print(f"   Motivo: {validation_result.validation_path}")
                 
-                if validation_result.bertopic_suggestion:
-                    print(f"   BERTopic suggerisce: '{validation_result.bertopic_suggestion}'")
+                if validation_result.llm_suggested_tag:
+                    print(f"   Tag suggerito da LLM: '{validation_result.llm_suggested_tag}'")
                 
-                if validation_result.llm_raw_response:
-                    print(f"   LLM raw response (primi 200 char):")
-                    print(f"   {validation_result.llm_raw_response[:200]}...")
+                if validation_result.matched_existing_tag:
+                    print(f"   Tag simile esistente: '{validation_result.matched_existing_tag}'")
                 
                 # Chiedi decisione umana
                 final_tag = self._get_human_decision_for_altro(validation_result)
@@ -288,7 +300,7 @@ class InteractiveTrainer:
                 "validation_path": validation_result.validation_path,
                 "similarity_score": validation_result.similarity_score,
                 "matched_existing_tag": validation_result.matched_existing_tag,
-                "bertopic_suggestion": validation_result.bertopic_suggestion,
+                "llm_suggested_tag": validation_result.llm_suggested_tag,
                 "should_add_new_tag": validation_result.should_add_new_tag,
                 "needs_human_review": validation_result.needs_human_review
             }
@@ -314,12 +326,13 @@ class InteractiveTrainer:
         
         option_counter = 2
         
-        if validation_result.bertopic_suggestion and validation_result.bertopic_suggestion != "sconosciuto":
-            print(f"   [{option_counter}] 🤖 Usa suggerimento BERTopic: '{validation_result.bertopic_suggestion}'")
-            bertopic_option = option_counter
+        # 🔧 FIX: Usa llm_suggested_tag invece di bertopic_suggestion (campo rimosso)
+        if validation_result.llm_suggested_tag and validation_result.llm_suggested_tag.upper() != "ALTRO":
+            print(f"   [{option_counter}] 🤖 Usa suggerimento LLM: '{validation_result.llm_suggested_tag}'")
+            llm_option = option_counter
             option_counter += 1
         else:
-            bertopic_option = None
+            llm_option = None
         
         if validation_result.matched_existing_tag:
             print(f"   [{option_counter}] 🎯 Usa tag simile esistente: '{validation_result.matched_existing_tag}'")
@@ -338,16 +351,18 @@ class InteractiveTrainer:
                 
                 if choice_int == 1:
                     return "altro"
-                elif bertopic_option and choice_int == bertopic_option:
-                    return validation_result.bertopic_suggestion
+                elif llm_option and choice_int == llm_option:
+                    return validation_result.llm_suggested_tag
                 elif similar_option and choice_int == similar_option:
                     return validation_result.matched_existing_tag
                 elif choice_int == custom_option:
                     while True:
                         new_tag = input("Inserisci nuovo tag: ").strip().lower()
                         if new_tag and new_tag != "altro":
-                            # Aggiungi immediatamente il nuovo tag
-                            if self.altro_validator.add_new_tag_immediately(new_tag, 0.9):
+                            # 🔧 FIX: Usa add_new_tag_to_database con signature corretta (new_tag, conversation_id)
+                            # Usa validation_result per ottenere conversation_id se disponibile, altrimenti "manual_input"
+                            conv_id = getattr(validation_result, 'conversation_id', 'manual_input')
+                            if self.altro_validator.add_new_tag_to_database(new_tag, conv_id):
                                 print(f"✅ Nuovo tag '{new_tag}' aggiunto")
                                 return new_tag
                             else:

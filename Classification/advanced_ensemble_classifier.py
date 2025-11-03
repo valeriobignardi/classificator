@@ -23,6 +23,12 @@ from sklearn.ensemble import VotingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import (
+    f1_score,
+    balanced_accuracy_score,
+    accuracy_score,
+)
 import joblib
 
 # Import della funzione centralizzata per conversione NumPy
@@ -422,6 +428,112 @@ class AdvancedEnsembleClassifier:
         print(f"   🎯 Algoritmi: Random Forest + SVM + Logistic Regression")
         
         return training_result
+
+    def train_ml_ensemble_with_validation(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        validation_split: float = 0.2,
+        random_state: int = 42,
+        class_weight_balanced: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Allena l'ensemble ML con split di validazione e metriche out-of-sample.
+
+        Scopo:
+        - Eseguire uno split stratificato train/val
+        - Allenare su train e valutare su val (accuracy, f1-macro, balanced acc)
+        - Rifare fit su tutti i dati (X, y) per il modello finale
+
+        Parametri:
+        - X: features (embeddings)
+        - y: etichette
+        - validation_split: percentuale per validazione (default 0.2)
+        - random_state: seed riproducibile
+        - class_weight_balanced: se True, usa pesi bilanciati
+
+        Ritorna:
+        - Dict con training_accuracy e validation_metrics
+        """
+        # Verifica dati sufficienti e classi > 1
+        unique_labels = np.unique(y)
+        if len(unique_labels) < 2 or len(y) < 5:
+            print("⚠️ Dataset troppo piccolo per validazione, fallback training diretto")
+            return self.train_ml_ensemble(X, y)
+
+        # Controlla che ogni classe abbia almeno 2 esempi per stratify
+        try:
+            from collections import Counter
+            counts = Counter(y)
+            if any(c < 2 for c in counts.values()):
+                print("⚠️ Alcune classi hanno <2 esempi: no stratify, fallback")
+                return self.train_ml_ensemble(X, y)
+        except Exception:
+            # In caso di problemi con Counter su tipi numpy
+            return self.train_ml_ensemble(X, y)
+
+        # Costruisci stimatori con class_weight se richiesto
+        if class_weight_balanced:
+            rf = RandomForestClassifier(
+                n_estimators=100, random_state=42, class_weight="balanced"
+            )
+            svm = SVC(
+                probability=True, random_state=42, class_weight="balanced"
+            )
+            lr = LogisticRegression(
+                random_state=42, max_iter=1000, class_weight="balanced"
+            )
+        else:
+            rf = self.ml_classifiers['random_forest']
+            svm = self.ml_classifiers['svm']
+            lr = self.ml_classifiers['logistic_regression']
+
+        # Split train/val stratificato
+        X_tr, X_val, y_tr, y_val = train_test_split(
+            X, y, test_size=validation_split, random_state=random_state,
+            stratify=y
+        )
+
+        # Allena ensemble su train
+        ensemble = VotingClassifier(
+            estimators=[('rf', rf), ('svm', svm), ('lr', lr)], voting='soft'
+        )
+        ensemble.fit(X_tr, y_tr)
+
+        # Metriche out-of-sample
+        y_val_pred = ensemble.predict(X_val)
+        val_acc = accuracy_score(y_val, y_val_pred)
+        val_f1_macro = f1_score(y_val, y_val_pred, average='macro')
+        val_bal_acc = balanced_accuracy_score(y_val, y_val_pred)
+
+        # Training accuracy su train
+        train_acc = ensemble.score(X_tr, y_tr)
+
+        # Rifit finale su TUTTI i dati per produzione
+        ensemble.fit(X, y)
+        self.ml_ensemble = ensemble
+
+        result = {
+            'training_accuracy': float(train_acc),
+            'n_samples': int(len(X)),
+            'n_features': int(X.shape[1]),
+            'n_classes': int(len(unique_labels)),
+            'validation_metrics': {
+                'accuracy': float(val_acc),
+                'f1_macro': float(val_f1_macro),
+                'balanced_accuracy': float(val_bal_acc),
+                'val_size': int(len(y_val))
+            },
+            'class_weight_balanced': bool(class_weight_balanced)
+        }
+
+        print("✅ ML ensemble training+validation completato")
+        print(f"   📊 Train acc: {train_acc:.3f}")
+        print(
+            f"   📈 Val acc: {val_acc:.3f} | F1-macro: {val_f1_macro:.3f} | "
+            f"Balanced acc: {val_bal_acc:.3f}"
+        )
+        return result
     
     def prepare_enhanced_training_data(self, texts: List[str], labels: List[str], 
                                      tag_descriptions: Optional[Dict[str, str]] = None) -> List[str]:

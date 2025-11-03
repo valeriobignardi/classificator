@@ -467,29 +467,37 @@ class LLMConfigurationService:
             if 'generation' in parameters:
                 generation = parameters['generation']
                 
-                # Temperature
+                # 🆕 GPT-5: Ignora parametri non supportati
+                is_gpt5 = model_name and model_name.lower() == 'gpt-5'
+                if is_gpt5:
+                    unsupported_params = ['temperature', 'top_p', 'top_k', 'repeat_penalty']
+                    for param in unsupported_params:
+                        if param in generation:
+                            warnings.append(f"⚠️ GPT-5: parametro '{param}' non supportato, verrà ignorato")
+                
+                # Temperature (skip per GPT-5)
                 temp = generation.get('temperature')
-                if temp is not None:
+                if temp is not None and not is_gpt5:
                     if not isinstance(temp, (int, float)) or temp < 0.0 or temp > 2.0:
                         errors.append("temperature deve essere tra 0.0 e 2.0")
                     elif temp > 1.5:
                         warnings.append(f"temperature ({temp}) molto alta, potrebbe generare risposte incoerenti")
                 
-                # Top K
+                # Top K (skip per GPT-5)
                 top_k = generation.get('top_k')
-                if top_k is not None:
+                if top_k is not None and not is_gpt5:
                     if not isinstance(top_k, int) or top_k < 1 or top_k > 100:
                         errors.append("top_k deve essere tra 1 e 100")
                 
-                # Top P
+                # Top P (skip per GPT-5)
                 top_p = generation.get('top_p')
-                if top_p is not None:
+                if top_p is not None and not is_gpt5:
                     if not isinstance(top_p, (int, float)) or top_p < 0.1 or top_p > 1.0:
                         errors.append("top_p deve essere tra 0.1 e 1.0")
                 
-                # Repeat Penalty
+                # Repeat Penalty (skip per GPT-5)
                 repeat_penalty = generation.get('repeat_penalty')
-                if repeat_penalty is not None:
+                if repeat_penalty is not None and not is_gpt5:
                     if not isinstance(repeat_penalty, (int, float)) or repeat_penalty < 0.8 or repeat_penalty > 1.5:
                         errors.append("repeat_penalty deve essere tra 0.8 e 1.5")
                 

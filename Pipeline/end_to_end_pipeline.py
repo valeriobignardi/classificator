@@ -1036,6 +1036,13 @@ class EndToEndPipeline:
             print(f"   📊 Embeddings shape: {embeddings.shape}")
             print(f"   🎯 Addestramento su TUTTO il dataset per features ottimali")
             
+            print(f"   🔍 DEBUG PARAMETRI BERTOPIC:")
+            print(f"      📊 use_svd: {self.bertopic_config.get('use_svd', False)}")
+            print(f"      📊 svd_components: {self.bertopic_config.get('svd_components', 32)}")
+            print(f"      📊 hdbscan_params: {self.bertopic_hdbscan_params}")
+            print(f"      📊 umap_params: {self.bertopic_umap_params}")
+            print(f"      📊 embedder type: {type(self.embedder)}")
+            
             bertopic_provider = BERTopicFeatureProvider(
                 use_svd=self.bertopic_config.get('use_svd', False),
                 svd_components=self.bertopic_config.get('svd_components', 32),
@@ -1314,6 +1321,68 @@ class EndToEndPipeline:
             print(f"   ⚠️ BERTopic provider non disponibile, proseguo con sole embeddings")
         
         print(f"\n📊 [FASE 2.3: ESECUZIONE CLUSTERING (HDBSCAN/INTELLIGENT)]")
+        # 🧩 INIEZIONE BERTOPIC NELL'ENSEMBLE (se disponibile) + CACHE FEATURES
+        try:
+            if self._bertopic_provider_trained is not None and hasattr(self, 'ensemble_classifier') and self.ensemble_classifier:
+                print(f"\n🔗 [BERTOPIC → ENSEMBLE] Inietto il provider BERTopic nell'ensemble classifier…")
+                self.ensemble_classifier.set_bertopic_provider(
+                    self._bertopic_provider_trained,
+                    top_k=self.bertopic_config.get('top_k', 15),
+                    return_one_hot=self.bertopic_config.get('return_one_hot', False)
+                )
+                print(f"✅ BERTopic collegato all'ensemble: features di topic disponibili in predizione")
+
+                # 🏗️ Crea cache locale delle ML features (embeddings + topic features) per evitare ricalcoli
+                try:
+                    print(f"⚙️  [BERTOPIC CACHE] Pre-calcolo features ML (embeddings + topic) per {len(testi)} testi…")
+                    tr_cache = self._bertopic_provider_trained.transform(
+                        testi,
+                        embeddings=embeddings,
+                        return_one_hot=self.bertopic_config.get('return_one_hot', False),
+                        top_k=self.bertopic_config.get('top_k', None)
+                    )
+                    parts = [embeddings]
+                    if tr_cache.get('topic_probas') is not None:
+                        parts.append(tr_cache['topic_probas'])
+                    if tr_cache.get('one_hot') is not None:
+                        parts.append(tr_cache['one_hot'])
+                    ml_features_aug = np.concatenate([p for p in parts if p is not None], axis=1)
+                    self._create_ml_features_cache(session_ids, testi, ml_features_aug)
+                    print(f"✅ [BERTOPIC CACHE] Cache ML pronta: shape features {ml_features_aug.shape}")
+                except Exception as cache_e:
+                    print(f"⚠️ [BERTOPIC CACHE] Impossibile creare la cache ML: {cache_e}")
+
+                # 💾 Persistenza opzionale del provider BERTopic allineata all'ultimo modello ML
+                try:
+                    if self.bertopic_config.get('persist_after_training', False):
+                        import glob
+                        models_dir = "models"
+                        subdir = self.bertopic_config.get('model_subdir', 'bertopic')
+                        pattern_slug = os.path.join(models_dir, f"{self.tenant_slug}_*_config.json")
+                        pattern_name = os.path.join(models_dir, f"{self.tenant.tenant_name}_*_config.json")
+                        config_files = list(dict.fromkeys(glob.glob(pattern_slug) + glob.glob(pattern_name)))
+                        if config_files:
+                            config_files.sort()
+                            latest_config = config_files[-1]
+                            model_base_name = latest_config.replace("_config.json", "")
+                            provider_dir = f"{model_base_name}_{subdir}"
+                        else:
+                            # Fallback: directory tenant-specifica temporanea
+                            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            provider_dir = os.path.join(models_dir, f"{self.tenant_slug}_bertopic_{ts}")
+
+                        print(f"💾 [BERTOPIC SAVE] Salvataggio provider in: {provider_dir}")
+                        os.makedirs(provider_dir, exist_ok=True)
+                        self._bertopic_provider_trained.save(provider_dir)
+                        print(f"✅ [BERTOPIC SAVE] Provider salvato con successo")
+                    else:
+                        print(f"ℹ️  [BERTOPIC SAVE] Persistenza disattivata (bertopic.persist_after_training=False)")
+                except Exception as save_e:
+                    print(f"⚠️ [BERTOPIC SAVE] Errore nel salvataggio del provider: {save_e}")
+            else:
+                print(f"ℹ️  [BERTOPIC → ENSEMBLE] Provider non disponibile o ensemble assente: skip iniezione")
+        except Exception as wiring_e:
+            print(f"⚠️ [BERTOPIC → ENSEMBLE] Errore durante l'iniezione o la cache: {wiring_e}")
         
         # Carica configurazione clustering
         with open(self.clusterer.config_path, 'r', encoding='utf-8') as file:
@@ -2503,9 +2572,12 @@ class EndToEndPipeline:
                             hasattr(self.interactive_trainer, 'handle_altro_classification')):
                             
                             try:
+                                # 🔧 FIX SIGNATURE: handle_altro_classification accetta (conversation_text, conversation_id, force_human_decision)
+                                # Passaggio conversation_id per tracking nel validator
                                 validated_label, validated_confidence, validation_info = \
                                     self.interactive_trainer.handle_altro_classification(
-                                        doc.testo_completo, doc.session_id, confidence
+                                        conversation_text=doc.testo_completo,
+                                        conversation_id=doc.session_id
                                     )
                                 
                                 if validated_label and validated_label.lower() != 'altro':
@@ -4778,7 +4850,8 @@ class EndToEndPipeline:
     
     def _try_load_latest_model(self):
         """
-        Prova a caricare il modello ML più recente specifico per il tenant corrente
+        Prova a caricare il modello ML più recente specifico per il tenant corrente.
+        Supporta sia tenant_slug (minuscolo) che tenant_name (capitalizzato) per retrocompatibilità.
         """
         try:
             import os
@@ -4788,12 +4861,19 @@ class EndToEndPipeline:
                 print("⚠️ Directory models/ non trovata, nessun modello da caricare")
                 return
             
-            # Cerca modelli specifici per questo tenant
-            tenant_pattern = os.path.join(models_dir, f"{self.tenant_slug}_*_config.json")
-            config_files = glob.glob(tenant_pattern)
+            # 🔧 FIX: Cerca modelli con entrambi i pattern (slug minuscolo E name capitalizzato)
+            # Pattern 1: tenant_slug (es. "humanitas_*")
+            pattern_slug = os.path.join(models_dir, f"{self.tenant_slug}_*_config.json")
+            # Pattern 2: tenant_name capitalizzato (es. "Humanitas_*")
+            pattern_name = os.path.join(models_dir, f"{self.tenant.tenant_name}_*_config.json")
+            
+            config_files = glob.glob(pattern_slug) + glob.glob(pattern_name)
+            
+            # Rimuovi duplicati mantenendo l'ordine
+            config_files = list(dict.fromkeys(config_files))
             
             if not config_files:
-                print(f"⚠️ Nessun modello trovato per tenant '{self.tenant_slug}' nella directory models/")
+                print(f"⚠️ Nessun modello trovato per tenant '{self.tenant_slug}' (o '{self.tenant.tenant_name}') nella directory models/")
                 print(f"🚀 ATTIVAZIONE AUTO-TRAINING: Tentativo di addestramento automatico...")
                 
                 # Verifica se auto-training è possibile
@@ -4803,7 +4883,8 @@ class EndToEndPipeline:
                     if auto_training_result:
                         print(f"✅ Auto-training completato con successo!")
                         # Ri-tenta il caricamento del modello appena creato
-                        config_files = glob.glob(tenant_pattern)
+                        config_files = glob.glob(pattern_slug) + glob.glob(pattern_name)
+                        config_files = list(dict.fromkeys(config_files))
                         if config_files:
                             print(f"🔄 Ricaricamento modello auto-addestrato...")
                             # Continua con il normale flusso di caricamento
@@ -6154,39 +6235,50 @@ class EndToEndPipeline:
  
     def create_ml_training_file(self, training_data_list: List[Dict[str, Any]]) -> str:
         """
-        Crea file per addestramento ML con identificatori univoci per aggiornamenti umani.
+        Crea file per addestramento ML con embeddings e identificatori univoci.
         
         FASE 1.5: Creazione file training per future correzioni umane
         
-        Scopo della funzione: Creare file ML training con ID univoci per update
-        Parametri di input: training_data_list con dati di classificazione
+        CRITICO: Include embeddings vettoriali necessari per i 3 motori ML
+        (RandomForest, SVM, LogisticRegression) che richiedono X_train numerico.
+        
+        Scopo della funzione: Creare file ML training completo per scikit-learn
+        Parametri di input: training_data_list con classificazioni + embeddings
         Parametri di output: path del file di training creato
         Valori di ritorno: path del file training creato
-        Tracciamento aggiornamenti: 2025-09-07 - Valerio Bignardi - Nuovo per flusso FASE 1.5
+        Tracciamento aggiornamenti: 2025-11-03 - Fix embedding inclusion
         
         FLUSSO:
         1. Crea file JSON con struttura training-ready
         2. Ogni record ha unique_id per permettere update da review umana
-        3. Include conversation_text, predicted_label, confidence, cluster_info
-        4. File sarà aggiornato quando utente corregge etichette
+        3. Include conversation_text, predicted_label, confidence, EMBEDDING
+        4. Embeddings necessari per X_train degli algoritmi ML
+        5. File sarà aggiornato quando utente corregge etichette
         
         Args:
-            training_data_list: Lista di dict con dati classificazione
+            training_data_list: Lista di dict con:
+                - session_id: ID sessione
+                - text: Testo conversazione
+                - predicted_label: Etichetta predetta (per y_train)
+                - confidence: Confidenza predizione
+                - embedding: np.ndarray o list - vettore numerico (per X_train)
+                - cluster_id, is_representative, needs_review
             
         Returns:
             str: Path del file di training creato
             
         Autore: Valerio Bignardi  
-        Data: 2025-09-07
+        Data: 2025-11-03
         """
         trace_all("create_ml_training_file", "ENTER", data_count=len(training_data_list))
         
         import json
         import os
+        import numpy as np
         from datetime import datetime
         
         try:
-            print(f"📁 [TRAINING FILE] Creazione file training per ML...")
+            print(f"📁 [TRAINING FILE] Creazione file training con embeddings...")
             print(f"   📊 Records da salvare: {len(training_data_list)}")
             
             # Crea directory se non esiste
@@ -6206,33 +6298,63 @@ class EndToEndPipeline:
                     'tenant_slug': tenant_slug,
                     'tenant_name': self.tenant.tenant_name if self.tenant else "Unknown",
                     'total_records': len(training_data_list),
-                    'source': 'llm_only_primo_avvio',
-                    'confidence_forced': 0.5,
+                    'source': 'supervised_training_phase1',
+                    'has_embeddings': True,
+                    'embedding_model': getattr(self.embedder, 'model_name', 'unknown'),
                     'needs_human_review': True,
-                    'version': '1.0'
+                    'version': '2.0',
+                    'ml_ready': True,
+                    'format': 'X_train (embeddings) + y_train (labels)'
                 },
                 'training_records': []
             }
             
+            # Conta record con/senza embeddings
+            with_embeddings = 0
+            without_embeddings = 0
+            
             # Processa ogni record
             for i, data in enumerate(training_data_list):
+                # Estrai embedding e converti in lista
+                embedding = data.get('embedding')
+                embedding_list = None
+                
+                if embedding is not None:
+                    if isinstance(embedding, np.ndarray):
+                        embedding_list = embedding.tolist()
+                    elif isinstance(embedding, list):
+                        embedding_list = embedding
+                    else:
+                        print(f"   ⚠️ Record {i}: embedding tipo sconosciuto {type(embedding)}")
+                
+                if embedding_list is not None:
+                    with_embeddings += 1
+                else:
+                    without_embeddings += 1
+                
                 training_record = {
-                    'unique_id': f"{tenant_slug}_{timestamp}_{i:06d}",  # ID univoco per update
+                    'unique_id': f"{tenant_slug}_{timestamp}_{i:06d}",
                     'session_id': data.get('session_id'),
                     'conversation_text': data.get('text', ''),
-                    'predicted_label': data.get('llm_label'),
-                    'confidence': data.get('llm_confidence', 0.5),
+                    'predicted_label': data.get('predicted_label'),
+                    'confidence': data.get('confidence', 0.5),
+                    'embedding': embedding_list,
                     'cluster_id': data.get('cluster_id', -1),
                     'is_representative': data.get('is_representative', False),
-                    'human_reviewed': False,  # Sarà aggiornato dopo review
-                    'human_corrected_label': None,  # Sarà popolato da review umana
+                    'is_outlier': data.get('is_outlier', False),
+                    'human_reviewed': False,
+                    'human_corrected_label': None,
                     'needs_review': data.get('needs_review', True),
-                    'embeddings_included': True,  # Embeddings salvati separatamente
                     'created_at': datetime.now().isoformat(),
                     'last_updated': None
                 }
                 
                 training_file_data['training_records'].append(training_record)
+            
+            # Aggiorna metadata con statistiche embeddings
+            training_file_data['metadata']['records_with_embeddings'] = with_embeddings
+            training_file_data['metadata']['records_without_embeddings'] = without_embeddings
+            training_file_data['metadata']['embedding_coverage'] = (with_embeddings / len(training_data_list) * 100) if training_data_list else 0
             
             # Salva file JSON
             with open(filepath, 'w', encoding='utf-8') as f:
@@ -6240,9 +6362,12 @@ class EndToEndPipeline:
             
             print(f"   ✅ File training creato: {filepath}")
             print(f"   📊 Records salvati: {len(training_file_data['training_records'])}")
+            print(f"   🧮 Con embeddings: {with_embeddings}/{len(training_data_list)}")
             print(f"   🔑 ID univoci generati per future correzioni umane")
+            print(f"   🤖 Pronto per training ML (X_train + y_train)")
             
-            trace_all("create_ml_training_file", "EXIT", filepath=filepath)
+            trace_all("create_ml_training_file", "EXIT", filepath=filepath, 
+                     embeddings_coverage=training_file_data['metadata']['embedding_coverage'])
             return filepath
             
         except Exception as e:
@@ -6659,7 +6784,41 @@ class EndToEndPipeline:
             review_queue_count = classification_results.get('review_queue_count', 0)
             saved_count = classification_results.get('saved_count', 0)
             
-            # 6. RISULTATO FINALE
+            # 6. ESPORTAZIONE JSON CON EMBEDDINGS PER ML TRAINING
+            print(f"\n📁 [FASE 1] Creazione file JSON training...")
+            
+            # Prepara training data list con embeddings
+            training_data_for_json = []
+            for doc in documenti:
+                # Verifica che il documento sia stato classificato
+                if doc.predicted_label:
+                    training_record = {
+                        'session_id': doc.session_id,
+                        'text': doc.testo_completo,
+                        'predicted_label': doc.predicted_label,
+                        'confidence': doc.confidence,
+                        'embedding': doc.embedding,
+                        'cluster_id': doc.cluster_id,
+                        'is_representative': doc.is_representative,
+                        'is_outlier': doc.is_outlier,
+                        'needs_review': doc.needs_review
+                    }
+                    training_data_for_json.append(training_record)
+            
+            # Crea file JSON con embeddings
+            json_filepath = None
+            if training_data_for_json:
+                try:
+                    json_filepath = self.create_ml_training_file(training_data_for_json)
+                    print(f"   ✅ File JSON creato: {json_filepath}")
+                except Exception as json_error:
+                    print(f"   ⚠️ Errore creazione JSON: {json_error}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                print(f"   ⚠️ Nessun record con classificazione valida per JSON")
+            
+            # 7. RISULTATO FINALE
             elapsed_time = time.time() - start_time
             
             result = {
@@ -6668,6 +6827,7 @@ class EndToEndPipeline:
                 'total_classified': total_classified,
                 'review_queue_populated': review_queue_count,
                 'saved_count': saved_count,
+                'training_json_file': json_filepath,
                 'ml_model_available': ml_model_available,
                 'classification_method': classification_method,
                 'cluster_stats': {
@@ -6681,175 +6841,11 @@ class EndToEndPipeline:
             print(f"\n✅ [FASE 1] Completata con successo!")
             print(f"   📊 Sessioni classificate: {total_classified}")
             print(f"   📋 In review queue: {review_queue_count}")
-            print(f"   💾 Salvate: {saved_count}")
+            print(f"   💾 Salvate in MongoDB: {saved_count}")
+            print(f"   📁 File training JSON: {json_filepath or 'Non creato'}")
             print(f"   🤖 Metodo: {classification_method}")
             print(f"   ⏱️ Tempo elaborazione: {elapsed_time:.2f}s")
-            print(f"   🎯 Pronto per review umana (Fase 2)")
-            
-            trace_all("esegui_training_supervisionato_fase1", "EXIT", return_value=result)
-            return result
-            
-            # 4. SALVA TUTTO IN MONGODB
-            print(f"\n💾 [FASE 1] Salvataggio classificazioni in MongoDB...")
-            
-            mongo_reader = self._get_mongo_reader()
-            
-            for i, session_id in enumerate(session_ids):
-                session_data = sessioni[session_id]
-                cluster_id = session_cluster_ids[i]
-                classification_result = batch_results[i]
-                
-                # Determina se va in review queue
-                confidence = classification_result.get('confidence', base_confidence)
-                classification = classification_result.get('classification', 'ALTRO')
-                
-                # Logica review queue:
-                # - Primo avvio (ML non disponibile): TUTTO in review
-                # - Rappresentanti con bassa confidenza: in review
-                # - Outlier con bassa confidenza: in review
-                needs_review = False
-                if not ml_model_available:
-                    needs_review = True  # Primo avvio - tutto in review
-                elif cluster_id == -1:
-                    needs_review = True  # Outlier sempre in review
-                elif cluster_id in representatives and confidence < 0.7:
-                    needs_review = True  # Rappresentanti con bassa confidenza
-                
-                if needs_review:
-                    review_queue_count += 1
-                
-                # Prepara record per MongoDB
-                classification_record = {
-                    'session_id': session_id,
-                    'conversation_text': session_data.get('conversation_text', ''),
-                    'classification': classification,
-                    'confidence': confidence,
-                    'cluster_id': cluster_id,
-                    'is_representative': cluster_id in representatives and session_id in [r['session_id'] for r in representatives[cluster_id]],
-                    'is_outlier': cluster_id == -1,
-                    'review_status': 'pending' if needs_review else 'auto_approved',
-                    'classification_method': classification_method,
-                    'timestamp': datetime.now(),
-                    'tenant_id': self.tenant.tenant_id,
-                    'tenant_name': self.tenant.tenant_name,
-                    'metadata': {
-                        'clustering_algorithm': 'hdbscan',
-                        'embedding_model': getattr(self.embedder, 'model_name', 'unknown'),
-                        'llm_model': getattr(self.ensemble_classifier, 'llm_model', 'unknown'),
-                        'ml_model_available': ml_model_available
-                    }
-                }
-                
-                classifications.append(classification_record)
-            
-            # Salvataggio batch in MongoDB
-            print(f"   📊 Salvando {len(classifications)} classificazioni...")
-            try:
-                # 🔧 FIX: Usa save_classification_result() invece del metodo inesistente save_classification()
-                saved_count = 0
-                for record in classifications:
-                    session_id = record['session_id']
-                    
-                    # Prepara final_decision nel formato corretto
-                    final_decision = {
-                        'predicted_label': record['classification'],
-                        'confidence': record['confidence'],
-                        'method': record['classification_method'],
-                        'reasoning': f"Training supervisionato fase 1 - {record['classification_method']}"
-                    }
-                    
-                    # Prepara cluster_metadata nel formato corretto
-                    cluster_metadata = {
-                        'cluster_id': record['cluster_id'],
-                        'cluster_size': len(sessioni) if record['cluster_id'] != -1 else 1,  # Approssimazione
-                        'is_representative': record['is_representative'],
-                        'is_outlier': record['is_outlier'],
-                        'selection_reason': 'training_supervisionato' if record['is_representative'] else None,
-                        'propagated_from': None,
-                        'propagation_consensus': None,
-                        'propagation_reason': None
-                    }
-                    
-                    # 🚀 FIX REVIEW QUEUE: Usa logica DocumentoProcessing invece di review_status MongoDB
-                    from Models.documento_processing import DocumentoProcessing
-                    
-                    # Crea oggetto DocumentoProcessing per valutazione needs_review
-                    documento_temp = DocumentoProcessing(
-                        session_id=session_id,
-                        testo_completo=record['conversation_text'],
-                        is_representative=record['is_representative'],
-                        is_outlier=record['is_outlier'],
-                        is_propagated=False  # Questi sono documenti originali, non propagati
-                    )
-                    
-                    # Imposta classificazione e valuta needs_review automaticamente
-                    documento_temp.set_classification_result(
-                        predicted_label=final_decision['predicted_label'],
-                        confidence=final_decision['confidence'],
-                        method=final_decision['method'],
-                        reasoning=final_decision.get('reasoning', '')
-                    )
-                    
-                    # Usa la logica corretta per needs_review
-                    needs_review = documento_temp.needs_review
-                    review_reason = documento_temp.review_reason or ('primo_avvio' if not ml_model_available else 'confidence_bassa' if needs_review else 'pipeline_processing')
-                    classified_by = 'training_supervisionato_fase1'
-                    
-                    # Ottieni embedding se disponibile (dalle sessioni originali)
-                    embedding = None
-                    if session_id in sessioni:
-                        session_data = sessioni[session_id]
-                        embedding = session_data.get('embedding', None)
-                    
-                    # 🔧 FIX: Usa il metodo CORRETTO save_classification_result()
-                    success = mongo_reader.save_classification_result(
-                        session_id=session_id,
-                        client_name=self.tenant.tenant_slug,
-                        final_decision=final_decision,
-                        conversation_text=record['conversation_text'],
-                        needs_review=needs_review,
-                        review_reason=review_reason,
-                        classified_by=classified_by,
-                        notes=f"Training supervisionato fase 1 - cluster_id: {record['cluster_id']}",
-                        cluster_metadata=cluster_metadata,
-                        embedding=embedding
-                    )
-                    
-                    if success:
-                        saved_count += 1
-                    else:
-                        print(f"   ⚠️ Errore salvataggio session {session_id}")
-                
-                print(f"   ✅ Salvate {saved_count}/{len(classifications)} classificazioni in MongoDB")
-                
-            except Exception as save_error:
-                print(f"   ❌ Errore salvataggio MongoDB: {save_error}")
-                raise
-            
-            # 5. STATISTICHE FINALI
-            elapsed_time = time.time() - start_time
-            
-            result = {
-                'success': True,
-                'total_sessions': total_sessions,
-                'total_classified': len(classifications),
-                'review_queue_populated': review_queue_count,
-                'ml_model_available': ml_model_available,
-                'classification_method': classification_method,
-                'cluster_stats': {
-                    'valid_clusters': n_clusters,
-                    'outliers': n_outliers,
-                    'cluster_percentage': ((total_sessions - n_outliers) / total_sessions * 100) if total_sessions > 0 else 0
-                },
-                'processing_time': elapsed_time
-            }
-            
-            print(f"\n✅ [FASE 1] Completata con successo!")
-            print(f"   📊 Sessioni classificate: {len(classifications)}")
-            print(f"   📋 In review queue: {review_queue_count}")
-            print(f"   🤖 Metodo: {classification_method}")
-            print(f"   ⏱️ Tempo elaborazione: {elapsed_time:.2f}s")
-            print(f"   🎯 Pronto per review umana (Fase 2)")
+            print(f"   🎯 Pronto per review umana (Fase 2) e ML training (Fase 3)")
             
             trace_all("esegui_training_supervisionato_fase1", "EXIT", return_value=result)
             return result

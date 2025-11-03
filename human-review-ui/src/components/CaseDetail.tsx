@@ -154,9 +154,9 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
         </Alert>
       )}
 
-      <Box display="flex" gap={3}>
+      <Box display="flex" gap={3} sx={{ overflow: 'hidden' }}>
         {/* Case Information */}
-        <Box flex={2}>
+        <Box flex={2} sx={{ minWidth: 0, overflow: 'hidden' }}>
           <Card sx={{ mb: 3 }}>
             <CardContent>
               <Typography variant="h6" gutterBottom>
@@ -164,25 +164,28 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
               </Typography>
               
               <Box display="flex" gap={3}>
-                <Box flex={1}>
-                  <Typography variant="body2" color="text.secondary">
+                <Box flex={1} sx={{ minWidth: 0 }}>
+                  <Typography variant="body2" color="text.secondary" sx={{ wordBreak: 'break-word' }}>
                     <strong>Case ID:</strong> {caseItem.case_id}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography variant="body2" color="text.secondary" sx={{ wordBreak: 'break-word' }}>
                     <strong>Session ID:</strong> {caseItem.session_id}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography variant="body2" color="text.secondary" sx={{ wordBreak: 'break-word' }}>
                     <strong>Creato il:</strong> {caseItem.created_at}
                   </Typography>
                 </Box>
-                <Box flex={1}>
-                  <Typography variant="body2" color="text.secondary">
+                <Box flex={1} sx={{ minWidth: 0 }}>
+                  <Typography variant="body2" color="text.secondary" sx={{ wordBreak: 'break-word' }}>
                     <strong>Tenant:</strong> {caseItem.tenant}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography variant="body2" color="text.secondary" sx={{ wordBreak: 'break-word' }}>
+                    <strong>Tenant:</strong> {caseItem.tenant}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ wordBreak: 'break-word' }}>
                     <strong>Uncertainty:</strong> {caseItem.uncertainty_score.toFixed(3)}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography variant="body2" color="text.secondary" sx={{ wordBreak: 'break-word' }}>
                     <strong>Novelty:</strong> {caseItem.novelty_score.toFixed(3)}
                   </Typography>
                 </Box>
@@ -192,15 +195,16 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
                 <Typography variant="subtitle2" gutterBottom>
                   Motivo della Revisione:
                 </Typography>
-                {caseItem.reason.split(';').map((reason, index) => (
-                  <Chip
-                    key={index}
-                    label={reason.trim()}
-                    color={getReasonColor(reason)}
-                    size="small"
-                    sx={{ mr: 0.5, mb: 0.5 }}
-                  />
-                ))}
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                  {caseItem.reason.split(';').map((reason, index) => (
+                    <Chip
+                      key={index}
+                      label={reason.trim()}
+                      color={getReasonColor(reason)}
+                      size="small"
+                    />
+                  ))}
+                </Box>
               </Box>
             </CardContent>
           </Card>
@@ -283,10 +287,11 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
                   borderRadius: 1,
                   p: 2,
                   maxHeight: 400,
-                  overflow: 'auto'
+                  overflow: 'auto',
+                  wordBreak: 'break-word'
                 }}
               >
-                <Typography variant="body2" style={{ whiteSpace: 'pre-wrap' }}>
+                <Typography variant="body2" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                   {caseItem.conversation_text}
                 </Typography>
               </Box>
@@ -295,7 +300,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
         </Box>
 
         {/* Decision Panel */}
-        <Box flex={1}>
+        <Box flex={1} sx={{ minWidth: 0, maxWidth: '400px', position: 'sticky', top: 20, alignSelf: 'flex-start' }}>
           {/* Model Predictions */}
           <Card sx={{ mb: 3 }}>
             <CardContent>

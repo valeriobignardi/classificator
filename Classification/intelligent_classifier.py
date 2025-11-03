@@ -1846,6 +1846,63 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                      exit_reason="ERROR")
             
             return []
+
+    @staticmethod
+    def _build_gpt5_json_schema(domain_labels: List[str]) -> Dict[str, Any]:
+        """
+        Costruisce il blocco `text.format=json_schema` per Responses API (GPT-5)
+        in modalità SOLO JSON.
+
+        Scopo:
+            Forzare un output JSON con campi previsti (predicted_label,
+            confidence, motivation) e `strict: true`.
+
+        Parametri:
+            domain_labels: Lista etichette valide; se vuota usa ['altro']
+
+        Ritorno:
+            Dict compatibile con campo 'text' della Responses API.
+
+        Ultima modifica: 2025-10-25
+        """
+        try:
+            labels = list(domain_labels) if domain_labels else ['altro']
+        except Exception:
+            labels = ['altro']
+
+        schema = {
+            "format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "classification_result",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "predicted_label": {
+                                "type": "string",
+                                "enum": labels
+                            },
+                            "confidence": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 1
+                            },
+                            "motivation": {
+                                "type": "string"
+                            }
+                        },
+                        "required": [
+                            "predicted_label",
+                            "confidence",
+                            "motivation"
+                        ],
+                        "additionalProperties": False
+                    },
+                    "strict": True
+                }
+            }
+        }
+        return schema
     
     def _get_example_full_content(self, tenant_id: str, esempio_name: str) -> str:
         """
@@ -3083,6 +3140,18 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         if not self.openai_service:
             raise ValueError("Servizio OpenAI non inizializzato")
         
+        # Rileva se è gpt-5 e se la modalità JSON-only è attiva da config.yaml
+        is_gpt5 = (self.model_name or '').lower() == 'gpt-5'
+        json_only = False
+        try:
+            models_avail = self.config.get('llm', {}).get('models', {}).get('available', [])
+            for m in models_avail:
+                if isinstance(m, dict) and m.get('name') == 'gpt-5':
+                    json_only = bool(m.get('json_only', False))
+                    break
+        except Exception:
+            json_only = False
+        
         # 🔄 CARICAMENTO TOOLS DAL DATABASE (stessa logica di Ollama)
         classification_tools = []
         
@@ -3160,28 +3229,28 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 if self.enable_logging:
                     print(f"❌ [OpenAI] Errore recupero tools dal database: {e}")
         
-        # Verifica che ci sia almeno un tool disponibile
-        if not classification_tools:
-            raise ValueError(
-                "❌ ERRORE CRITICO OpenAI: Nessun tool di classificazione disponibile dal database. "
-                "Verificare che il prompt 'intelligent_classifier_system' abbia tool associati."
-            )
+        # Verifica tools solo se NON siamo in modalità JSON-only
+        if not json_only:
+            if not classification_tools:
+                raise ValueError(
+                    "❌ ERRORE CRITICO OpenAI: Nessun tool di classificazione disponibile dal database. "
+                    "Verificare che il prompt 'intelligent_classifier_system' abbia tool associati."
+                )
         
-        # 🆕 VALIDAZIONE TOOLS usando helper dell'OpenAIService
-        valid_tools = []
-        for tool in classification_tools:
-            if self.openai_service.validate_tool_schema(tool):
-                valid_tools.append(tool)
-                if self.enable_logging:
-                    print(f"✅ [OpenAI] Tool '{tool['function']['name']}' validato correttamente")
-            else:
-                if self.enable_logging:
-                    print(f"❌ [OpenAI] Tool '{tool.get('function', {}).get('name', 'unknown')}' non valido!")
-        
-        if not valid_tools:
-            raise ValueError("❌ ERRORE CRITICO OpenAI: Nessun tool valido dopo validazione schema")
-        
-        classification_tools = valid_tools  # Usa solo tools validati
+        # 🆕 VALIDAZIONE TOOLS usando helper dell'OpenAIService (solo se non JSON-only)
+        if not json_only:
+            valid_tools = []
+            for tool in classification_tools:
+                if self.openai_service.validate_tool_schema(tool):
+                    valid_tools.append(tool)
+                    if self.enable_logging:
+                        print(f"✅ [OpenAI] Tool '{tool['function']['name']}' validato correttamente")
+                else:
+                    if self.enable_logging:
+                        print(f"❌ [OpenAI] Tool '{tool.get('function', {}).get('name', 'unknown')}' non valido!")
+            if not valid_tools:
+                raise ValueError("❌ ERRORE CRITICO OpenAI: Nessun tool valido dopo validazione schema")
+            classification_tools = valid_tools  # Usa solo tools validati
         
         try:
             # 🔄 USA STESSA FUNZIONE DI OLLAMA: _build_classification_prompt
@@ -3206,21 +3275,51 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             # 🔧 NUOVO: Chiama OpenAI con function tools usando metodo asincrono per parallelismo
             import asyncio
             
-            # 🎯 FORZA L'USO DEL TOOL SPECIFICO per il tenant corrente
-            primary_tool_name = classification_tools[0]['function']['name'] if classification_tools else 'classify_conversation'
+            # 🎯 FORZA L'USO DEL TOOL SPECIFICO per il tenant corrente (se tools attivi)
+            primary_tool_name = (classification_tools[0]['function']['name'] 
+                                 if (not json_only and classification_tools) else 'classify_conversation')
             
             if self.enable_logging:
                 print(f"🎯 [OpenAI] Forzando uso del tool: {primary_tool_name}")
             
+            # is_gpt5 già calcolato sopra
+            
             async def call_openai_async():
-                return await self.openai_service.chat_completion(
-                    model=self.model_name,
-                    messages=messages,
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                    tools=classification_tools,  # 🔑 AGGIUNTA: Function tools per OpenAI
-                    tool_choice={"type": "function", "function": {"name": primary_tool_name}}  # 🔧 FORZA: Usa sempre il tool specifico del tenant
-                )
+                if is_gpt5:
+                    # GPT-5 usa l'API 'responses'
+                    if json_only:
+                        # Modalità SOLO JSON: disabilita tools e impone schema
+                        if self.enable_logging:
+                            print("🧩 [GPT-5/JSON-only] Attivo text.format=json_schema e disabilito tools")
+                        # Costruisci schema JSON stretto su etichette del dominio
+                        text_format = IntelligentClassifier._build_gpt5_json_schema(self.domain_labels)
+                        return await self.openai_service.responses_completion(
+                            model=self.model_name,
+                            input_data=messages,
+                            text=text_format,
+                            max_tokens=self.max_tokens if hasattr(self, 'max_tokens') else None
+                        )
+                    else:
+                        # Tools attivi: usa tools + tool_choice
+                        if self.enable_logging:
+                            print(f"🚀 [GPT-5] Usando API 'responses' con tools: {len(classification_tools)} e tool_choice mirato")
+                        return await self.openai_service.responses_completion(
+                            model=self.model_name,
+                            input_data=messages,
+                            tools=classification_tools,
+                            tool_choice={"type": "function", "function": {"name": primary_tool_name}},
+                            max_tokens=self.max_tokens if hasattr(self, 'max_tokens') else None
+                        )
+                else:
+                    # Modelli tradizionali (GPT-4o, etc) usano chat.completions
+                    return await self.openai_service.chat_completion(
+                        model=self.model_name,
+                        messages=messages,
+                        temperature=self.temperature,
+                        max_tokens=self.max_tokens,
+                        tools=classification_tools,  # 🔑 AGGIUNTA: Function tools per OpenAI
+                        tool_choice={"type": "function", "function": {"name": primary_tool_name}}  # 🔧 FORZA: Usa sempre il tool specifico del tenant
+                    )
             
             # Esegui la chiamata asincrona in modo sincrono per compatibilità
             try:
@@ -3240,47 +3339,103 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             if self.enable_logging:
                 print(f"✅ [OpenAI] Risposta ricevuta usando metodo asincrono per parallelismo")
             
-            # Estrae contenuto dalla risposta OpenAI con function call
-            if 'choices' not in response or not response['choices']:
-                raise ValueError("Risposta OpenAI vuota o malformata")
-            
-            # 🆕 NUOVO: Usa i metodi helper dell'OpenAIService per gestire tool calls
-            tool_calls = self.openai_service.extract_tool_calls(response)
-            
-            if tool_calls:
-                # Verifica che sia il tool call giusto
-                for tool_call in tool_calls:
-                    if (tool_call.get('function', {}).get('name') == 'classify_conversation' and 
-                        'arguments' in tool_call['function']):
-                        
-                        # Parse dei function call arguments
-                        if isinstance(tool_call['function']['arguments'], str):
-                            structured_result = json.loads(tool_call['function']['arguments'])
-                        else:
-                            structured_result = tool_call['function']['arguments']
+            # 🆕 GESTIONE RISPOSTA GPT-5 vs GPT-4o
+            if is_gpt5:
+                if json_only:
+                    # SOLO JSON: ignora tool calls, usa solo output_text
+                    output_text = (response.get('output_text') or '').strip()
+                    if not output_text:
+                        raise ValueError("Risposta GPT-5 senza output_text in modalità JSON-only")
+                    if self.enable_logging:
+                        print(f"🧩 [GPT-5/JSON-only] Parsing output_text: {output_text[:100]}...")
+                    try:
+                        structured_result = json.loads(output_text)
+                    except json.JSONDecodeError:
+                        structured_result = self._extract_json_from_openai_response(output_text)
+                else:
+                    # 1) Prova a estrarre function tool calls dalla Responses API
+                    tool_calls = []
+                    try:
+                        tool_calls = self.openai_service.extract_responses_tool_calls(response)
+                    except Exception as _tcerr:
+                        if self.enable_logging:
+                            print(f"⚠️ [GPT-5] Errore estrazione tool calls: {_tcerr}")
+
+                    if tool_calls:
+                        # Usa gli arguments del tool specifico
+                        used = False
+                        for tc in tool_calls:
+                            if tc.get('function', {}).get('name') == primary_tool_name and 'arguments' in tc['function']:
+                                args = tc['function']['arguments']
+                                if isinstance(args, str):
+                                    structured_result = json.loads(args)
+                                else:
+                                    structured_result = args
+                                used = True
+                                if self.enable_logging:
+                                    print(f"✅ [GPT-5] Function call estratto: {structured_result}")
+                                break
+                        if not used:
+                            # Se non abbiamo trovato il tool atteso, prendi il primo disponibile
+                            tc = tool_calls[0]
+                            args = tc.get('function', {}).get('arguments', '{}')
+                            structured_result = json.loads(args) if isinstance(args, str) else args
+                            if self.enable_logging:
+                                print(f"ℹ️ [GPT-5] Usato primo tool call disponibile: {structured_result}")
+                    else:
+                        # 2) Nessun tool call: usa output_text normalizzato
+                        output_text = (response.get('output_text') or '').strip()
+                        if not output_text:
+                            raise ValueError("Risposta GPT-5 senza output_text né tool_calls")
+                        if self.enable_logging:
+                            print(f"🚀 [GPT-5] Parsing output_text: {output_text[:100]}...")
+                        try:
+                            structured_result = json.loads(output_text)
+                        except json.JSONDecodeError:
+                            structured_result = self._extract_json_from_openai_response(output_text)
+            else:
+                # Parsing tradizionale per GPT-4o e altri modelli
+                # Estrae contenuto dalla risposta OpenAI con function call
+                if 'choices' not in response or not response['choices']:
+                    raise ValueError("Risposta OpenAI vuota o malformata")
+                
+                # 🆕 NUOVO: Usa i metodi helper dell'OpenAIService per gestire tool calls
+                tool_calls = self.openai_service.extract_tool_calls(response)
+                
+                if tool_calls:
+                    # Verifica che sia il tool call giusto
+                    for tool_call in tool_calls:
+                        if (tool_call.get('function', {}).get('name') == 'classify_conversation' and 
+                            'arguments' in tool_call['function']):
+                            
+                            # Parse dei function call arguments
+                            if isinstance(tool_call['function']['arguments'], str):
+                                structured_result = json.loads(tool_call['function']['arguments'])
+                            else:
+                                structured_result = tool_call['function']['arguments']
+                            
+                            if self.enable_logging:
+                                print(f"✅ [OpenAI] Function call received via helper: {structured_result}")
+                            
+                            break
+                    else:
+                        raise ValueError(f"Function call 'classify_conversation' non trovata nei tool calls: {tool_calls}")
+                else:
+                    # Fallback: Se non c'è function call, prova parsing del contenuto
+                    message = response['choices'][0]['message']
+                    if 'content' in message and message['content']:
+                        content = message['content'].strip()
                         
                         if self.enable_logging:
-                            print(f"✅ [OpenAI] Function call received via helper: {structured_result}")
+                            print(f"⚠️ [OpenAI] No function call detected, parsing content: {content[:100]}...")
                         
-                        break
-                else:
-                    raise ValueError(f"Function call 'classify_conversation' non trovata nei tool calls: {tool_calls}")
-            else:
-                # Fallback: Se non c'è function call, prova parsing del contenuto
-                message = response['choices'][0]['message']
-                if 'content' in message and message['content']:
-                    content = message['content'].strip()
-                    
-                    if self.enable_logging:
-                        print(f"⚠️ [OpenAI] No function call detected, parsing content: {content[:100]}...")
-                    
-                    try:
-                        structured_result = json.loads(content)
-                    except json.JSONDecodeError as e:
-                        # Fallback con parsing robusto esistente
-                        structured_result = self._extract_json_from_openai_response(content)
-                else:
-                    raise ValueError("Risposta OpenAI senza tool_calls né content")
+                        try:
+                            structured_result = json.loads(content)
+                        except json.JSONDecodeError as e:
+                            # Fallback con parsing robusto esistente
+                            structured_result = self._extract_json_from_openai_response(content)
+                    else:
+                        raise ValueError("Risposta OpenAI senza tool_calls né content")
             
             # Valida struttura risposta
             required_fields = ['predicted_label', 'confidence', 'motivation']
@@ -5019,12 +5174,20 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 self.logger.info(f"✅ Structured Output: {predicted_label} (conf: {confidence:.3f})")
                 
             except Exception as e:
-                # Fallback solo per errori critici di connessione
+                # Se stiamo usando un modello OpenAI (es. GPT-5), non effettuare fallback su Ollama
                 print(f"🚨 EXCEPTION IN STRUCTURED OUTPUT: {e}")
                 print(f"🔍 EXCEPTION TYPE: {type(e).__name__}")
-                self.logger.error(f"❌ Structured Outputs fallito, uso metodo tradizionale: {e}")
-                raw_response = self._call_ollama_api_with_retry(prompt)
-                predicted_label, confidence, motivation, original_llm_label = self._parse_llm_response(raw_response, conversation_text)
+                if getattr(self, 'is_openai_model', False):
+                    self.logger.error(
+                        f"❌ Structured Outputs fallito con modello OpenAI ({self.model_name}); evito fallback Ollama e propago l'errore"
+                    )
+                    # Rilancia per essere gestito dal catch esterno che applica solo fallback semantico/puro
+                    raise
+                else:
+                    # Modelli non-OpenAI: usa il percorso di fallback attuale su Ollama
+                    self.logger.error(f"❌ Structured Outputs fallito, uso metodo tradizionale Ollama: {e}")
+                    raw_response = self._call_ollama_api_with_retry(prompt)
+                    predicted_label, confidence, motivation, original_llm_label = self._parse_llm_response(raw_response, conversation_text)
             
             processing_time = time.time() - start_time
             

@@ -58,7 +58,15 @@ RUN mkdir -p \
     /app/semantic_cache \
     /app/bertopic \
     /app/backup \
-    /app/tests && \
+    /app/tests \
+    /app/models \
+    /app/finetuned_models \
+    /app/tenant_configs \
+    /app/.cache/huggingface \
+    /app/.cache/torch \
+    /app/.cache/cuml \
+    /app/.cache/numba \
+    /app/.cache/cupy && \
     chown -R appuser:appuser /app
 
 # Esponi porta del server Flask
@@ -75,7 +83,12 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 ENV FLASK_APP=server.py \
     FLASK_ENV=production \
     FLASK_DEBUG=0 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    HF_HOME=/app/.cache/huggingface \
+    TRANSFORMERS_CACHE=/app/.cache/huggingface \
+    TORCH_HOME=/app/.cache/torch \
+    NUMBA_CACHE_DIR=/app/.cache/numba \
+    CUPY_CACHE_DIR=/app/.cache/cupy
 
 # Script di avvio con controlli pre-esecuzione
 COPY --chown=appuser:appuser docker-entrypoint.sh /app/

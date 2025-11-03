@@ -21,8 +21,37 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'QualityGate'))
 from quality_gate_engine import QualityGateEngine, ReviewCase
 
 # Importa Tenant object per architettura centralizzata
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Database'))
-from tenant_manager import Tenant, resolve_tenant_from_identifier
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Utils'))
+from tenant import Tenant
+import re
+
+
+def _is_uuid(value: str) -> bool:
+    """Verifica se una stringa è un UUID valido."""
+    uuid_pattern = r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    return bool(re.match(uuid_pattern, value))
+
+
+def resolve_tenant_from_identifier(identifier: str) -> Tenant:
+    """
+    Risolve UUID o slug in oggetto Tenant, replicando la logica centralizzata.
+    """
+    try:
+        if _is_uuid(identifier):
+            print(f"🔍 Risoluzione tenant da UUID (web interface): {identifier}")
+            tenant = Tenant.from_uuid(identifier)
+            print(f"✅ Tenant risolto da UUID: {tenant.tenant_name} ({tenant.tenant_id})")
+            return tenant
+
+        print(f"🔍 Risoluzione tenant da slug (web interface): {identifier}")
+        tenant = Tenant.from_slug(identifier)
+        print(f"✅ Tenant risolto da slug: {tenant.tenant_name} ({tenant.tenant_id})")
+        return tenant
+
+    except Exception as e:
+        error_msg = f"❌ Errore risoluzione tenant '{identifier}': {e}"
+        print(error_msg)
+        raise ValueError(error_msg)
 
 # Blueprint per le route della review interface
 review_bp = Blueprint('review', __name__, url_prefix='/review')

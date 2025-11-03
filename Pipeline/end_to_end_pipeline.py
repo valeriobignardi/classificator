@@ -2758,8 +2758,11 @@ class EndToEndPipeline:
             from mongo_classification_reader import MongoClassificationReader
             mongo_reader = MongoClassificationReader(tenant=self.tenant)
             
-            # Implementa cancellazione se necessario
-            print(f"   🔄 MongoDB collection cleared per force_review")
+            result = mongo_reader.clear_tenant_collection(self.tenant.tenant_slug)
+            if result.get('success'):
+                print(f"   🔄 MongoDB collection cleared per force_review ({result.get('deleted_count', 0)} documenti)")
+            else:
+                print(f"   ⚠️ Errore cancellazione MongoDB: {result.get('error')}")
             
         except Exception as e:
             print(f"   ⚠️ Errore cancellazione MongoDB: {e}")

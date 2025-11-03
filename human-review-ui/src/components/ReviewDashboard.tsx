@@ -294,7 +294,8 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
 
     try {
       const config = uiConfig?.classification || {};
-      const response = await apiService.startFullClassification(tenant.tenant_id, {
+      const tenantIdentifier = tenant.tenant_slug || tenant.tenant_id || tenant.tenant_name;
+      const response = await apiService.startFullClassification(tenantIdentifier, {
         confidence_threshold: config.confidence_threshold || 0.7,
         force_retrain: config.force_retrain !== false,
         max_sessions: config.max_sessions || null,
@@ -1294,7 +1295,8 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
       {activeTab === 1 && (
         // All Sessions Content
         <AllSessionsView 
-          clientName={tenant.tenant_name} 
+          tenantIdentifier={tenant.tenant_slug || tenant.tenant_id || tenant.tenant_name}
+          tenantDisplayName={tenant.tenant_name}
           onSessionAdd={handleSessionAddedToQueue}
         />
       )}

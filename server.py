@@ -546,7 +546,7 @@ class ClassificationService:
             Embedder configurato per tenant specifico
         """
         from EmbeddingEngine.simple_embedding_manager import simple_embedding_manager
-        from Database.tenant_resolver import Tenant
+        from Utils.tenant import Tenant
         
         # Converte tenant_id stringa in oggetto Tenant
         try:
@@ -740,8 +740,9 @@ class ClassificationService:
         try:
             print(f"🗑️ CANCELLAZIONE CLASSIFICAZIONI MONGODB per cliente: {client_name}")
             
+            mongo_reader = self.get_mongo_reader(client_name)
             # Usa il mongo_reader per cancellare la collection del tenant
-            result = self.mongo_reader.clear_tenant_collection(client_name)
+            result = mongo_reader.clear_tenant_collection(client_name)
             
             if result['success']:
                 print(f"✅ {result['message']}")
@@ -767,16 +768,6 @@ class ClassificationService:
                 'success': False,
                 'error': error_msg,
                 'deleted_count': 0
-            }
-            
-        except Exception as e:
-            print(f"❌ Errore nella cancellazione classificazioni: {e}")
-            self.tag_db.disconnetti()
-            return {
-                'success': False,
-                'error': f'Errore nella cancellazione: {str(e)}',
-                'deleted_count': 0,
-                'timestamp': datetime.now().isoformat()
             }
     
     # ==================== METODI FINE-TUNING ====================
@@ -1119,6 +1110,8 @@ class ClassificationService:
                 
                 skipped = sessioni_originali - len(sessioni)
                 print(f"⏭️ Saltate {skipped} sessioni già processate")
+            else:
+                processed_sessions = set()
             
             if not sessioni:
                 return {
@@ -1127,23 +1120,35 @@ class ClassificationService:
                     'client': client_name,
                     'sessions_total': 0,
                     'sessions_processed': 0,
-                    'sessions_skipped': len(self.get_processed_sessions(client_name))
+                    'sessions_skipped': len(processed_sessions)
                 }
             
             print(f"📊 Processando {len(sessioni)} sessioni per {client_name}")
             
-            # Esegui clustering intelligente
-            embeddings, cluster_labels, representatives, suggested_labels = pipeline.esegui_clustering(sessioni)
+            # Esegui clustering unificato
+            documenti = pipeline.esegui_clustering(sessioni, force_reprocess=force_reprocess)
             
             # NOTA: Training del classificatore è gestito automaticamente dal sistema
             # quando necessario (tramite QualityGateEngine)
             training_metrics = {'note': 'Training automatico gestito dal sistema', 'accuracy': 0.85}
             
-            # Classificazione e salvataggio
-            classification_stats = pipeline.classifica_e_salva_sessioni(
-                sessioni, use_ensemble=True, optimize_clusters=True
+            # Classificazione e salvataggio con nuovo flusso DocumentoProcessing
+            classification_stats = pipeline.classifica_e_salva_documenti_unified(
+                documenti=documenti,
+                batch_size=32,
+                use_ensemble=True,
+                force_review=False
             )
             
+            clusters_found = len({doc.cluster_id for doc in documenti if doc.cluster_id is not None and doc.cluster_id != -1})
+            outliers_count = sum(1 for doc in documenti if doc.is_outlier)
+            representatives_count = sum(1 for doc in documenti if doc.is_representative)
+            propagated_count_docs = sum(1 for doc in documenti if doc.is_propagated)
+
+            saved_count = classification_stats.get('saved_count', 0)
+            error_count = classification_stats.get('errors', 0)
+            total_documents = classification_stats.get('total_documents', len(documenti))
+
             # Se force_review è attivo, popola la coda di revisione con tutte le classificazioni
             forced_review_count = 0
             if force_review:
@@ -1172,14 +1177,21 @@ class ClassificationService:
                 'timestamp': end_time.isoformat(),
                 'duration_seconds': duration,
                 'sessions_total': len(sessioni),
-                'sessions_processed': classification_stats.get('saved_successfully', 0),
-                'sessions_errors': classification_stats.get('save_errors', 0),
+                'sessions_processed': saved_count,
+                'sessions_errors': error_count,
                 'forced_review_count': forced_review_count,
                 'clustering': {
-                    'clusters_found': len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0),
-                    'outliers': sum(1 for label in cluster_labels if label == -1)
+                    'clusters_found': clusters_found,
+                    'outliers': outliers_count,
+                    'representatives': representatives_count,
+                    'propagated': propagated_count_docs
                 },
-                'classification_stats': classification_stats,
+                'classification_stats': {
+                    **classification_stats,
+                    'total_documents': total_documents,
+                    'saved_count': saved_count,
+                    'errors': error_count
+                },
                 'training_metrics': training_metrics
             }
             

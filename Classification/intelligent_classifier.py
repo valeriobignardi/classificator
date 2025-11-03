@@ -3303,9 +3303,11 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                         # Tools attivi: usa tools + tool_choice
                         if self.enable_logging:
                             print(f"🚀 [GPT-5] Usando API 'responses' con tools: {len(classification_tools)} e tool_choice mirato")
+                        # 🔥 VINCOLO GPT-5: Aggiungi SEMPRE parametro 'text' anche con tools
                         return await self.openai_service.responses_completion(
                             model=self.model_name,
                             input_data=messages,
+                            text={'format': {'type': 'text'}},  # ← OBBLIGATORIO per GPT-5
                             tools=classification_tools,
                             tool_choice={"type": "function", "function": {"name": primary_tool_name}},
                             max_tokens=self.max_tokens if hasattr(self, 'max_tokens') else None

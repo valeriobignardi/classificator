@@ -263,8 +263,10 @@ class AdvancedEnsembleClassifier:
             
             processing_time = (datetime.now() - start_time).total_seconds()
             
+            accuracy_value = float(train_accuracy)
             training_result = {
-                'training_accuracy': float(train_accuracy),
+                'training_accuracy': accuracy_value,
+                'accuracy': accuracy_value,
                 'n_samples': int(len(training_features)),
                 'n_features': int(training_features.shape[1]),
                 'n_classes': int(len(np.unique(y_train))),
@@ -396,8 +398,10 @@ class AdvancedEnsembleClassifier:
         
         processing_time = (datetime.now() - start_time).total_seconds()
         
+        accuracy_value = float(train_accuracy)
         training_result = {
-            'training_accuracy': float(train_accuracy),
+            'training_accuracy': accuracy_value,
+            'accuracy': accuracy_value,
             'n_samples': int(len(X_train)),
             'n_features': int(X_train.shape[1]),
             'n_classes': int(len(np.unique(y_train)))
@@ -513,8 +517,10 @@ class AdvancedEnsembleClassifier:
         ensemble.fit(X, y)
         self.ml_ensemble = ensemble
 
+        training_accuracy_value = float(train_acc)
         result = {
-            'training_accuracy': float(train_acc),
+            'training_accuracy': training_accuracy_value,
+            'accuracy': training_accuracy_value,
             'n_samples': int(len(X)),
             'n_features': int(X.shape[1]),
             'n_classes': int(len(unique_labels)),

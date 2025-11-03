@@ -410,6 +410,10 @@ class OpenAIService:
                 **kwargs
             }
             
+            # 🔥 COMPATIBILITÀ GPT-4o: Verifica se response_format è specificato
+            # GPT-4o usa 'response_format' NON 'text' (come GPT-5)
+            # Se non specificato, lascia che il modello usi il default
+            
             # Aggiungi tools se forniti (OpenAI function calling)
             if tools:
                 payload['tools'] = tools
@@ -447,23 +451,38 @@ class OpenAIService:
         """
         Effettua chiamata GPT-5 Responses API con controllo parallelismo
         
-        NOTA: GPT-5 usa una nuova API 'responses' invece di 'chat/completions':
-        - NON supporta: temperature, top_p, frequency_penalty, presence_penalty, max_tokens, tools, tool_choice
-        - Supporta SOLO: model, input
-        - Usa 'input' invece di 'messages'
-        - Ritorna 'output_text' invece di 'choices[0].message.content'
+        VINCOLO COMPATIBILITÀ OPENAI:
+        ============================
+        GPT-5 usa API 'responses' (NON 'chat/completions'):
+        
+        ✅ Parametri OBBLIGATORI GPT-5:
+           - model: str
+           - input: str | List[Dict]
+           - text: { "format": { "type": "text" } }  ← RICHIESTO!
+        
+        ✅ Parametri OPZIONALI GPT-5:
+           - max_output_tokens (sostituisce max_tokens)
+           - tools, tool_choice
+           - reasoning, metadata, etc.
+        
+        ❌ Parametri NON supportati (rimossi automaticamente):
+           - temperature, top_p, frequency_penalty, presence_penalty
+           - max_tokens (usare max_output_tokens)
+           - response_format (usare text.format)
+        
+        📚 Riferimento: https://platform.openai.com/docs/api-reference/responses/create
         
         Args:
-            model: Nome modello (deve essere 'gpt-5')
+            model: Nome modello (es. 'gpt-5')
             input_data: Input per il modello - può essere:
                        - stringa semplice
                        - lista di dict con role/content (convertita internamente)
-            **kwargs: Altri parametri (verranno filtrati, GPT-5 accetta solo model+input)
+            **kwargs: Altri parametri compatibili (es. max_output_tokens, tools, reasoning)
             
         Returns:
             Risposta API OpenAI con output_text generato
             
-    Data ultima modifica: 2025-10-25 - Fix: rimosso max_tokens (non supportato)
+        Data ultima modifica: 2025-11-03 - Fix: aggiunto text.format.name obbligatorio
         """
         # Genera chiave cache
         cache_key = self._generate_cache_key(model, input_data)
@@ -492,6 +511,16 @@ class OpenAIService:
                 'input': input_text,
             }
 
+            # 🔥 VINCOLO OPENAI GPT-5: Aggiungi SEMPRE parametro 'text' obbligatorio
+            # Documentazione: https://platform.openai.com/docs/api-reference/responses/create
+            # GPT-5 richiede: text: { format: { type: "text" } } o { type: "json_schema", json_schema: {...} }
+            if 'text' not in kwargs:
+                payload['text'] = {
+                    'format': {
+                        'type': 'text'
+                    }
+                }
+
             # Mappa max_tokens -> max_output_tokens se presente
             if 'max_tokens' in kwargs and kwargs['max_tokens'] is not None:
                 payload['max_output_tokens'] = kwargs.pop('max_tokens')
@@ -514,9 +543,9 @@ class OpenAIService:
                     payload[k] = kwargs.pop(k)
             
             # 🆕 GPT-5: Rimuovi TUTTI i parametri non supportati
-            # GPT-5 API 'responses' supporta SOLO: model, input
+            # GPT-5 API 'responses' supporta SOLO: model, input, text, max_output_tokens, tools, etc.
             unsupported_params = ['temperature', 'frequency_penalty', 'presence_penalty',
-                                   'max_tokens', 'max_completion_tokens']
+                                   'max_tokens', 'max_completion_tokens', 'response_format']
             for param in unsupported_params:
                 payload.pop(param, None)
             

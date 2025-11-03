@@ -73,11 +73,12 @@ interface Session {
 }
 
 interface AllSessionsViewProps {
-  clientName: string;
+  tenantIdentifier: string;
+  tenantDisplayName: string;
   onSessionAdd?: () => void;
 }
 
-const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSessionAdd }) => {
+const AllSessionsView: React.FC<AllSessionsViewProps> = ({ tenantIdentifier, tenantDisplayName, onSessionAdd }) => {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -106,7 +107,7 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
     setError(null);
     
     try {
-      const response = await apiService.getAllSessions(clientName, includeReviewed);
+      const response = await apiService.getAllSessions(tenantIdentifier, includeReviewed);
       setSessions(response.sessions);
     } catch (err) {
       setError('Errore di connessione');
@@ -114,7 +115,7 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
     } finally {
       setLoading(false);
     }
-  }, [clientName, includeReviewed]);
+  }, [tenantIdentifier, includeReviewed]);
 
   useEffect(() => {
     loadSessions();
@@ -124,7 +125,7 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
     setAddingToQueue(sessionId);
     
     try {
-      await apiService.addSessionToQueue(clientName, sessionId, 'manual_addition');
+      await apiService.addSessionToQueue(tenantIdentifier, sessionId, 'manual_addition');
       
       // Aggiorna immediatamente lo stato locale della sessione
       setSessions(prevSessions => 
@@ -154,7 +155,7 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
       if (onSessionAdd) {
         onSessionAdd();
       }
-      setSuccessMessage(`✅ Sessione ${sessionId.substring(0, 12)}... aggiunta alla Review Queue e rimossa dalla lista`);
+      setSuccessMessage(`✅ Sessione ${sessionId.substring(0, 12)}... aggiunta alla Review Queue di ${tenantDisplayName} e rimossa dalla lista`);
       
       // Ricarica le sessioni per sincronizzare con il server (in background)
       setTimeout(() => {
@@ -174,7 +175,7 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
     setSuccessMessage(null);
 
     try {
-      const response = await apiService.startFullClassification(clientName, {
+      const response = await apiService.startFullClassification(tenantIdentifier, {
         confidence_threshold: classificationOptions.confidence_threshold,
         force_retrain: classificationOptions.force_retrain,
         max_sessions: classificationOptions.max_sessions || undefined,
@@ -184,7 +185,7 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
 
       if (response.success) {
         setSuccessMessage(
-          `✅ Classificazione completata: ${response.sessions_processed || 0} sessioni processate` +
+          `✅ Classificazione completata per ${tenantDisplayName}: ${response.sessions_processed || 0} sessioni processate` +
           (response.forced_review_count > 0 ? `, ${response.forced_review_count} casi forzati in coda per revisione` : '')
         );
         
@@ -357,7 +358,7 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
 
       {/* Fine-Tuning Panel */}
       <Box mb={3}>
-        <FineTuningPanel clientName={clientName} />
+        <FineTuningPanel clientName={tenantIdentifier} />
       </Box>
 
       {/* Filters */}
@@ -731,7 +732,7 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ clientName, onSession
         <DialogTitle>
           <Box display="flex" alignItems="center" gap={1}>
             <AutoFixHighIcon color="primary" />
-            Classificazione Completa - {clientName}
+            Classificazione Completa - {tenantDisplayName}
           </Box>
         </DialogTitle>
         <DialogContent>

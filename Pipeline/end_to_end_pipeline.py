@@ -1552,6 +1552,16 @@ class EndToEndPipeline:
         except Exception as wiring_e:
             print(f"⚠️ [BERTOPIC → ENSEMBLE] Errore durante l'iniezione o la cache: {wiring_e}")
         
+        # 🛟 Fallback: se la cache ML non è stata creata (BERTopic off o errore),
+        # crea comunque una cache "solo embeddings" per evitare ricalcoli successivi
+        try:
+            if not getattr(self, '_ml_features_cache', None) or len(self._ml_features_cache) == 0:
+                print(f"🛟 [BERTOPIC CACHE] Provider assente o cache vuota: creo cache SOLO-EMBEDDINGS…")
+                self._create_ml_features_cache(session_ids, testi, embeddings)
+                print(f"✅ [BERTOPIC CACHE] Cache SOLO-EMBEDDINGS pronta: shape features {embeddings.shape}")
+        except Exception as fallback_cache_e:
+            print(f"⚠️ [BERTOPIC CACHE] Fallback cache embeddings fallito: {fallback_cache_e}")
+        
         # Carica configurazione clustering
         with open(self.clusterer.config_path, 'r', encoding='utf-8') as file:
             config = yaml.safe_load(file)
@@ -5410,7 +5420,7 @@ class EndToEndPipeline:
                             prediction = self.ensemble_classifier.predict_with_ensemble(
                                 rep_text,
                                 return_details=True,
-                                embedder=self.embedder,
+                                embedder=self._get_embedder(),
                                 ml_features_precalculated=cached_features,
                                 session_id=rep['session_id']
                             )
@@ -5608,7 +5618,7 @@ class EndToEndPipeline:
                         prediction = self.ensemble_classifier.predict_with_ensemble(
                             session_texts[i],
                             return_details=True,
-                            embedder=self.embedder,
+                            embedder=self._get_embedder(),
                             ml_features_precalculated=cached_features,
                             session_id=session_id
                         )
@@ -5734,7 +5744,7 @@ class EndToEndPipeline:
                     pred = self.ensemble_classifier.predict_with_ensemble(
                         text, 
                         return_details=True,
-                        embedder=self.embedder,
+                        embedder=self._get_embedder(),
                         ml_features_precalculated=cached_features,
                         session_id=session_id
                     )

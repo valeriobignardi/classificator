@@ -223,6 +223,19 @@ class IntelligentIntentClusterer:
         if self.use_ensemble and self.ensemble_classifier:
             print(f"🧠💻 [ENSEMBLE BATCH] Classificazione di {len(texts)} conversazioni con ensemble...")
             
+            # Prepara un embedder condiviso per evitare bootstrap ripetuti
+            shared_embedder = None
+            try:
+                from EmbeddingEngine.simple_embedding_manager import simple_embedding_manager
+                if self.tenant is not None:
+                    shared_embedder = simple_embedding_manager.get_embedder_for_tenant(self.tenant)
+            except Exception:
+                try:
+                    from EmbeddingEngine.labse_remote_client import LaBSERemoteClient
+                    shared_embedder = LaBSERemoteClient(service_url="http://localhost:8081", fallback_local=False)
+                except Exception:
+                    shared_embedder = None
+            
             # L'ensemble classifier potrebbe non supportare batch, quindi usiamo loop ottimizzato
             for i, text in enumerate(texts):
                 try:
@@ -230,7 +243,7 @@ class IntelligentIntentClusterer:
                     ensemble_result = self.ensemble_classifier.predict_with_ensemble(
                         text,
                         return_details=True,
-                        embedder=getattr(self.ensemble_classifier, 'embedder', None)
+                        embedder=shared_embedder
                     )
                     
                     intent_info = {

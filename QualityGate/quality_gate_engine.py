@@ -1214,9 +1214,10 @@ class QualityGateEngine:
             Tuple (X, y) con features ed etichette
         """
         try:
-            # Estrai conversazioni e etichette
+            # Estrai conversazioni, etichette e mantieni mapping session_id per features
             conversations = []
             labels = []
+            session_ids_for_X = []
             
             # USA MONGODB CLASSIFICATION READER per ottenere conversazioni classificate
             from mongo_classification_reader import MongoClassificationReader
@@ -1247,6 +1248,7 @@ class QualityGateEngine:
                         conversation_text = decision['conversation_text']
                         conversations.append(conversation_text)
                         labels.append(human_label)
+                        session_ids_for_X.append(session_id)
                         self.logger.debug(f"Usato conversation_text diretto per {session_id} (source: {decision.get('source', 'unknown')})")
                     # Altrimenti, cerca la conversazione originale per session_id
                     elif session_id in sessions_dict:
@@ -1255,6 +1257,7 @@ class QualityGateEngine:
                         conversation_text = session_data['conversation_text']
                         conversations.append(conversation_text)
                         labels.append(human_label)
+                        session_ids_for_X.append(session_id)
                         self.logger.debug(f"Usata conversazione da database per {session_id}")
                     else:
                         # Session_id non trovato (probabilmente mock), usa campione reale per questa categoria
@@ -1269,18 +1272,21 @@ class QualityGateEngine:
                             if sample_conversation and len(sample_conversation.strip()) > 20:
                                 conversations.append(sample_conversation)
                                 labels.append(human_label)
+                                session_ids_for_X.append(None)  # nessun session_id valido per feature store
                                 self.logger.info(f"Usato campione reale per categoria {human_label}")
                             else:
                                 # Testo troppo corto, usa testo sintetico
                                 synthetic_text = self._create_synthetic_conversation_for_label(human_label)
                                 conversations.append(synthetic_text)
                                 labels.append(human_label)
+                                session_ids_for_X.append(None)
                                 self.logger.info(f"Campione reale troppo corto, creato testo sintetico per {human_label}")
                         else:
                             # Nessun campione reale trovato, crea testo sintetico
                             synthetic_text = self._create_synthetic_conversation_for_label(human_label)
                             conversations.append(synthetic_text)
                             labels.append(human_label)
+                            session_ids_for_X.append(None)
                             self.logger.info(f"Creato testo sintetico per categoria {human_label}")
                 
             finally:
@@ -1290,11 +1296,69 @@ class QualityGateEngine:
                 self.logger.warning("Nessuna conversazione preparata per il training")
                 return None, None
             
-            # Genera embeddings usando embedder dinamico per il tenant
+            # Genera/recupera embeddings usando feature store quando disponibile
             embedder = self._get_dynamic_embedder()
-            
-            self.logger.info(f"Generazione embeddings per {len(conversations)} conversazioni...")
-            X = embedder.encode(conversations)
+
+            # Calcola nome embedder corrente per validare cache
+            def _current_embedder_name() -> str:
+                embedder_type = type(embedder).__name__
+                if hasattr(embedder, 'model_name') and getattr(embedder, 'model_name'):
+                    return f"{embedder_type}_{getattr(embedder, 'model_name')}"
+                if hasattr(embedder, 'model_path') and getattr(embedder, 'model_path'):
+                    import os as _os
+                    mp = str(getattr(embedder, 'model_path'))
+                    model_name = mp.split('/')[-1] if '/' in mp else mp
+                    return f"{embedder_type}_{model_name}"
+                return embedder_type
+
+            current_model_name = _current_embedder_name()
+
+            # Prova a leggere dallo store per sessioni reali (non None)
+            store = None
+            try:
+                import sys as _sys, os as _os
+                _sys.path.append(_os.path.join(_os.path.dirname(__file__), '..', 'MongoDB'))
+                from embedding_store import EmbeddingStore  # type: ignore
+                store = EmbeddingStore()
+            except Exception as _e:
+                self.logger.debug(f"Feature store non disponibile: {_e}")
+
+            X_list: List[Optional[np.ndarray]] = [None] * len(conversations)
+            missing_indices: List[int] = []
+            if store is not None and hasattr(self.tenant, 'tenant_id'):
+                tid = self.tenant.tenant_id
+                for idx, sid in enumerate(session_ids_for_X):
+                    if not sid:
+                        missing_indices.append(idx)
+                        continue
+                    try:
+                        fetched = store.get_embedding(tid, sid, consume=False)
+                        if fetched:
+                            emb_vec, emb_model = fetched
+                            # Valida coerenza modello corrente; se mismatch, marca come missing per rigenerazione
+                            if emb_model and emb_model != 'unknown_embedder' and not str(emb_model).startswith(current_model_name):
+                                missing_indices.append(idx)
+                            else:
+                                X_list[idx] = np.array(emb_vec, dtype=float)
+                        else:
+                            missing_indices.append(idx)
+                    except Exception as _fe:
+                        self.logger.debug(f"Errore fetch embedding cache per {sid}: {_fe}")
+                        missing_indices.append(idx)
+            else:
+                # Nessuno store: tutti mancanti
+                missing_indices = list(range(len(conversations)))
+
+            # Calcola embeddings per i mancanti in un singolo batch
+            if missing_indices:
+                texts_to_encode = [conversations[i] for i in missing_indices]
+                self.logger.info(f"Generazione embeddings per {len(texts_to_encode)} conversazioni (non presenti in cache)...")
+                enc = embedder.encode(texts_to_encode)
+                for j, idx in enumerate(missing_indices):
+                    X_list[idx] = enc[j]
+
+            # Concatena in array numpy
+            X = np.vstack([np.array(v, dtype=float) for v in X_list])
             y = np.array(labels)
             
             self.logger.info(f"Preparati {len(X)} esempi di training con {X.shape[1]} features")
@@ -1305,6 +1369,44 @@ class QualityGateEngine:
             import traceback
             self.logger.error(traceback.format_exc())
             return None, None
+
+    def _get_ml_features_for_session(self, session_id: str, conversation_text: str, embedder) -> np.ndarray:
+        """
+        Recupera ML features pre-calcolate per una sessione, privilegiando il feature store
+        degli embedding. In assenza, calcola l'embedding al volo.
+
+        Returns:
+            np.ndarray shape (1, D)
+        """
+        try:
+            # Prova a leggere dal feature store degli embedding
+            tenant_id = getattr(self.tenant, 'tenant_id', None)
+            if tenant_id:
+                try:
+                    import os as _os, sys as _sys
+                    _sys.path.append(_os.path.join(_os.path.dirname(__file__), '..', 'MongoDB'))
+                    from embedding_store import EmbeddingStore  # type: ignore
+                    store = EmbeddingStore()
+                    fetched = store.get_embedding(tenant_id, session_id, consume=False)
+                    if fetched:
+                        emb_vec, _ = fetched
+                        return np.array(emb_vec, dtype=float).reshape(1, -1)
+                except Exception as _e:
+                    self.logger.debug(f"Feature store indisponibile per {session_id}: {_e}")
+            # Fallback: calcolo embedding
+            if embedder is None:
+                embedder = self._get_dynamic_embedder()
+            return embedder.encode([conversation_text])
+        except Exception as e:
+            self.logger.debug(f"Errore ML features per {session_id}: {e}")
+            # Ultimo fallback: vettore vuoto coerente
+            try:
+                if embedder is None:
+                    embedder = self._get_dynamic_embedder()
+                return embedder.encode([conversation_text])
+            except Exception:
+                # Ritorna placeholder 1x1 per non bloccare il flusso
+                return np.zeros((1, 1), dtype=float)
     
     def _create_synthetic_conversation_for_label(self, label: str) -> str:
         """
@@ -1990,7 +2092,15 @@ class QualityGateEngine:
                 try:
                     if has_ml_model:
                         # Usa ensemble ML+LLM se disponibile
-                        result = classifier.predict_with_ensemble(conversation_text, return_details=True, embedder=embedder)
+                        # Prepara ML features (dal feature store o calcolate una volta sola)
+                        ml_pre = self._get_ml_features_for_session(session_id, conversation_text, embedder)
+                        result = classifier.predict_with_ensemble(
+                            conversation_text,
+                            return_details=True,
+                            embedder=embedder,
+                            ml_features_precalculated=ml_pre,
+                            session_id=session_id
+                        )
                         ml_result = result.get('ml_prediction', {})
                         llm_result = result.get('llm_prediction', {})
                         
@@ -2221,10 +2331,13 @@ class QualityGateEngine:
             try:
                 if has_ml_model:
                     # Usa ensemble ML+LLM per clienti esistenti
+                    ml_pre = self._get_ml_features_for_session(session_id, conversation_text, embedder)
                     result = ensemble.predict_with_ensemble(
                         conversation_text, 
                         return_details=True,
-                        embedder=embedder
+                        embedder=embedder,
+                        ml_features_precalculated=ml_pre,
+                        session_id=session_id
                     )
                     
                     ml_result = result.get('ml_prediction', {})
@@ -2467,10 +2580,13 @@ class QualityGateEngine:
             try:
                 if has_ml_model:
                     # Usa ensemble ML+LLM
+                    ml_pre = self._get_ml_features_for_session(session_id, conversation_text, embedder)
                     result = ensemble.predict_with_ensemble(
                         conversation_text, 
                         return_details=True,
-                        embedder=embedder
+                        embedder=embedder,
+                        ml_features_precalculated=ml_pre,
+                        session_id=session_id
                     )
                     
                     ml_result = result.get('ml_prediction', {})

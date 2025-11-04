@@ -1873,32 +1873,30 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         schema = {
             "format": {
                 "type": "json_schema",
-                "json_schema": {
-                    "name": "classification_result",
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "predicted_label": {
-                                "type": "string",
-                                "enum": labels
-                            },
-                            "confidence": {
-                                "type": "number",
-                                "minimum": 0,
-                                "maximum": 1
-                            },
-                            "motivation": {
-                                "type": "string"
-                            }
+                "name": "classification_result",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "predicted_label": {
+                            "type": "string",
+                            "enum": labels
                         },
-                        "required": [
-                            "predicted_label",
-                            "confidence",
-                            "motivation"
-                        ],
-                        "additionalProperties": False
+                        "confidence": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                        },
+                        "motivation": {
+                            "type": "string"
+                        }
                     },
-                    "strict": True
+                    "required": [
+                        "predicted_label",
+                        "confidence",
+                        "motivation"
+                    ],
+                    "additionalProperties": False
                 }
             }
         }

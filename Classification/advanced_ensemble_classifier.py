@@ -193,12 +193,17 @@ class AdvancedEnsembleClassifier:
         # Tracking delle performance
         self.performance_history = []
         self.prediction_cache = {}
-        
         # Metriche di performance per adaptive weighting
         self.performance_metrics = {
             'llm': {'accuracy': 0.85, 'confidence_reliability': 0.90},
             'ml_ensemble': {'accuracy': 0.80, 'confidence_reliability': 0.85}
         }
+
+        # Tracking mismatch dimensioni feature tra training e inference
+        self.ml_expected_feature_dim: Optional[int] = None
+        self._feature_mismatch_detected: bool = False
+        self._last_observed_feature_dim: Optional[int] = None
+        self._last_expected_feature_dim: Optional[int] = None
         
         # Integrazione BERTopic (feature augmentation)
         self.bertopic_provider = None
@@ -273,6 +278,9 @@ class AdvancedEnsembleClassifier:
                 'enhancement_method': enhancement_info,
                 'processing_time': processing_time
             }
+
+            # Memorizza il numero di feature attese per l'inferenza
+            self.ml_expected_feature_dim = int(training_features.shape[1])
             
             # DEBUG: Log training details
             if self.ml_debugger and self.ml_debugger.enabled:
@@ -406,6 +414,9 @@ class AdvancedEnsembleClassifier:
             'n_features': int(X_train.shape[1]),
             'n_classes': int(len(np.unique(y_train)))
         }
+
+        # Memorizza il numero di feature attese per l'inferenza
+        self.ml_expected_feature_dim = int(X_train.shape[1])
         
         # DEBUG: Log training details
         if self.ml_debugger and self.ml_debugger.enabled:
@@ -533,6 +544,9 @@ class AdvancedEnsembleClassifier:
             'class_weight_balanced': bool(class_weight_balanced)
         }
 
+        # Memorizza il numero di feature attese per l'inferenza
+        self.ml_expected_feature_dim = int(X.shape[1])
+
         print("✅ ML ensemble training+validation completato")
         print(f"   📊 Train acc: {train_acc:.3f}")
         print(
@@ -579,6 +593,100 @@ class AdvancedEnsembleClassifier:
         
         print(f"🔍 Training ML arricchito: {len([t for t in enhanced_texts if '[CATEGORIA:' in t])}/{len(texts)} testi con descrizioni")
         return enhanced_texts
+    
+    def _infer_ml_feature_dim(self) -> Optional[int]:
+        """
+        Prova a dedurre il numero di feature attese dal modello ML già addestrato.
+
+        Returns:
+            Numero di feature o None se non disponibile
+        """
+        if self.ml_ensemble is None:
+            return None
+        
+        # VotingClassifier espone gli stimatori sottostanti
+        try:
+            if hasattr(self.ml_ensemble, "n_features_in_"):
+                return int(self.ml_ensemble.n_features_in_)
+            
+            estimators = getattr(self.ml_ensemble, "estimators_", None)
+            if estimators:
+                for estimator in estimators:
+                    if hasattr(estimator, "n_features_in_"):
+                        return int(estimator.n_features_in_)
+        except Exception:
+            return None
+        
+        return None
+
+    def _adjust_features_to_expected_dim(self, features: np.ndarray) -> np.ndarray:
+        """
+        Allinea la shape delle features ML a quella attesa dal modello addestrato.
+
+        Se le features hanno più dimensioni di quelle attese, vengono troncate.
+        Se ne hanno meno, vengono paddingate con zeri.
+
+        Args:
+            features: Array di feature (shape: [batch, dim])
+
+        Returns:
+            Array con numero di feature coerente.
+        """
+        expected_dim = self.ml_expected_feature_dim
+        if expected_dim is None:
+            expected_dim = self._infer_ml_feature_dim()
+            if expected_dim is not None:
+                self.ml_expected_feature_dim = expected_dim
+        
+        if expected_dim is None:
+            return features
+        
+        if features is None or features.ndim != 2:
+            return features
+        
+        current_dim = features.shape[1]
+        if current_dim == expected_dim:
+            return features
+        
+        # Log diagnostico
+        print(
+            f"⚠️ Disallineamento features ML: atteso {expected_dim}, ricevuto {current_dim}. "
+            "Adatto automaticamente alle dimensioni attese."
+        )
+        self._feature_mismatch_detected = True
+        self._last_observed_feature_dim = int(current_dim)
+        self._last_expected_feature_dim = int(expected_dim)
+        
+        if current_dim > expected_dim:
+            return features[:, :expected_dim]
+        
+        # current_dim < expected_dim → pad con zeri
+        padding = np.zeros((features.shape[0], expected_dim - current_dim))
+        return np.concatenate([features, padding], axis=1)
+    
+    def has_feature_mismatch(self) -> bool:
+        """
+        Indica se è stato rilevato un disallineamento dimensionale
+        tra le feature usate in inferenza e quelle attese dal modello ML.
+        """
+        return self._feature_mismatch_detected
+
+    def get_feature_mismatch_info(self) -> Dict[str, Optional[int]]:
+        """
+        Restituisce informazioni diagnostiche sull'ultimo disallineamento rilevato.
+        """
+        return {
+            'expected_dim': self._last_expected_feature_dim,
+            'observed_dim': self._last_observed_feature_dim
+        }
+
+    def reset_feature_mismatch_flag(self) -> None:
+        """
+        Reset del flag di disallineamento dopo un riaddestramento.
+        """
+        self._feature_mismatch_detected = False
+        self._last_observed_feature_dim = None
+        self._last_expected_feature_dim = None
     
     def predict_with_ensemble(self, text: str, return_details: bool = False, embedder=None, 
                             ml_features_precalculated=None) -> Dict[str, Any]:
@@ -734,6 +842,13 @@ class AdvancedEnsembleClassifier:
                 # Verifica che ml_ensemble sia addestrato
                 if hasattr(self.ml_ensemble, 'classes_'):
                     print(f"   📊 ML Ensemble addestrato - classi disponibili: {list(self.ml_ensemble.classes_)}")
+
+                    if not isinstance(ml_features, np.ndarray):
+                        ml_features = np.array(ml_features)
+                    if ml_features.ndim == 1:
+                        ml_features = ml_features.reshape(1, -1)
+
+                    ml_features = self._adjust_features_to_expected_dim(ml_features)
                     
                     # Predizione
                     ml_proba = self.ml_ensemble.predict_proba(ml_features)[0]
@@ -1180,7 +1295,8 @@ class AdvancedEnsembleClassifier:
             'confidence_threshold': self.confidence_threshold,
             'adaptive_weights': self.adaptive_weights,
             'performance_metrics': self.performance_metrics,
-            'performance_history': self.performance_history[-100:]  # Ultimi 100
+            'performance_history': self.performance_history[-100:],  # Ultimi 100
+            'ml_expected_feature_dim': self.ml_expected_feature_dim
         }
         
         with open(f"{model_path}_config.json", 'w') as f:
@@ -1212,6 +1328,10 @@ class AdvancedEnsembleClassifier:
             self.weights = config_data.get('weights', self.weights)
             self.performance_metrics = config_data.get('performance_metrics', self.performance_metrics)
             self.performance_history = config_data.get('performance_history', [])
+            self.ml_expected_feature_dim = config_data.get(
+                'ml_expected_feature_dim',
+                self._infer_ml_feature_dim()
+            )
             
             print(f"✅ Configurazione caricata")
         
@@ -1329,6 +1449,9 @@ class AdvancedEnsembleClassifier:
                     except Exception as be:
                         print(f"⚠️ BERTopic fallito per testo {i}: {be}")
                         # Usa solo embedding base
+                        ml_features = embedding.reshape(1, -1)
+
+                ml_features = self._adjust_features_to_expected_dim(ml_features)
                 
                 ml_features_cache.append(ml_features)
                 

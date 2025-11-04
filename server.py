@@ -10,7 +10,7 @@ import sys
 import os
 import threading
 import yaml
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 import traceback
 import numpy as np
@@ -498,6 +498,15 @@ class ClassificationService:
         self._quality_gate_locks = {}  # Lock per quality gate per cliente
         self._embedder_lock = threading.Lock()  # Lock per embedder condiviso
         self._global_init_lock = threading.Lock()  # Lock globale per inizializzazioni critiche
+
+    def _resolve_tenant(self, client_identifier: str) -> Tuple[Tenant, str]:
+        """
+        Risolve qualsiasi identificatore di tenant (UUID, slug, nome legacy)
+        restituendo l'oggetto Tenant e la chiave cache canonica (tenant_slug).
+        """
+        tenant = resolve_tenant_from_identifier(client_identifier)
+        cache_key = tenant.tenant_slug
+        return tenant, cache_key
         
     def clear_gpu_cache(self):
         """
@@ -603,35 +612,29 @@ class ClassificationService:
         Returns:
             Pipeline configurata per il cliente
         """
-        print(f"trace:all - get_pipeline chiamato per client_name: {client_name}")
-        # Crea lock specifico per questo cliente se non esiste ancora 
-        if client_name not in self._pipeline_locks:
-            with self._global_init_lock: # Lock globale per inizializzazioni critiche 
-                if client_name not in self._pipeline_locks: # Doppio check
-                    self._pipeline_locks[client_name] = threading.Lock() # Lock specifico cliente
+        tenant, cache_key = self._resolve_tenant(client_name)
+        print(f"trace:all - get_pipeline chiamato per tenant: {tenant.tenant_name} (key={cache_key})")
         
-        # Usa lock specifico del cliente
-        with self._pipeline_locks[client_name]: # Lock specifico cliente
-            if client_name not in self.pipelines: # Doppio check
-                print(f"🔧 Inizializzazione pipeline per cliente: {client_name} (con lock)")
+        if cache_key not in self._pipeline_locks:
+            with self._global_init_lock:
+                if cache_key not in self._pipeline_locks:
+                    self._pipeline_locks[cache_key] = threading.Lock()
+        
+        with self._pipeline_locks[cache_key]:
+            if cache_key not in self.pipelines:
+                print(f"🔧 Inizializzazione pipeline per tenant: {tenant.tenant_name} ({tenant.tenant_id})")
                 
-                # MODIFICA 2025-08-25: Pipeline inizializzata SENZA embedder
-                # L'embedder viene caricato lazy quando serve per il tenant
-                # NON carichiamo embedder all'avvio del server!
-                
-                # Crea pipeline con modalità automatica SENZA embedder condiviso
-                # NOTA: auto_retrain ora viene gestito da config.yaml
                 pipeline = EndToEndPipeline(
-                    tenant_slug=client_name,
-                    confidence_threshold=0.7, # Da verificare se ha senso perchè tanto viene sovrascritto
-                    auto_mode=True,  # Modalità completamente automatica
-                    shared_embedder=None  # LAZY LOADING: embedder caricato quando serve!
+                    tenant=tenant,
+                    confidence_threshold=0.7,
+                    auto_mode=True,
+                    shared_embedder=None
                 )
                 
-                self.pipelines[client_name] = pipeline
-                print(f"✅ Pipeline {client_name} inizializzata")
-                
-            return self.pipelines[client_name]
+                self.pipelines[cache_key] = pipeline
+                print(f"✅ Pipeline {cache_key} inizializzata")
+        
+        return self.pipelines[cache_key]
     
     def get_quality_gate(self, client_name: str, user_thresholds: Dict[str, float] = None) -> QualityGateEngine:
         """
@@ -645,33 +648,26 @@ class ClassificationService:
         Returns:
             QualityGateEngine configurato per il cliente
         """
-        # Crea lock specifico per questo cliente se non esiste
-        if client_name not in self._quality_gate_locks:
+        tenant, cache_key = self._resolve_tenant(client_name)
+        
+        if cache_key not in self._quality_gate_locks:
             with self._global_init_lock:
-                if client_name not in self._quality_gate_locks:
-                    self._quality_gate_locks[client_name] = threading.Lock()
+                if cache_key not in self._quality_gate_locks:
+                    self._quality_gate_locks[cache_key] = threading.Lock()
         
-        # Crea chiave che include le soglie per il cache
-        cache_key = client_name
+        original_cache_key = cache_key
         if user_thresholds:
-            # Se ci sono soglie personalizzate, ricreiamo sempre il QualityGateEngine
-            cache_key = f"{client_name}_custom_{hash(tuple(sorted(user_thresholds.items())))}"
+            cache_key = f"{cache_key}_custom_{hash(tuple(sorted(user_thresholds.items())))}"
         
-        # Usa lock specifico del cliente
-        with self._quality_gate_locks[client_name]:
+        with self._quality_gate_locks[original_cache_key]:
             if cache_key not in self.quality_gates:
-                print(f"🔧 Inizializzazione QualityGateEngine per cliente: {client_name} (con lock)")
+                print(f"🔧 Inizializzazione QualityGateEngine per tenant: {tenant.tenant_name} (con lock)")
                 
-                # Risolve client_name in oggetto Tenant
-                tenant = resolve_tenant_from_identifier(client_name)
-                
-                # Parametri per QualityGateEngine con OGGETTO TENANT
                 qg_params = {
-                    'tenant': tenant,  # PASSA OGGETTO TENANT
+                    'tenant': tenant,
                     'training_log_path': f"training_decisions_{tenant.tenant_slug}.jsonl"
                 }
                 
-                # Aggiungi soglie personalizzate se fornite
                 if user_thresholds:
                     print(f"🎯 Usando soglie personalizzate utente: {user_thresholds}")
                     if 'confidence_threshold' in user_thresholds:
@@ -683,11 +679,10 @@ class ClassificationService:
                     if 'novelty_threshold' in user_thresholds:
                         qg_params['novelty_threshold'] = user_thresholds['novelty_threshold']
                 
-                # Crea QualityGateEngine per il cliente
                 quality_gate = QualityGateEngine(**qg_params)
                 
                 self.quality_gates[cache_key] = quality_gate
-                print(f"✅ QualityGateEngine {client_name} inizializzato con soglie: "
+                print(f"✅ QualityGateEngine {tenant.tenant_slug} inizializzato con soglie: "
                       f"confidence={quality_gate.confidence_threshold}, "
                       f"disagreement={quality_gate.disagreement_threshold}")
                 
@@ -703,6 +698,7 @@ class ClassificationService:
         Returns:
             Set di session_id già processati
         """
+        tenant, _ = self._resolve_tenant(client_name)
         try:
             self.tag_db.connetti()
             
@@ -713,12 +709,12 @@ class ClassificationService:
             WHERE tenant_name = %s
             """
             
-            results = self.tag_db.esegui_query(query, (client_name,))
+            results = self.tag_db.esegui_query(query, (tenant.tenant_name,))
             processed_sessions = {row[0] for row in results} if results else set()
             
             self.tag_db.disconnetti()
             
-            print(f"📊 Cliente {client_name}: {len(processed_sessions)} sessioni già processate")
+            print(f"📊 Tenant {tenant.tenant_name}: {len(processed_sessions)} sessioni già processate")
             return processed_sessions
             
         except Exception as e:
@@ -738,11 +734,12 @@ class ClassificationService:
             Risultato dell'operazione
         """
         try:
-            print(f"🗑️ CANCELLAZIONE CLASSIFICAZIONI MONGODB per cliente: {client_name}")
+            tenant, cache_key = self._resolve_tenant(client_name)
+            print(f"🗑️ CANCELLAZIONE CLASSIFICAZIONI MONGODB per tenant: {tenant.tenant_name} ({cache_key})")
             
-            mongo_reader = self.get_mongo_reader(client_name)
+            mongo_reader = self.get_mongo_reader(cache_key)
             # Usa il mongo_reader per cancellare la collection del tenant
-            result = mongo_reader.clear_tenant_collection(client_name)
+            result = mongo_reader.clear_tenant_collection(cache_key)
             
             if result['success']:
                 print(f"✅ {result['message']}")
@@ -815,6 +812,7 @@ class ClassificationService:
             Informazioni sul modello
         """
         try:
+            tenant, cache_key = self._resolve_tenant(client_name)
             finetuning_manager = self.get_finetuning_manager()
             
             if not finetuning_manager:
@@ -823,11 +821,11 @@ class ClassificationService:
                     'error': 'Fine-tuning manager non disponibile'
                 }
             
-            model_info = finetuning_manager.get_model_info(client_name)
+            model_info = finetuning_manager.get_model_info(tenant.tenant_slug)
             
             # Aggiungi info dalla pipeline se disponibile
-            if client_name in self.pipelines:
-                pipeline = self.pipelines[client_name]
+            if cache_key in self.pipelines:
+                pipeline = self.pipelines[cache_key]
                 classifier = getattr(pipeline, 'intelligent_classifier', None)
                 if classifier and hasattr(classifier, 'get_current_model_info'):
                     classifier_info = classifier.get_current_model_info()
@@ -838,7 +836,9 @@ class ClassificationService:
             
             return {
                 'success': True,
-                'client': client_name,
+                'client': tenant.tenant_slug,
+                'tenant_id': tenant.tenant_id,
+                'tenant_name': tenant.tenant_name,
                 'model_info': model_info
             }
             
@@ -880,8 +880,10 @@ class ClassificationService:
             # Crea configurazione di training
             from FineTuning.mistral_finetuning_manager import FineTuningConfig
             
+            tenant, cache_key = self._resolve_tenant(client_name)
+
             config = FineTuningConfig()
-            config.output_model_name = f"mistral_finetuned_{client_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            config.output_model_name = f"mistral_finetuned_{tenant.tenant_slug}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             
             # Applica configurazione personalizzata se fornita
             if training_config:
@@ -899,22 +901,23 @@ class ClassificationService:
             print(f"📋 Configurazione: epochs={config.num_epochs}, lr={config.learning_rate}, batch={config.batch_size}")
             
             # Esegui fine-tuning
-            result = finetuning_manager.execute_finetuning(client_name, config)
+            result = finetuning_manager.execute_finetuning(tenant.tenant_slug, config)
             
             if result.success:
                 # Aggiorna pipeline esistente per usare il nuovo modello
-                if client_name in self.pipelines:
-                    pipeline = self.pipelines[client_name]
+                if cache_key in self.pipelines:
+                    pipeline = self.pipelines[cache_key]
                     classifier = getattr(pipeline, 'intelligent_classifier', None)
                     if classifier and hasattr(classifier, 'switch_to_finetuned_model'):
                         classifier.switch_to_finetuned_model()
-                        print(f"🎯 Pipeline {client_name} aggiornata con modello fine-tuned")
+                        print(f"🎯 Pipeline {cache_key} aggiornata con modello fine-tuned")
                 
-                print(f"✅ Fine-tuning completato per {client_name}: {result.model_name}")
+                print(f"✅ Fine-tuning completato per {tenant.tenant_slug}: {result.model_name}")
             
             return {
                 'success': result.success,
-                'client': client_name,
+                'client': tenant.tenant_slug,
+                'tenant_id': tenant.tenant_id,
                 'model_name': result.model_name,
                 'training_samples': result.training_samples,
                 'validation_samples': result.validation_samples,
@@ -1041,7 +1044,14 @@ class ClassificationService:
                 'error': str(e)
             }
 
-    def classify_all_sessions(self, client_name: str, force_reprocess: bool = False, force_review: bool = False, force_reprocess_all: bool = False) -> Dict[str, Any]:
+    def classify_all_sessions(
+        self,
+        client_name: str,
+        force_reprocess: bool = False,
+        force_review: bool = False,
+        force_reprocess_all: bool = False,
+        force_retrain_ml: bool = False
+    ) -> Dict[str, Any]:
         """
         Classifica tutte le sessioni di un cliente
         
@@ -1050,6 +1060,7 @@ class ClassificationService:
             force_reprocess: Se True, cancella la collection MongoDB e riprocessa tutto da capo (clustering + classificazione)
             force_review: Se True, forza l'aggiunta di tutti i casi alla coda di revisione
             force_reprocess_all: Se True, cancella TUTTE le classificazioni esistenti e riprocessa tutto dall'inizio (legacy)
+            force_retrain_ml: Se True, elimina i file di training ML esistenti per il tenant
             
         Returns:
             Risultati della classificazione
@@ -1086,6 +1097,14 @@ class ClassificationService:
             
             # Ottieni pipeline per il cliente
             pipeline = self.get_pipeline(client_name)
+
+            training_files_removed = 0
+            if force_retrain_ml:
+                try:
+                    training_files_removed = pipeline.cleanup_training_files(keep_latest=False)
+                    print(f"🧹 FORCE RETRAIN ML: rimossi {training_files_removed} file training per {client_name}")
+                except Exception as cleanup_error:
+                    print(f"⚠️ Impossibile pulire i file di training per {client_name}: {cleanup_error}")
             
             # Estrai tutte le sessioni del cliente
             sessioni = pipeline.estrai_sessioni(limit=None)
@@ -1192,7 +1211,10 @@ class ClassificationService:
                     'saved_count': saved_count,
                     'errors': error_count
                 },
-                'training_metrics': training_metrics
+                'training_metrics': training_metrics,
+                'force_review': force_review,
+                'force_retrain_ml': force_retrain_ml,
+                'training_files_removed': training_files_removed
             }
             
             print(f"✅ Classificazione completa terminata in {duration:.1f}s")
@@ -1258,64 +1280,32 @@ class ClassificationService:
             
             print(f"📊 Trovate {len(nuove_sessioni)} nuove sessioni per {client_name}")
             
-            # Per le nuove sessioni, usa il classificatore già trainato se disponibile
-            # oppure esegui un training veloce su un subset
-            if len(nuove_sessioni) < 20:
-                # Poche sessioni: usa classificazione diretta se possibile
-                print(f"🚀 Classificazione diretta per {len(nuove_sessioni)} sessioni")
-                
-                try:
-                    # Prova prima con l'ensemble classifier esistente
-                    classification_stats = pipeline.classifica_e_salva_sessioni(
-                        nuove_sessioni, use_ensemble=True, optimize_clusters=True
+            training_metrics = {'note': 'incremental_classification'}
+            documenti_incrementali = []
+
+            try:
+                documenti_incrementali = pipeline.esegui_clustering(nuove_sessioni, force_reprocess=False)
+            except Exception as clustering_error:
+                print(f"⚠️ Errore durante il clustering incrementale: {clustering_error}")
+
+            if not documenti_incrementali:
+                print("⚠️ Clustering incrementale non ha prodotto risultati, creazione DocumentoProcessing fallback")
+                from Models.documento_processing import DocumentoProcessing
+                documenti_incrementali = []
+                for session_id, dati in nuove_sessioni.items():
+                    doc = DocumentoProcessing(
+                        session_id=session_id,
+                        testo_completo=dati.get('testo_completo', '')
                     )
-                    training_metrics = {'note': 'Used existing trained model'}
-                    
-                except Exception as e:
-                    print(f"⚠️ Classificazione diretta fallita: {e}")
-                    print("🧩 Tentativo clustering con parametri conservativi")
-                    
-                    # Se fallisce, usa clustering con parametri conservativi
-                    embeddings, cluster_labels, representatives, suggested_labels = pipeline.esegui_clustering(nuove_sessioni)
-                    
-                    # Se abbiamo troppo pochi campioni per training, usa solo etichettatura
-                    n_valid_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
-                    
-                    if len(nuove_sessioni) < n_valid_clusters * 5:
-                        print(f"⚠️ Troppo pochi campioni per training ({len(nuove_sessioni)} vs {n_valid_clusters} classi)")
-                        print("🏷️ Salto training e uso classificazione base")
-                        
-                        # Salva le sessioni con etichette dal clustering
-                        classification_stats = {
-                            'total_sessions': len(nuove_sessioni),
-                            'saved_successfully': len(nuove_sessioni),
-                            'save_errors': 0,
-                            'high_confidence': n_valid_clusters * 2,  # Stima conservativa
-                            'method': 'clustering_only'
-                        }
-                        training_metrics = {'note': 'Skipped training due to insufficient samples'}
-                    else:
-                        # Training normale - gestito automaticamente dal sistema
-                        training_metrics = {'note': 'Training automatico gestito dal sistema', 'accuracy': 0.85}
-                        
-                        classification_stats = pipeline.classifica_e_salva_sessioni(
-                            nuove_sessioni, use_ensemble=True, optimize_clusters=True
-                        )
-                
-            else:
-                # Molte sessioni: esegui clustering e training completo
-                print("🧩 Clustering e training incrementale")
-                
-                # Esegui clustering sulle nuove sessioni
-                embeddings, cluster_labels, representatives, suggested_labels = pipeline.esegui_clustering(nuove_sessioni)
-                
-                # Training incrementale - gestito automaticamente
-                training_metrics = {'note': 'Training incrementale gestito dal sistema', 'accuracy': 0.85}
-                
-                # Classificazione
-                classification_stats = pipeline.classifica_e_salva_sessioni(
-                    nuove_sessioni, use_ensemble=True, optimize_clusters=True
-                )
+                    doc.set_clustering_info(cluster_id=-1, cluster_size=0, is_outlier=True)
+                    documenti_incrementali.append(doc)
+
+            classification_stats = pipeline.classifica_e_salva_documenti_unified(
+                documenti=documenti_incrementali,
+                batch_size=32,
+                use_ensemble=True,
+                force_review=False
+            )
             
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
@@ -1328,8 +1318,8 @@ class ClassificationService:
                 'duration_seconds': duration,
                 'sessions_total': len(tutte_sessioni),
                 'sessions_new': len(nuove_sessioni),
-                'sessions_processed': classification_stats.get('saved_successfully', 0),
-                'sessions_errors': classification_stats.get('save_errors', 0),
+                'sessions_processed': classification_stats.get('saved_count', 0),
+                'sessions_errors': classification_stats.get('errors', 0),
                 'sessions_already_processed': len(processed_sessions),
                 'classification_stats': classification_stats,
                 'training_metrics': training_metrics
@@ -1360,7 +1350,8 @@ class ClassificationService:
         Returns:
             True se la pipeline è in cache, False altrimenti
         """
-        return client_name in self.pipelines
+        _, cache_key = self._resolve_tenant(client_name)
+        return cache_key in self.pipelines
     
     def invalidate_pipeline_cache(self, client_name: str) -> bool:
         """
@@ -1373,18 +1364,20 @@ class ClassificationService:
         Returns:
             True se la pipeline è stata rimossa dalla cache, False se non era presente
         """
-        if client_name in self.pipelines:
+        tenant, cache_key = self._resolve_tenant(client_name)
+
+        if cache_key in self.pipelines:
             # Rimuovi la pipeline dalla cache
-            del self.pipelines[client_name]
+            del self.pipelines[cache_key]
             
             # Rimuovi anche il lock associato se esiste
-            if client_name in self._pipeline_locks:
-                del self._pipeline_locks[client_name]
+            if cache_key in self._pipeline_locks:
+                del self._pipeline_locks[cache_key]
             
-            print(f"🗑️ Cache pipeline invalidata per cliente: {client_name}")
+            print(f"🗑️ Cache pipeline invalidata per cliente: {tenant.tenant_slug}")
             return True
         else:
-            print(f"ℹ️ Nessuna pipeline in cache da invalidare per: {client_name}")
+            print(f"ℹ️ Nessuna pipeline in cache da invalidare per: {tenant.tenant_slug}")
             return False
 
 # Istanza globale del servizio
@@ -1452,6 +1445,7 @@ def classify_all_sessions(client_name: str):
         force_reprocess = False
         force_review = False
         force_reprocess_all = False  # NUOVO parametro
+        force_retrain_ml = False
         
         # Parsing robusto dei parametri
         try:
@@ -1460,35 +1454,41 @@ def classify_all_sessions(client_name: str):
                 force_reprocess = data.get('force_reprocess', False)
                 force_review = data.get('force_review', False)
                 force_reprocess_all = data.get('force_reprocess_all', False)  # NUOVO
+                force_retrain_ml = data.get('force_retrain_ml', False)
             elif request.form:
                 # Gestisce form data
                 force_reprocess = request.form.get('force_reprocess', 'false').lower() == 'true'
                 force_review = request.form.get('force_review', 'false').lower() == 'true'
                 force_reprocess_all = request.form.get('force_reprocess_all', 'false').lower() == 'true'  # NUOVO
+                force_retrain_ml = request.form.get('force_retrain_ml', 'false').lower() == 'true'
             elif request.args:
                 # Gestisce query parameters
                 force_reprocess = request.args.get('force_reprocess', 'false').lower() == 'true'
                 force_review = request.args.get('force_review', 'false').lower() == 'true'
                 force_reprocess_all = request.args.get('force_reprocess_all', 'false').lower() == 'true'  # NUOVO
+                force_retrain_ml = request.args.get('force_retrain_ml', 'false').lower() == 'true'
         except Exception as e:
             print(f"⚠️ Errore parsing parametri: {e}. Uso valori default.")
             force_reprocess = False
             force_review = False
             force_reprocess_all = False
-        
+            force_retrain_ml = False
+
         print(f"🎯 RICHIESTA CLASSIFICAZIONE COMPLETA:")
         print(f"   Cliente: {client_name}")
         print(f"   Force reprocess: {force_reprocess}")
         print(f"   Force review: {force_review}")
         print(f"   Force reprocess all: {force_reprocess_all}")  # NUOVO
+        print(f"   Force retrain ML: {force_retrain_ml}")
         print(f"   Timestamp: {datetime.now().isoformat()}")
-        
+
         # Esegui classificazione completa
         results = classification_service.classify_all_sessions(
             client_name=client_name,
             force_reprocess=force_reprocess,
             force_review=force_review,
-            force_reprocess_all=force_reprocess_all  # NUOVO parametro
+            force_reprocess_all=force_reprocess_all,  # NUOVO parametro
+            force_retrain_ml=force_retrain_ml
         )
         
         # Determina status code
@@ -1570,11 +1570,13 @@ def get_client_status(client_name: str):
     """
     trace_all("get_client_status", "ENTER", client_name=client_name)
     try:
+        tenant, cache_key = classification_service._resolve_tenant(client_name)
+
         # Recupera sessioni processate
-        processed_sessions = classification_service.get_processed_sessions(client_name)
+        processed_sessions = classification_service.get_processed_sessions(cache_key)
         
         # Verifica se pipeline è inizializzata
-        pipeline_loaded = client_name in classification_service.pipelines
+        pipeline_loaded = cache_key in classification_service.pipelines
         
         # Statistiche dal database
         db = TagDatabaseConnector()
@@ -1588,7 +1590,7 @@ def get_client_status(client_name: str):
         FROM session_classifications 
         WHERE tenant_name = %s
         """
-        stats = db.esegui_query(total_query, (client_name,))
+        stats = db.esegui_query(total_query, (tenant.tenant_name,))
         
         # Distribuzione per tag
         tag_query = """
@@ -1598,13 +1600,15 @@ def get_client_status(client_name: str):
         GROUP BY tag_name
         ORDER BY count DESC
         """
-        tag_distribution = db.esegui_query(tag_query, (client_name,))
+        tag_distribution = db.esegui_query(tag_query, (tenant.tenant_name,))
         
         db.disconnetti()
         
         # Costruisci risposta
         status = {
-            'client': client_name,
+            'client': tenant.tenant_slug,
+            'tenant_id': tenant.tenant_id,
+            'tenant_name': tenant.tenant_name,
             'timestamp': datetime.now().isoformat(),
             'pipeline_loaded': pipeline_loaded,
             'statistics': {
@@ -4505,23 +4509,26 @@ def get_finetuning_status(client_name: str):
         Stato completo del fine-tuning
     """
     try:
+        tenant, cache_key = classification_service._resolve_tenant(client_name)
         # Info del modello
-        model_info = classification_service.get_client_model_info(client_name)
+        model_info = classification_service.get_client_model_info(cache_key)
         
         # Controlla se c'è una pipeline attiva
-        pipeline_active = client_name in classification_service.pipelines
+        pipeline_active = cache_key in classification_service.pipelines
         current_model = None
         
         if pipeline_active:
-            pipeline = classification_service.pipelines[client_name]
+            pipeline = classification_service.pipelines[cache_key]
             classifier = getattr(pipeline, 'intelligent_classifier', None)
             if classifier and hasattr(classifier, 'get_current_model_info'):
                 current_model = classifier.get_current_model_info()
         
         return jsonify({
             'success': True,
-            'client': client_name,
-            'model_info': model_info.get('model_info', {}) if model_info['success'] else {},
+            'client': tenant.tenant_slug,
+            'tenant_id': tenant.tenant_id,
+            'tenant_name': tenant.tenant_name,
+            'model_info': model_info.get('model_info', {}) if model_info.get('success') else {},
             'current_model': current_model,
             'pipeline_active': pipeline_active,
             'finetuning_available': classification_service.get_finetuning_manager() is not None,

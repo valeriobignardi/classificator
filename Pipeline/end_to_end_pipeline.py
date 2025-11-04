@@ -796,6 +796,143 @@ class EndToEndPipeline:
                 cluster_info[cluster_id]['size'] += 1
         
         return cluster_info
+
+    def _build_document_processing_objects(self,
+                                           sessioni: Dict[str, Dict],
+                                           embeddings: np.ndarray,
+                                           cluster_labels: np.ndarray,
+                                           cluster_info: Optional[Dict[int, Dict]] = None,
+                                           prediction_strengths: Optional[np.ndarray] = None,
+                                           source_label: str = "CLUSTERING") -> Tuple[List[DocumentoProcessing], Dict[int, Dict]]:
+        """
+        Crea gli oggetti DocumentoProcessing generando rappresentanti e marcando propagati.
+
+        Args:
+            sessioni: Dizionario con le sessioni originali
+            embeddings: Array numpy degli embeddings
+            cluster_labels: Array con le etichette cluster (stesso ordine di sessioni)
+            cluster_info: Informazioni sul cluster (se None viene generato da labels)
+            prediction_strengths: Confidenze opzionali da usare come confidence
+            source_label: Etichetta testuale per i log
+
+        Returns:
+            Tuple con (lista di DocumentoProcessing, cluster_info normalizzato)
+        """
+        session_ids = list(sessioni.keys())
+        session_texts = [sessioni[sid].get('testo_completo', '') for sid in session_ids]
+
+        if cluster_info is None:
+            cluster_info = self._generate_cluster_info_from_labels(cluster_labels, session_texts)
+
+        # Normalizza cluster_info assicurandosi che contenga indici coerenti
+        for idx, label in enumerate(cluster_labels):
+            if label == -1:
+                continue
+            if label not in cluster_info:
+                cluster_info[label] = {
+                    'intent': f'cluster_hdbscan_{label}',
+                    'size': 0,
+                    'indices': [],
+                    'intent_string': f'Cluster HDBSCAN {label}',
+                    'classification_method': 'hdbscan_optimized',
+                    'average_confidence': 0.7
+                }
+            cluster_info[label].setdefault('indices', [])
+            if idx not in cluster_info[label]['indices']:
+                cluster_info[label]['indices'].append(idx)
+
+        print(f"\n🔄 [{source_label}] Creazione DocumentoProcessing ({len(session_ids)} elementi)...")
+
+        documenti: List[DocumentoProcessing] = []
+
+        for i, session_id in enumerate(session_ids):
+            documento = DocumentoProcessing(
+                session_id=session_id,
+                testo_completo=sessioni[session_id].get('testo_completo', ''),
+                embedding=embeddings[i].tolist() if i < len(embeddings) else None
+            )
+
+            cluster_id = cluster_labels[i] if i < len(cluster_labels) else -1
+            is_outlier = cluster_id == -1
+            cluster_size = 0
+
+            if not is_outlier and cluster_id in cluster_info:
+                info = cluster_info[cluster_id]
+                cluster_size = info.get('size', len(info.get('indices', [])))
+
+            documento.set_clustering_info(cluster_id, cluster_size, is_outlier)
+
+            if not is_outlier and cluster_id in cluster_info:
+                info = cluster_info[cluster_id]
+                if 'average_confidence' in info and info['average_confidence'] is not None:
+                    documento.confidence = info['average_confidence']
+                if 'classification_method' in info:
+                    documento.classification_method = info['classification_method']
+                if 'intent_string' in info:
+                    documento.predicted_label = info['intent_string']
+
+            if prediction_strengths is not None and i < len(prediction_strengths):
+                try:
+                    documento.confidence = float(prediction_strengths[i])
+                except (TypeError, ValueError):
+                    pass
+
+            documenti.append(documento)
+
+        # Selezione rappresentanti e marcatura propagati
+        session_id_to_doc_index = {doc.session_id: idx for idx, doc in enumerate(documenti)}
+
+        for cluster_id, info in cluster_info.items():
+            indices = info.get('indices', [])
+            if not indices:
+                continue
+
+            cluster_session_ids = [session_ids[idx] for idx in indices if idx < len(session_ids)]
+            cluster_doc_indices = [session_id_to_doc_index[sid] for sid in cluster_session_ids if sid in session_id_to_doc_index]
+
+            if not cluster_doc_indices:
+                continue
+
+            if len(cluster_doc_indices) <= 3:
+                selected_doc_indices = cluster_doc_indices
+            else:
+                cluster_embeddings = embeddings[indices]
+                from sklearn.metrics.pairwise import cosine_distances
+                distances = cosine_distances(cluster_embeddings)
+
+                selected_indices = [indices[0]]
+                for _ in range(min(2, len(indices) - 1)):
+                    max_min_dist = -1
+                    best_idx = -1
+                    for idx in indices:
+                        if idx not in selected_indices:
+                            min_dist = min(
+                                distances[indices.index(idx)][indices.index(sel_idx)]
+                                for sel_idx in selected_indices
+                            )
+                            if min_dist > max_min_dist:
+                                max_min_dist = min_dist
+                                best_idx = idx
+                    if best_idx != -1:
+                        selected_indices.append(best_idx)
+
+                selected_session_ids = [session_ids[idx] for idx in selected_indices if idx < len(session_ids)]
+                selected_doc_indices = [session_id_to_doc_index[sid] for sid in selected_session_ids if sid in session_id_to_doc_index]
+
+            for doc_idx in selected_doc_indices:
+                if 0 <= doc_idx < len(documenti):
+                    documenti[doc_idx].set_as_representative(f"diverse_selection_cluster_{cluster_id}")
+
+        propagati_marcati = 0
+        for doc in documenti:
+            if doc.cluster_id != -1 and not doc.is_representative and not doc.is_outlier:
+                doc.is_propagated = True
+                doc.propagated_from_cluster = doc.cluster_id
+                doc.selection_reason = "cluster_propagated"
+                propagati_marcati += 1
+
+        print(f"   ✅ DocumentoProcessing creati: {len(documenti)} (propagati: {propagati_marcati})")
+        return documenti, cluster_info
     
     def _get_embedder(self):
         """
@@ -1132,7 +1269,10 @@ class EndToEndPipeline:
             documenti = self.esegui_clustering_puro(sessioni)
         else:
             print(f"🧠 [FASE 4: CLUSTERING] Clustering incrementale (se possibile)...")
-            documenti = self.esegui_clustering_puro(sessioni)  # Per ora sempre completo
+            documenti = self._esegui_clustering_incrementale(sessioni)
+            if documenti is None:
+                print(f"ℹ️ Clustering incrementale non disponibile, eseguo clustering completo")
+                documenti = self.esegui_clustering_puro(sessioni)
         
         # 📊 Calcola statistiche finali dai documenti
         n_rappresentanti = sum(1 for doc in documenti if doc.is_representative)
@@ -1472,126 +1612,14 @@ class EndToEndPipeline:
                         'classification_method': 'hdbscan'
                     }
         
-        # 🚀 NUOVO: Crea oggetti DocumentoProcessing per tutti i documenti
-        session_ids = list(sessioni.keys())
-        documenti = []
-        
-        print(f"\n🔄 [FASE 4: CREAZIONE OGGETTI] Creando {len(session_ids)} oggetti DocumentoProcessing...")
-        
-        # Crea un oggetto DocumentoProcessing per ogni sessione
-        for i, session_id in enumerate(session_ids):
-            # Crea oggetto base con dati originali
-            documento = DocumentoProcessing(
-                session_id=session_id,
-                testo_completo=sessioni[session_id].get('testo_completo', ''),
-                embedding=embeddings[i].tolist() if i < len(embeddings) else None
-            )
-            
-            # Imposta informazioni clustering
-            cluster_id = cluster_labels[i] if i < len(cluster_labels) else -1
-            cluster_size = 0
-            is_outlier = (cluster_id == -1)
-            
-            # Calcola dimensione cluster se non è outlier
-            if not is_outlier and cluster_id in cluster_info:
-                cluster_size = cluster_info[cluster_id]['size']
-            
-            documento.set_clustering_info(cluster_id, cluster_size, is_outlier)
-            
-            # Aggiungi info sulla classificazione se disponibile (da intelligent clustering)
-            if not is_outlier and cluster_id in cluster_info:
-                info = cluster_info[cluster_id]
-                if 'average_confidence' in info:
-                    documento.confidence = info['average_confidence']
-                if 'classification_method' in info:
-                    documento.classification_method = info['classification_method']
-                if 'intent_string' in info:
-                    documento.predicted_label = info['intent_string']
-            
-            documenti.append(documento)
-        
-        # 🎯 Seleziona rappresentanti per ogni cluster
-        print(f"\n🎯 [FASE 4: RAPPRESENTANTI] Selezionando rappresentanti per {len(cluster_info)} cluster...")
-        
-        # Crea mapping session_id -> indice documenti per correggere bug mapping
-        session_id_to_doc_index = {doc.session_id: i for i, doc in enumerate(documenti)}
-        
-        for cluster_id, info in cluster_info.items():
-            cluster_indices = info['indices']
-            
-            # Converti indici originali in session_ids e poi in indici documenti
-            cluster_session_ids = [session_ids[idx] for idx in cluster_indices if idx < len(session_ids)]
-            cluster_doc_indices = [session_id_to_doc_index[session_id] for session_id in cluster_session_ids 
-                                  if session_id in session_id_to_doc_index]
-            
-            print(f"    🎯 Cluster {cluster_id}: {len(cluster_doc_indices)} documenti candidati")
-            
-            if len(cluster_doc_indices) == 0:
-                print(f"      ⚠️ Nessun documento trovato per cluster {cluster_id}")
-                continue
-                
-            # Selezione intelligente dei rappresentanti (più diversi possibile)
-            if len(cluster_doc_indices) <= 3:
-                selected_doc_indices = cluster_doc_indices
-                print(f"      ✅ Seleziono tutti {len(selected_doc_indices)} documenti")
-            else:
-                # Seleziona 3 rappresentanti più diversi usando distanza embedding
-                cluster_embeddings = embeddings[cluster_indices]
-                from sklearn.metrics.pairwise import cosine_distances
-                distances = cosine_distances(cluster_embeddings)
-                
-                # Trova i 3 punti più distanti tra loro
-                selected_indices = [cluster_indices[0]]  # Primo punto
-                
-                for _ in range(min(2, len(cluster_indices) - 1)):
-                    max_min_dist = -1
-                    best_idx = -1
-                    
-                    for idx in cluster_indices:
-                        if idx not in selected_indices:
-                            min_dist_to_selected = min(
-                                distances[cluster_indices.index(idx)][cluster_indices.index(sel_idx)]
-                                for sel_idx in selected_indices
-                            )
-                            if min_dist_to_selected > max_min_dist:
-                                max_min_dist = min_dist_to_selected
-                                best_idx = idx
-                    
-                    if best_idx != -1:
-                        selected_indices.append(best_idx)
-                
-                # Converti indici selezionati in indici documenti
-                selected_session_ids = [session_ids[idx] for idx in selected_indices if idx < len(session_ids)]
-                selected_doc_indices = [session_id_to_doc_index[session_id] for session_id in selected_session_ids 
-                                       if session_id in session_id_to_doc_index]
-                print(f"      ✅ Seleziono {len(selected_doc_indices)} rappresentanti diversificati")
-            
-            # Marca i documenti selezionati come rappresentanti
-            rappresentanti_cluster = 0
-            for doc_idx in selected_doc_indices:
-                if doc_idx < len(documenti):
-                    documenti[doc_idx].set_as_representative(f"diverse_selection_cluster_{cluster_id}")
-                    rappresentanti_cluster += 1
-            
-            print(f"      🎯 Marcati {rappresentanti_cluster} rappresentanti per cluster {cluster_id}")
-                
-        # 🎯 Marca solo i documenti come propagati (SENZA label - sarà aggiunta dopo classificazione)
-        print(f"\n🎯 [FASE 4: MARCATURA PROPAGATI] Marcando documenti per propagazione futura...")
-        
-        # Marca tutti i documenti non-rappresentanti e non-outlier come propagati
-        propagati_marcati = 0
-        for doc in documenti:
-            if (doc.cluster_id != -1 and  # Non outlier
-                not doc.is_representative and 
-                not doc.is_outlier):
-                
-                # Marca solo come propagato, SENZA label (sarà aggiunta dopo classificazione)
-                doc.is_propagated = True
-                doc.propagated_from_cluster = doc.cluster_id
-                doc.selection_reason = "cluster_propagated"
-                propagati_marcati += 1
-        
-        print(f"   ✅ Marcati {propagati_marcati} documenti per propagazione futura")
+        documenti, cluster_info = self._build_document_processing_objects(
+            sessioni=sessioni,
+            embeddings=embeddings,
+            cluster_labels=cluster_labels,
+            cluster_info=cluster_info,
+            prediction_strengths=None,
+            source_label="FASE 4"
+        )
         
         
         # 📊 Calcola statistiche finali dai documenti elaborati
@@ -2449,6 +2477,30 @@ class EndToEndPipeline:
         print(f"     👥 Rappresentanti salvati: {saved_representatives}")
         print(f"     🔄 Propagati salvati: {saved_propagated}")
         print(f"     🔍 Outlier salvati: {saved_outliers}")
+
+        # 🔄 OPZIONE 1: Riaddestramento automatico se rilevato mismatch dimensionale
+        try:
+            if (self.ensemble_classifier and
+                hasattr(self.ensemble_classifier, "has_feature_mismatch") and
+                self.ensemble_classifier.has_feature_mismatch()):
+
+                mismatch_info = self.ensemble_classifier.get_feature_mismatch_info()
+                print("\n⚠️ [ENSEMBLE AUTO-FIX] Rilevato disallineamento dimensioni feature ML")
+                print(f"   📊 Dimensione attesa: {mismatch_info.get('expected_dim')}")
+                print(f"   📊 Dimensione osservata: {mismatch_info.get('observed_dim')}")
+                print("   🔄 Avvio riaddestramento automatico con feature BERTopic augmentate...")
+
+                retrain_success = self._auto_retrain_ensemble_with_documents(documenti)
+                if retrain_success:
+                    print("✅ [ENSEMBLE AUTO-FIX] Riaddestramento completato con nuove feature augmentate")
+                else:
+                    print("❌ [ENSEMBLE AUTO-FIX] Riaddestramento automatico non riuscito - verificare disponibilità dati")
+
+                # Evita tentativi ripetuti nello stesso ciclo
+                self.ensemble_classifier.reset_feature_mismatch_flag()
+        except Exception as auto_fix_error:
+            print(f"⚠️ [ENSEMBLE AUTO-FIX] Errore durante il tentativo di riaddestramento automatico: {auto_fix_error}")
+            self.ensemble_classifier.reset_feature_mismatch_flag()
         
         trace_all("classifica_e_salva_documenti_unified", "EXIT", return_value=stats)
         return stats
@@ -2744,6 +2796,116 @@ class EndToEndPipeline:
         
         print(f"   ✅ [MONGODB SAVE] Completato: {saved_count}/{len(documenti)} documenti salvati")
         return saved_count
+
+    def _auto_retrain_ensemble_with_documents(self, documenti: List[DocumentoProcessing]) -> bool:
+        """
+        Riaddestra l'ensemble ML utilizzando i documenti già processati,
+        garantendo che le feature augmented (BERTopic) siano allineate tra
+        training e inference.
+
+        Returns:
+            True se il riaddestramento è stato completato con successo.
+        """
+        try:
+            if not documenti:
+                print("⚠️ [ENSEMBLE AUTO-FIX] Nessun documento disponibile per il riaddestramento")
+                return False
+
+            if not self.ensemble_classifier:
+                print("⚠️ [ENSEMBLE AUTO-FIX] Ensemble classifier non inizializzato")
+                return False
+
+            provider = getattr(self, '_bertopic_provider_trained', None)
+            return_one_hot = self.bertopic_config.get('return_one_hot', False)
+            top_k = self.bertopic_config.get('top_k', None)
+
+            features_rows: List[np.ndarray] = []
+            labels: List[str] = []
+
+            embedder = None  # Lazy init
+
+            for doc in documenti:
+                label = (doc.predicted_label or doc.propagated_label or
+                         doc.llm_prediction or doc.ml_prediction)
+                if not label:
+                    continue
+
+                cached_features = self._get_cached_ml_features(doc.session_id)
+                if cached_features is not None:
+                    row = cached_features[0] if cached_features.ndim == 2 else cached_features
+                else:
+                    # Ricostruisci embedding di base
+                    if doc.embedding is not None:
+                        base_embedding = np.array(doc.embedding, dtype=np.float32).reshape(1, -1)
+                    else:
+                        if embedder is None:
+                            embedder = self._get_embedder()
+                        base_embedding = embedder.encode([doc.testo_completo])
+
+                    parts = [base_embedding]
+
+                    if provider is not None:
+                        try:
+                            tr = provider.transform(
+                                [doc.testo_completo],
+                                embeddings=base_embedding,
+                                return_one_hot=return_one_hot,
+                                top_k=top_k
+                            )
+                            if tr.get('topic_probas') is not None:
+                                parts.append(tr['topic_probas'])
+                            if tr.get('one_hot') is not None:
+                                parts.append(tr['one_hot'])
+                        except Exception as bertopic_error:
+                            print(f"⚠️ [ENSEMBLE AUTO-FIX] Errore BERTopic su session {doc.session_id}: {bertopic_error}")
+
+                    if len(parts) > 1:
+                        combined = np.concatenate(parts, axis=1)
+                    else:
+                        combined = parts[0]
+
+                    # Aggiorna cache per utilizzi futuri
+                    try:
+                        self._ml_features_cache[doc.session_id] = combined
+                    except Exception:
+                        pass
+
+                    row = combined[0] if combined.ndim == 2 else combined
+
+                features_rows.append(row.astype(np.float32))
+                labels.append(str(label))
+
+            if len(features_rows) < 5:
+                print(f"⚠️ [ENSEMBLE AUTO-FIX] Campioni insufficienti per riaddestramento: {len(features_rows)}")
+                return False
+
+            X_train = np.vstack(features_rows)
+            y_train = np.array(labels)
+
+            print(f"🎓 [ENSEMBLE AUTO-FIX] Riaddestramento ensemble con {X_train.shape[0]} campioni e {X_train.shape[1]} feature")
+            training_result = self.ensemble_classifier.train_ml_ensemble(X_train, y_train)
+
+            if not training_result or not training_result.get('accuracy'):
+                print("❌ [ENSEMBLE AUTO-FIX] Training ensemble fallito")
+                return False
+
+            model_name = f"autofix_{self.tenant_slug}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            model_path = f"models/{model_name}"
+
+            try:
+                self.ensemble_classifier.save_ensemble_model(model_path)
+                print(f"💾 [ENSEMBLE AUTO-FIX] Modello aggiornato salvato in {model_path}")
+            except Exception as save_error:
+                print(f"⚠️ [ENSEMBLE AUTO-FIX] Salvataggio modello fallito: {save_error}")
+                # Non bloccare se il training è comunque riuscito
+
+            print(f"✅ [ENSEMBLE AUTO-FIX] Riaddestramento completato - accuracy: {training_result.get('accuracy'):.3f}")
+            return True
+
+        except Exception as auto_fix_exception:
+            print(f"❌ [ENSEMBLE AUTO-FIX] Errore inatteso: {auto_fix_exception}")
+            traceback.print_exc()
+            return False
     
     def _clear_mongodb_collection(self):
         """
@@ -5869,7 +6031,7 @@ class EndToEndPipeline:
                 'tenant_slug': self.tenant_slug
             }
     
-    def _esegui_clustering_incrementale(self, sessioni: Dict[str, Dict]) -> tuple:
+    def _esegui_clustering_incrementale(self, sessioni: Dict[str, Dict]) -> Optional[List[DocumentoProcessing]]:
         """
         Esegue clustering incrementale usando modello esistente se disponibile
         
@@ -5879,6 +6041,9 @@ class EndToEndPipeline:
         Returns:
             Tuple (embeddings, cluster_labels, representatives, suggested_labels)
         """
+        if not sessioni:
+            return []
+
         print(f"🎯 CLUSTERING INCREMENTALE - {len(sessioni)} nuove sessioni...")
         
         # Controlla se esiste modello HDBSCAN salvato
@@ -5911,15 +6076,45 @@ class EndToEndPipeline:
                                 embeddings, fit_umap=False
                             )
                             
-                            # Genera rappresentanti e etichette per i nuovi cluster
-                            representatives = self._generate_cluster_representatives(embeddings, new_labels, sessioni)
-                            suggested_labels = self._generate_suggested_labels(representatives, new_labels)
-                            
+                            cluster_info = self._generate_cluster_info_from_labels(new_labels, testi)
+
+                            try:
+                                import numpy as np
+                                from collections import Counter
+                                original_labels = getattr(self.clusterer, 'labels_', None)
+                                if original_labels is not None:
+                                    original_counts = Counter(int(lbl) for lbl in original_labels if lbl != -1)
+                                    new_counts = Counter(int(lbl) for lbl in new_labels if lbl != -1)
+                                    for cid, info in cluster_info.items():
+                                        if cid == -1:
+                                            continue
+                                        info['classification_method'] = 'hdbscan_incremental'
+                                        info['size'] = original_counts.get(int(cid), 0) + new_counts.get(int(cid), 0)
+                                else:
+                                    for cid, info in cluster_info.items():
+                                        if cid != -1:
+                                            info['classification_method'] = 'hdbscan_incremental'
+                            except Exception as size_error:
+                                print(f"⚠️ Impossibile aggiornare size cluster: {size_error}")
+
+                            documenti, cluster_info = self._build_document_processing_objects(
+                                sessioni=sessioni,
+                                embeddings=embeddings,
+                                cluster_labels=new_labels,
+                                cluster_info=cluster_info,
+                                prediction_strengths=prediction_strengths,
+                                source_label="CLUSTERING INCREMENTALE"
+                            )
+
                             print(f"✅ CLUSTERING INCREMENTALE COMPLETATO")
-                            print(f"   🎯 Nuovi punti assegnati a cluster esistenti")
-                            print(f"   💪 Strength predizione media: {prediction_strengths.mean():.3f}")
+                            if prediction_strengths is not None and len(prediction_strengths) > 0:
+                                try:
+                                    mean_strength = float(prediction_strengths.mean())
+                                    print(f"   💪 Strength predizione media: {mean_strength:.3f}")
+                                except Exception:
+                                    pass
                             
-                            return embeddings, new_labels, representatives, suggested_labels
+                            return documenti
                             
                         except Exception as e:
                             print(f"❌ Errore durante predizione incrementale: {str(e)}")
@@ -6287,6 +6482,11 @@ class EndToEndPipeline:
             # Crea directory se non esiste
             training_dir = "training_files"
             os.makedirs(training_dir, exist_ok=True)
+
+            # Mantieni massimo un file di training per tenant
+            removed = self.cleanup_training_files(keep_latest=False)
+            if removed:
+                print(f"   🧹 Rimossi {removed} file training precedenti per il tenant")
             
             # Nome file con timestamp e tenant
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -6378,6 +6578,48 @@ class EndToEndPipeline:
             print(f"❌ [TRAINING FILE] {error_msg}")
             trace_all("create_ml_training_file", "ERROR", error=error_msg)
             return None
+
+    def cleanup_training_files(self, keep_latest: bool = False) -> int:
+        """
+        Elimina i file di training ML relativi al tenant corrente.
+
+        Args:
+            keep_latest: Se True mantiene il file più recente e rimuove gli altri.
+
+        Returns:
+            Numero di file eliminati.
+        """
+        import os
+        import glob
+
+        training_dir = "training_files"
+        if not os.path.exists(training_dir):
+            return 0
+
+        tenant_slug = self.tenant.tenant_slug if self.tenant else "unknown"
+        pattern = os.path.join(training_dir, f"ml_training_{tenant_slug}_*.json")
+        files = glob.glob(pattern)
+
+        if not files:
+            return 0
+
+        files.sort(key=os.path.getmtime)
+
+        if keep_latest and len(files) > 0:
+            files_to_remove = files[:-1]
+        else:
+            files_to_remove = files
+
+        removed = 0
+        for file_path in files_to_remove:
+            try:
+                os.remove(file_path)
+                removed += 1
+                print(f"🗑️ [TRAINING FILE] Eliminato {os.path.basename(file_path)}")
+            except Exception as cleanup_error:
+                print(f"⚠️ [TRAINING FILE] Impossibile eliminare {file_path}: {cleanup_error}")
+
+        return removed
 
     def update_training_file_with_human_corrections(self, 
                                                    training_file_path: str,

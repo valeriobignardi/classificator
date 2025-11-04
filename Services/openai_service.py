@@ -518,6 +518,7 @@ class OpenAIService:
                 payload['text'] = {
                     'format': {
                         'type': 'text'
+                        # ❌ NON aggiungere 'name': OpenAI ritorna "Unknown parameter: 'text.format.name'"
                     }
                 }
 

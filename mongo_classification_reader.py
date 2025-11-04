@@ -1310,6 +1310,34 @@ class MongoClassificationReader:
         print(f"   📋 needs_review: {needs_review}")
         print(f"   📋 review_reason: '{review_reason}'")
         
+        # 🔧 RISOLUZIONE TENANT: garantisce disponibilità tenant_obj anche per legacy call-site
+        tenant_obj = getattr(self, 'tenant', None)
+        if tenant_obj is None:
+            try:
+                resolved_info = self.get_tenant_info_from_name(client_name)
+            except Exception as tenant_lookup_error:
+                raise RuntimeError(
+                    f"Impossibile risolvere tenant '{client_name}': {tenant_lookup_error}"
+                ) from tenant_lookup_error
+
+            if not resolved_info:
+                raise RuntimeError(
+                    f"Tenant '{client_name}' non trovato nel database TAG locale"
+                )
+
+            tenant_obj = Tenant(
+                tenant_id=resolved_info['tenant_id'],
+                tenant_name=resolved_info['tenant_name'],
+                tenant_slug=resolved_info['tenant_slug'],
+                tenant_database=resolved_info.get('tenant_database', resolved_info['tenant_slug']),
+                tenant_status=resolved_info.get('tenant_status', 1)
+            )
+            self.tenant = tenant_obj
+
+        tenant_id = tenant_obj.tenant_id
+        tenant_name = tenant_obj.tenant_name
+        tenant_slug = tenant_obj.tenant_slug
+
         # � DEBUG STACK TRACE: Se classified_by è None o unknown, traccia chi ha chiamato
         if not classified_by or classified_by == "unknown":
             print(f"🚨 [STACK-TRACE] CLASSIFIED_BY='{classified_by}' per session {session_id}")
@@ -1346,11 +1374,9 @@ class MongoClassificationReader:
             if not self.ensure_connection():
                 return []
             
-            # Recupera info tenant per avere tenant_id univoco
-            tenant_info = self.get_tenant_info_from_name(client_name)
-            
             # Usa la collection appropriata per il tenant (ora usa l'oggetto tenant interno)
             collection = self.db[self.get_collection_name()]
+            tenant_obj = self.tenant
             
             # Prepara il documento base con tutti i campi necessari
             current_time = datetime.now().isoformat()
@@ -1364,14 +1390,16 @@ class MongoClassificationReader:
                 "notes": notes or ""  # 🆕 Campo MySQL (separato da motivazione)
             }
             
-            # SEMPRE aggiungi tenant_id come chiave univoca di ricerca
-            if tenant_info:
-                doc["tenant_id"] = tenant_info['tenant_id']
-                doc["tenant_name"] = tenant_info['tenant_name']  # Per l'interfaccia React
-                doc["tenant_slug"] = tenant_info['tenant_slug']
+            # SEMPRE aggiungi tenant info come chiave univoca di ricerca
+            if tenant_obj is not None:
+                doc["tenant_id"] = getattr(tenant_obj, 'tenant_id', tenant_id or tenant_slug)
+                doc["tenant_name"] = getattr(tenant_obj, 'tenant_name', tenant_name)
+                doc["tenant_slug"] = getattr(tenant_obj, 'tenant_slug', tenant_slug)
             else:
-                # Fallback per compatibilità
-                doc["client"] = client_name
+                doc["tenant_id"] = tenant_id or tenant_slug
+                doc["tenant_name"] = tenant_name
+                doc["tenant_slug"] = tenant_slug
+            doc["client"] = client_name or tenant_slug
             
             # Aggiunge testo conversazione se fornito
             if conversation_text:
@@ -1616,12 +1644,12 @@ class MongoClassificationReader:
             
             # Prepara il filtro per upsert usando tenant_id come chiave univoca
             filter_dict = {"session_id": session_id}
-            if tenant_info:
-                # Usa tenant_id come chiave univoca (più robusto)
-                filter_dict["tenant_id"] = tenant_info['tenant_id']
+            if tenant_obj is not None and getattr(tenant_obj, 'tenant_id', None):
+                filter_dict["tenant_id"] = tenant_obj.tenant_id
+            elif tenant_id:
+                filter_dict["tenant_id"] = tenant_id
             else:
-                # Fallback per compatibilità
-                filter_dict["client"] = client_name
+                filter_dict["tenant_slug"] = tenant_slug
             
             # Upsert del documento con aggiornamento updated_at
             doc["updated_at"] = datetime.now().isoformat()  # Aggiorna timestamp

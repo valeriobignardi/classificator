@@ -27,7 +27,7 @@ import os
 # Aggiungi il path del progetto
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from Services.openai_service import OpenAIService
+from Classification.intelligent_classifier import IntelligentClassifier
 
 
 async def test_gpt5_text_format():
@@ -40,7 +40,8 @@ async def test_gpt5_text_format():
     print("=" * 60)
     
     try:
-        service = OpenAIService()
+        # Costruisci schema JSON per GPT-5
+        json_schema = IntelligentClassifier._build_gpt5_json_schema(['label_a', 'label_b'])
         
         # Simula una chiamata GPT-5 (senza effettuarla realmente)
         # Intercettiamo il payload prima dell'invio
@@ -52,25 +53,28 @@ async def test_gpt5_text_format():
         payload = {
             'model': model,
             'input': input_text,
+            'text': json_schema
         }
-        
-        # Aggiungi parametro text come farebbe il metodo
-        if 'text' not in {}:  # kwargs vuoti
-            payload['text'] = {
-                'format': {
-                    'type': 'text'
-                }
-            }
         
         # Verifica struttura
         assert 'text' in payload, "❌ Parametro 'text' mancante!"
         assert 'format' in payload['text'], "❌ 'format' mancante in 'text'!"
-        assert payload['text']['format']['type'] == 'text', "❌ type non è 'text'!"
+        assert payload['text']['format']['type'] == 'json_schema', "❌ format.type non è 'json_schema'!"
+        assert payload['text']['format']['name'] == 'classification_result', "❌ format.name errato!"
+        assert payload['text']['format']['strict'] is True, "❌ strict deve essere True!"
+        
+        schema_block = payload['text']['format'].get('schema')
+        assert isinstance(schema_block, dict), "❌ schema deve essere un oggetto!"
+        assert schema_block.get('type') == 'object', "❌ schema.type deve essere 'object'!"
+        assert 'properties' in schema_block, "❌ schema.properties mancante!"
+        assert schema_block['properties']['predicted_label']['enum'] == ['label_a', 'label_b'], "❌ enum etichette non corretto!"
+        assert schema_block['additionalProperties'] is False, "❌ additionalProperties deve essere False!"
         
         print("✅ Payload GPT-5 corretto:")
         print(f"   - model: {payload['model']}")
         print(f"   - input: {payload['input']}")
         print(f"   - text.format.type: {payload['text']['format']['type']}")
+        print(f"   - text.format.strict: {payload['text']['format']['strict']}")
         print()
         
         return True

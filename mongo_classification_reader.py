@@ -1405,7 +1405,7 @@ class MongoClassificationReader:
             if conversation_text:
                 doc["testo_completo"] = conversation_text
             
-            # 🆕 AGGIUNGE EMBEDDING E MODELLO SE FORNITI
+            # 🆕 AGGIUNGE EMBEDDING E MODELLO SE FORNITI O RECUPERATI DALLO STORE
             if embedding is not None:
                 # Converte embedding in lista se è numpy array
                 if isinstance(embedding, np.ndarray):
@@ -1415,13 +1415,41 @@ class MongoClassificationReader:
                     
                 print(f"💾 [EMBEDDING] Salvato embedding per session {session_id}: {len(doc['embedding'])} dimensioni")
             
-            # Aggiunge modello embedding se fornito
-            if embedding_model:
+            # Se NON fornito, prova a recuperare embedding dallo store centralizzato (tenant-aware)
+            if embedding is None:
+                try:
+                    import sys, os
+                    # Prova a risolvere sia dal CWD che dalla root progetto
+                    sys.path.append(os.path.join(os.path.dirname(__file__), 'MongoDB'))
+                    from embedding_store import EmbeddingStore  # type: ignore
+                except Exception:
+                    try:
+                        sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'MongoDB'))
+                        from embedding_store import EmbeddingStore  # type: ignore
+                    except Exception:
+                        EmbeddingStore = None
+
+                if EmbeddingStore is not None:
+                    try:
+                        store = EmbeddingStore()
+                        fetched = store.get_embedding(doc.get("tenant_id"), session_id, consume=True)
+                        if fetched:
+                            fetched_emb, fetched_model = fetched
+                            doc["embedding"] = fetched_emb
+                            doc["embedding_model"] = fetched_model or "unknown_embedder"
+                            print(f"💾 [EMBED STORE] Recuperato embedding per session {session_id} ({len(fetched_emb)}D)")
+                        else:
+                            print(f"ℹ️ [EMBED STORE] Nessun embedding in cache per session {session_id}")
+                    except Exception as store_error:
+                        print(f"⚠️ [EMBED STORE] Errore recupero embedding per {session_id}: {store_error}")
+
+            # Aggiunge modello embedding se fornito esplicitamente
+            if embedding_model and "embedding_model" not in doc:
                 doc["embedding_model"] = embedding_model
                 print(f"🏷️ [EMBEDDING] Modello: {embedding_model}")
             else:
-                # Se non specificato ma c'è embedding, usa default
-                if embedding is not None:
+                # Se non specificato ma c'è embedding e manca embedding_model, usa default
+                if doc.get("embedding") is not None and "embedding_model" not in doc:
                     doc["embedding_model"] = "unknown"
                     print(f"⚠️ [EMBEDDING] Modello non specificato, usato 'unknown'")
             

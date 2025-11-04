@@ -974,7 +974,7 @@ class EndToEndPipeline:
                 
                 
         return self.embedder
-    
+
     def _get_embedder_name(self):
         """
         Ottiene il nome del modello di embedding attuale per il salvataggio in MongoDB.
@@ -1015,6 +1015,29 @@ class EndToEndPipeline:
             print(f"📏 [DEBUG EMBED] Embedding senza UMAP: {base_name}")
         
         return base_name
+
+    def _store_embeddings_in_cache(self, session_ids, embeddings):
+        """
+        Salva gli embeddings appena generati nello store centralizzato (tenant-aware)
+        per evitare ricalcoli al momento del salvataggio su MongoDB.
+        """
+        try:
+            # Import lazy per evitare dipendenze circolari
+            import sys, os
+            sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'MongoDB'))
+            from embedding_store import EmbeddingStore
+
+            tenant_id = self.tenant.tenant_id if hasattr(self, 'tenant') and self.tenant else None
+            if not tenant_id:
+                print("⚠️ [EMBED STORE] tenant_id mancante: skip salvataggio cache embeddings")
+                return
+
+            embedder_name = self._get_embedder_name()
+            store = EmbeddingStore()
+            saved, skipped = store.save_embeddings(tenant_id, session_ids, embeddings, embedder_name)
+            print(f"💾 [EMBED STORE] Salvati {saved} embeddings per tenant {tenant_id} (skipped={skipped})")
+        except Exception as e:
+            print(f"⚠️ [EMBED STORE] Errore salvataggio embeddings in cache: {e}")
 
     def _analyze_and_show_problematic_conversations(self, sessioni: Dict[str, Dict], 
                                                    testi: List[str], 
@@ -1411,8 +1434,13 @@ class EndToEndPipeline:
             embeddings = self._get_embedder().encode(testi, show_progress_bar=True, session_ids=session_ids)
             
             embedding_time = time.time() - start_time
-            print(f"✅ [FASE 3: EMBEDDINGS] Completata in {embedding_time:.2f}s")
-            print(f"📈 [FASE 3: EMBEDDINGS] Shape: {embeddings.shape}")
+        print(f"✅ [FASE 3: EMBEDDINGS] Completata in {embedding_time:.2f}s")
+        print(f"📈 [FASE 3: EMBEDDINGS] Shape: {embeddings.shape}")
+        # 🆕 Salva embeddings nello store centralizzato per utilizzo successivo (no ricalcolo)
+        try:
+            self._store_embeddings_in_cache(session_ids, embeddings)
+        except Exception as _e:
+            print(f"⚠️ [EMBED STORE] Impossibile salvare embeddings in cache: {_e}")
             print(f"⚡ [FASE 3: EMBEDDINGS] Throughput: {len(testi)/embedding_time:.1f} testi/secondo")
             
         except Exception as e:
@@ -2455,7 +2483,7 @@ class EndToEndPipeline:
                 (doc.is_propagated and not doc.predicted_label and not doc.propagated_label)):
                 docs_to_classify.append(doc)
         
-        print(f"   🎯 Documenti da classificare: {len(docs_to_classify)}")
+        print(f"  Documenti da classificare: {len(docs_to_classify)}")
         
         if docs_to_classify:
             # Classifica in batch
@@ -2487,7 +2515,7 @@ class EndToEndPipeline:
         print(f"   ✅ Documenti salvati: {saved_count}")
         
         # 3. FASE: Statistiche finali
-        print(f"\n📊 [COMPLETATO] Pipeline unificato completato:")
+        print(f"\n [COMPLETATO] Pipeline unificato completato:")
         print(f"   📁 Documenti totali: {stats['total_documents']}")
         print(f"   🏷️ Classificati: {stats['classified_count']}")
         print(f"   💾 Salvati: {stats['saved_count']}")
@@ -6116,6 +6144,11 @@ class EndToEndPipeline:
                             
                             embeddings = self._get_embedder().encode(testi, show_progress_bar=True, session_ids=session_ids)
                             print(f"✅ Nuovi embedding generati: shape {embeddings.shape}")
+                            # 🆕 Salva anche questi embedding incrementali nello store centralizzato
+                            try:
+                                self._store_embeddings_in_cache(session_ids, embeddings)
+                            except Exception as _e:
+                                print(f"⚠️ [EMBED STORE] Impossibile salvare embeddings incrementali: {_e}")
                             
                             # Predizione incrementale
                             print(f"🔮 Predizione incrementale sui nuovi punti...")

@@ -652,6 +652,10 @@ class LLMConfigurationService:
         """
         Testa modello LLM con parametri specifici
         
+        Supporta:
+        - Modelli Ollama (mistral, llama, etc)
+        - Modelli OpenAI (gpt-4o, gpt-5, etc)
+        
         Args:
             tenant_id: ID del tenant
             model_name: Nome del modello da testare
@@ -661,7 +665,7 @@ class LLMConfigurationService:
         Returns:
             Dizionario con risultato test
             
-        Data ultima modifica: 2025-01-31
+        Data ultima modifica: 2025-11-04
         """
         try:
             # Validazione parametri
@@ -674,6 +678,41 @@ class LLMConfigurationService:
                     'model_name': model_name
                 }
             
+            # 🆕 Determina provider del modello
+            is_openai = model_name.lower() in ['gpt-4o', 'gpt-5', 'gpt-4', 'gpt-3.5-turbo']
+            
+            if is_openai:
+                # Test per modelli OpenAI
+                return self._test_openai_model(tenant_id, model_name, parameters, test_prompt)
+            else:
+                # Test per modelli Ollama
+                return self._test_ollama_model(tenant_id, model_name, parameters, test_prompt)
+            
+        except Exception as e:
+            error_msg = f'Errore test modello: {str(e)}'
+            print(f"❌ [LLMConfigService] {error_msg}")
+            
+            return {
+                'success': False,
+                'error': error_msg,
+                'tenant_id': tenant_id,
+                'model_name': model_name
+            }
+    
+    
+    def _test_ollama_model(
+        self,
+        tenant_id: str,
+        model_name: str,
+        parameters: Dict[str, Any],
+        test_prompt: str
+    ) -> Dict[str, Any]:
+        """
+        Test specifico per modelli Ollama
+        
+        Data ultima modifica: 2025-11-04
+        """
+        try:
             # Istanza temporanea classifier per test
             test_classifier = IntelligentClassifier(
                 client_name=f"{tenant_id}_test",
@@ -730,28 +769,140 @@ class LLMConfigurationService:
             test_duration = time.time() - start_time
             response_text = result_data.get('response', '')
             
-            print(f"🧪 [LLMConfigService] Test {model_name} per {tenant_id} completato ({test_duration:.2f}s)")
+            print(f"🧪 [LLMConfigService] Test Ollama {model_name} per {tenant_id} completato ({test_duration:.2f}s)")
             
             return {
                 'success': True,
                 'tenant_id': tenant_id,
                 'model_name': model_name,
+                'provider': 'ollama',
                 'test_duration': round(test_duration, 2),
                 'response_preview': response_text[:200] + '...' if len(response_text) > 200 else response_text,
                 'response_length': len(response_text),
-                'parameters_used': parameters,
-                'validation': validation_result
+                'parameters_used': parameters
             }
             
         except Exception as e:
-            error_msg = f'Errore test modello: {str(e)}'
+            error_msg = f'Errore test modello Ollama: {str(e)}'
             print(f"❌ [LLMConfigService] {error_msg}")
             
             return {
                 'success': False,
                 'error': error_msg,
                 'tenant_id': tenant_id,
-                'model_name': model_name
+                'model_name': model_name,
+                'provider': 'ollama'
+            }
+    
+    
+    def _test_openai_model(
+        self,
+        tenant_id: str,
+        model_name: str,
+        parameters: Dict[str, Any],
+        test_prompt: str
+    ) -> Dict[str, Any]:
+        """
+        Test specifico per modelli OpenAI (GPT-4o, GPT-5, etc)
+        
+        Data ultima modifica: 2025-11-04
+        """
+        try:
+            # Import OpenAIService per test
+            try:
+                from Services.openai_service import OpenAIService
+            except ImportError:
+                return {
+                    'success': False,
+                    'error': 'OpenAIService non disponibile per test modelli OpenAI',
+                    'tenant_id': tenant_id,
+                    'model_name': model_name,
+                    'provider': 'openai'
+                }
+            
+            start_time = time.time()
+            
+            # Inizializza OpenAIService
+            openai_service = OpenAIService()
+            
+            # Prepara messaggio di test
+            messages = [{"role": "user", "content": test_prompt}]
+            
+            # Estrai parametri generation
+            generation = parameters.get('generation', {})
+            max_tokens = generation.get('max_tokens', 500)
+            temperature = generation.get('temperature', 0.1)
+            
+            # Esegui test in base al modello
+            if model_name.lower() == 'gpt-5':
+                # GPT-5 usa Responses API
+                import asyncio
+                
+                async def test_gpt5():
+                    return await openai_service.responses_completion(
+                        model=model_name,
+                        input_data=messages,
+                        text={'format': {'type': 'text'}},
+                        max_tokens=max_tokens
+                    )
+                
+                # Esegui chiamata asincrona
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                response = loop.run_until_complete(test_gpt5())
+                loop.close()
+                
+                # Estrai testo dalla risposta GPT-5
+                response_text = response.get('output_text', '') if isinstance(response, dict) else str(response)
+                
+            else:
+                # GPT-4o e altri usano Chat Completions API
+                import asyncio
+                
+                async def test_chat():
+                    return await openai_service.chat_completion(
+                        model=model_name,
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens
+                    )
+                
+                # Esegui chiamata asincrona
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                response = loop.run_until_complete(test_chat())
+                loop.close()
+                
+                # Estrai testo dalla risposta
+                response_text = response.get('output_text', '') if isinstance(response, dict) else str(response)
+            
+            test_duration = time.time() - start_time
+            
+            print(f"🧪 [LLMConfigService] Test OpenAI {model_name} per {tenant_id} completato ({test_duration:.2f}s)")
+            
+            return {
+                'success': True,
+                'tenant_id': tenant_id,
+                'model_name': model_name,
+                'provider': 'openai',
+                'test_duration': round(test_duration, 2),
+                'response_preview': response_text[:200] + '...' if len(response_text) > 200 else response_text,
+                'response_length': len(response_text),
+                'parameters_used': parameters
+            }
+            
+        except Exception as e:
+            error_msg = f'Errore test modello OpenAI: {str(e)}'
+            print(f"❌ [LLMConfigService] {error_msg}")
+            import traceback
+            traceback.print_exc()
+            
+            return {
+                'success': False,
+                'error': error_msg,
+                'tenant_id': tenant_id,
+                'model_name': model_name,
+                'provider': 'openai'
             }
     
     

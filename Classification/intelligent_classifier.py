@@ -5947,12 +5947,8 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                     embedding = self.embedder.encode_single(conversation_text)
                     embedding_model = getattr(self.embedder, 'model_name', None) or getattr(self.embedder, 'model_path', None) or 'unknown_embedder'
                 except Exception as e:
+                    # Non forzare embedding vuoto: lascia None per permettere il recupero dallo store centralizzato
                     self.logger.warning(f"Errore generazione embedding per MongoDB: {e}")
-            
-            # Se non c'è embedding, usa un vettore vuoto
-            if embedding is None:
-                embedding = []
-                embedding_model = 'no_embedding'
             
             # Genera session_id univoco basato sul testo e timestamp
             import hashlib

@@ -228,6 +228,18 @@ class ClusteringTestService:
                 # Passa anche i session_ids per il logging degli errori
                 embeddings = pipeline.embedder.encode(texts, show_progress_bar=True, session_ids=session_ids)
                 print(f"✅ Embeddings generati: {embeddings.shape}")
+                # 🆕 Salva in cache centralizzata (tenant-aware) per omogeneità con pipeline principale
+                try:
+                    sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'MongoDB'))
+                    from embedding_store import EmbeddingStore  # type: ignore
+                    store = EmbeddingStore()
+                    # Recupera tenant_id reale dalla pipeline
+                    tenant_uuid = pipeline.tenant.tenant_id if hasattr(pipeline, 'tenant') and pipeline.tenant else tenant_id
+                    model_name = getattr(pipeline, '_get_embedder_name', lambda: 'unknown_embedder')()
+                    saved, skipped = store.save_embeddings(tenant_uuid, session_ids, embeddings, model_name)
+                    print(f"💾 [EMBED STORE] Salvati {saved} embeddings per tenant {tenant_uuid} (skipped={skipped})")
+                except Exception as e:
+                    print(f"⚠️ [EMBED STORE] Errore salvataggio embeddings (test service): {e}")
             except Exception as e:
                 return {
                     'success': False,

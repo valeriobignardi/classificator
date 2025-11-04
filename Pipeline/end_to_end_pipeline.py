@@ -1434,13 +1434,13 @@ class EndToEndPipeline:
             embeddings = self._get_embedder().encode(testi, show_progress_bar=True, session_ids=session_ids)
             
             embedding_time = time.time() - start_time
-        print(f"✅ [FASE 3: EMBEDDINGS] Completata in {embedding_time:.2f}s")
-        print(f"📈 [FASE 3: EMBEDDINGS] Shape: {embeddings.shape}")
-        # 🆕 Salva embeddings nello store centralizzato per utilizzo successivo (no ricalcolo)
-        try:
-            self._store_embeddings_in_cache(session_ids, embeddings)
-        except Exception as _e:
-            print(f"⚠️ [EMBED STORE] Impossibile salvare embeddings in cache: {_e}")
+            print(f"✅ [FASE 3: EMBEDDINGS] Completata in {embedding_time:.2f}s")
+            print(f"📈 [FASE 3: EMBEDDINGS] Shape: {embeddings.shape}")
+            # 🆕 Salva embeddings nello store centralizzato per utilizzo successivo (no ricalcolo)
+            try:
+                self._store_embeddings_in_cache(session_ids, embeddings)
+            except Exception as _e:
+                print(f"⚠️ [EMBED STORE] Impossibile salvare embeddings in cache: {_e}")
             print(f"⚡ [FASE 3: EMBEDDINGS] Throughput: {len(testi)/embedding_time:.1f} testi/secondo")
             
         except Exception as e:

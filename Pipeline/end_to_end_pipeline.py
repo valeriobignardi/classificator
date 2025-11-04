@@ -2081,7 +2081,8 @@ class EndToEndPipeline:
                             conversation_text,
                             return_details=True,
                             embedder=self._get_embedder(),
-                            ml_features_precalculated=cached_ml_features
+                            ml_features_precalculated=cached_ml_features,
+                            session_id=session_id
                         )
                         
                         # Estrai predizioni ML e LLM separate
@@ -5410,7 +5411,8 @@ class EndToEndPipeline:
                                 rep_text,
                                 return_details=True,
                                 embedder=self.embedder,
-                                ml_features_precalculated=cached_features
+                                ml_features_precalculated=cached_features,
+                                session_id=rep['session_id']
                             )
                             prediction['representative_session_id'] = rep['session_id']
                             prediction['cluster_id'] = cluster_id
@@ -5607,7 +5609,8 @@ class EndToEndPipeline:
                             session_texts[i],
                             return_details=True,
                             embedder=self.embedder,
-                            ml_features_precalculated=cached_features
+                            ml_features_precalculated=cached_features,
+                            session_id=session_id
                         )
                         
                         # ✅ PRESERVA metodo ensemble originale per final_decision
@@ -5732,7 +5735,8 @@ class EndToEndPipeline:
                         text, 
                         return_details=True,
                         embedder=self.embedder,
-                        ml_features_precalculated=cached_features
+                        ml_features_precalculated=cached_features,
+                        session_id=session_id
                     )
                     pred['method'] = 'OPTIMIZE_FALLBACK'
                     pred['classified_by'] = 'fallback_ensemble'  # ✅ FIX: aggiungo classified_by

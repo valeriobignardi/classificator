@@ -689,7 +689,7 @@ class AdvancedEnsembleClassifier:
         self._last_expected_feature_dim = None
     
     def predict_with_ensemble(self, text: str, return_details: bool = False, embedder=None, 
-                            ml_features_precalculated=None) -> Dict[str, Any]:
+                            ml_features_precalculated=None, session_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Predizione ensemble combinando LLM e ML
         
@@ -750,7 +750,12 @@ class AdvancedEnsembleClassifier:
         if llm_is_usable:
             print(f"   📊 LLM disponibile - procedo con classificazione")
             try:
-                llm_result = self.llm_classifier.classify_with_motivation(text)
+                # Passa session_id per recupero embedding dalla cache centralizzata
+                try:
+                    llm_result = self.llm_classifier.classify_with_motivation(text, session_id=session_id)
+                except TypeError:
+                    # Compatibilità retro: se la firma non accetta session_id
+                    llm_result = self.llm_classifier.classify_with_motivation(text)
                 
                 # 🧹 PULIZIA CRITICA: Applica pulizia caratteri speciali alla label LLM
                 raw_predicted_label = llm_result.predicted_label

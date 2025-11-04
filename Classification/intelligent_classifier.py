@@ -5071,7 +5071,8 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
     
     def classify_with_motivation(self, 
                                conversation_text: str,
-                               context: Optional[str] = None) -> ClassificationResult:
+                               context: Optional[str] = None,
+                               session_id: Optional[str] = None) -> ClassificationResult:
         """
         Classifica una conversazione con motivazione dettagliata
         
@@ -5116,7 +5117,7 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         
         # FASE 1: Verifica cache semantica (se abilitata)
         if self.enable_embeddings:
-            semantic_cached = self._get_semantic_cached_prediction(conversation_text)
+            semantic_cached = self._get_semantic_cached_prediction(conversation_text, session_id=session_id)
             if semantic_cached:
                 return semantic_cached
         
@@ -5245,10 +5246,10 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             # Cache del risultato (sia tradizionale che semantica)
             self._cache_prediction(cache_key, final_result)
             if self.enable_embeddings:
-                self._cache_semantic_prediction(conversation_text, final_result)
+                self._cache_semantic_prediction(conversation_text, final_result, session_id=session_id)
             
             # Salvataggio in MongoDB (se disponibile e client specificato)
-            self._save_to_mongodb(conversation_text, final_result)
+            self._save_to_mongodb(conversation_text, final_result, session_id=session_id)
             
             # Log con testo analizzato (troncato per leggibilità)
             text_preview = conversation_text[:200].replace('\n', ' ').replace('\r', ' ') if len(conversation_text) > 200 else conversation_text.replace('\n', ' ').replace('\r', ' ')
@@ -5578,7 +5579,14 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         
         for i, conversation_text in enumerate(conversations):
             try:
-                result = self.classify_with_motivation(conversation_text)
+                # Propaga session_id quando disponibile (DocumentoProcessing)
+                sid = None
+                if preserve_metadata and document_objects and i < len(document_objects):
+                    try:
+                        sid = getattr(document_objects[i], 'session_id', None)
+                    except Exception:
+                        sid = None
+                result = self.classify_with_motivation(conversation_text, session_id=sid)
                 results.append(result)
                 
                 # Traccia se è stato usato fallback
@@ -5840,7 +5848,7 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             self.logger.warning(f"Errore calcolo similarità coseno: {e}")
             return 0.0
     
-    def _get_semantic_cached_prediction(self, conversation_text: str) -> Optional[ClassificationResult]:
+    def _get_semantic_cached_prediction(self, conversation_text: str, session_id: Optional[str] = None) -> Optional[ClassificationResult]:
         """Cerca predizione in cache semantica se abilitata"""
         # 🔍 TRACING ENTER
         trace_all("_get_semantic_cached_prediction", "ENTER", 
@@ -5849,7 +5857,7 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                  embeddings_enabled=self.enable_embeddings,
                  embedder_available=self.embedder is not None)
         
-        if not self.enable_embeddings or self.embedder is None:
+        if not self.enable_embeddings:
             trace_all("_get_semantic_cached_prediction", "EXIT", 
                      called_from="classify_with_motivation",
                      exit_reason="EMBEDDINGS_DISABLED",
@@ -5857,8 +5865,29 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             return None
         
         try:
-            # Genera embedding del testo
-            input_embedding = self.embedder.encode_single(conversation_text)
+            input_embedding = None
+            # 1) Tentativo: recupera embedding dalla embedding_cache centralizzata se ho session_id
+            if session_id and hasattr(self, 'tenant') and self.tenant is not None:
+                try:
+                    import os, sys
+                    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'MongoDB'))
+                    from embedding_store import EmbeddingStore  # type: ignore
+                    store = EmbeddingStore()
+                    fetched = store.get_embedding(self.tenant.tenant_id, session_id, consume=False)
+                    if fetched:
+                        input_embedding = fetched[0]
+                        self.logger.debug("♻️ Semantic cache: embedding preso da embedding_cache (no ricalcolo)")
+                except Exception as _e:
+                    self.logger.debug(f"Semantic cache: nessun embedding in cache o errore store: {_e}")
+            # 2) Fallback: calcola embedding singolo se embedder disponibile
+            if input_embedding is None and self.embedder is not None and hasattr(self.embedder, 'encode_single'):
+                input_embedding = self.embedder.encode_single(conversation_text)
+            if input_embedding is None:
+                trace_all("_get_semantic_cached_prediction", "EXIT", 
+                         called_from="classify_with_motivation",
+                         exit_reason="NO_EMBEDDING_AVAILABLE",
+                         result=None)
+                return None
             
             with self._semantic_cache_lock:
                 # Cerca nella cache semantica
@@ -5893,14 +5922,31 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             self.logger.warning(f"Errore cache semantica: {e}")
             return None
     
-    def _cache_semantic_prediction(self, conversation_text: str, result: ClassificationResult) -> None:
+    def _cache_semantic_prediction(self, conversation_text: str, result: ClassificationResult, session_id: Optional[str] = None) -> None:
         """Salva predizione in cache semantica se abilitata"""
-        if not self.enable_embeddings or self.embedder is None:
+        if not self.enable_embeddings:
             return
         
         try:
-            # Genera embedding del testo
-            input_embedding = self.embedder.encode_single(conversation_text)
+            input_embedding = None
+            # 1) Tentativo: usa embedding dalla cache centralizzata per evitare ricalcolo
+            if session_id and hasattr(self, 'tenant') and self.tenant is not None:
+                try:
+                    import os, sys
+                    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'MongoDB'))
+                    from embedding_store import EmbeddingStore  # type: ignore
+                    store = EmbeddingStore()
+                    fetched = store.get_embedding(self.tenant.tenant_id, session_id, consume=False)
+                    if fetched:
+                        input_embedding = fetched[0]
+                        self.logger.debug("💾 Semantic cache: embedding preso da embedding_cache (no ricalcolo)")
+                except Exception as _e:
+                    self.logger.debug(f"Semantic cache store non disponibile: {_e}")
+            # 2) Fallback: calcolo singolo se embedder supporta encode_single
+            if input_embedding is None and self.embedder is not None and hasattr(self.embedder, 'encode_single'):
+                input_embedding = self.embedder.encode_single(conversation_text)
+            if input_embedding is None:
+                return
             
             with self._semantic_cache_lock:
                 # Aggiungi alla cache semantica
@@ -5913,7 +5959,7 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         except Exception as e:
             self.logger.warning(f"Errore salvataggio cache semantica: {e}")
     
-    def _save_to_mongodb(self, conversation_text: str, result: ClassificationResult) -> None:
+    def _save_to_mongodb(self, conversation_text: str, result: ClassificationResult, session_id: Optional[str] = None) -> None:
         """
         Salva la classificazione in MongoDB se disponibile e client specificato
         
@@ -5942,21 +5988,40 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
                 except Exception as e:
                     self.logger.warning(f"Impossibile acquisire embedder lazy: {e}")
             
-            if self.embedder is not None:
+            # 1) Tentativo: recupera dallo store centralizzato per questa sessione (consume=True)
+            if session_id and hasattr(self, 'tenant') and self.tenant is not None:
+                try:
+                    import os, sys
+                    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'MongoDB'))
+                    from embedding_store import EmbeddingStore  # type: ignore
+                    store = EmbeddingStore()
+                    fetched = store.get_embedding(self.tenant.tenant_id, session_id, consume=True)
+                    if fetched:
+                        embedding, embedding_model = fetched[0], fetched[1]
+                except Exception as _e:
+                    self.logger.debug(f"Mongo save: embedding store non disponibile: {_e}")
+            # 2) Fallback: calcolo singolo se embedder lo supporta
+            if embedding is None and self.embedder is not None and hasattr(self.embedder, 'encode_single'):
                 try:
                     embedding = self.embedder.encode_single(conversation_text)
                     embedding_model = getattr(self.embedder, 'model_name', None) or getattr(self.embedder, 'model_path', None) or 'unknown_embedder'
                 except Exception as e:
-                    # Non forzare embedding vuoto: lascia None per permettere il recupero dallo store centralizzato
                     self.logger.warning(f"Errore generazione embedding per MongoDB: {e}")
             
-            # Genera session_id univoco basato sul testo e timestamp
-            import hashlib
-            session_id = hashlib.md5(f"{conversation_text[:100]}_{result.timestamp}".encode()).hexdigest()
+            # Usa session_id reale se fornito; altrimenti genera uno sintetico basato su testo+timestamp
+            if not session_id:
+                import hashlib
+                session_id = hashlib.md5(f"{conversation_text[:100]}_{result.timestamp}".encode()).hexdigest()
             
-            # Genera tenant_id basato sul client_name (per ora)
-            tenant_id = hashlib.md5(self.client_name.encode()).hexdigest()[:16]
-            tenant_name = self.client_name
+            # Determina tenant_id/nome: preferisci oggetto tenant se disponibile
+            if hasattr(self, 'tenant') and self.tenant is not None:
+                tenant_id = getattr(self.tenant, 'tenant_id', None) or self.client_name
+                tenant_name = getattr(self.tenant, 'tenant_name', self.client_name)
+            else:
+                # Fallback legacy basato su client_name
+                import hashlib
+                tenant_id = hashlib.md5(self.client_name.encode()).hexdigest()[:16]
+                tenant_name = self.client_name
             
             # 🔧 FIX BUG N/A: Popola ml_result e llm_result correttamente per ensemble
             ml_result = None

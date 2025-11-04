@@ -313,6 +313,21 @@ class LaBSERemoteClient(BaseEmbedder):
         except Exception as fallback_error:
             self.stats['error_count'] += 1
             raise RuntimeError(f"Sia servizio remoto che fallback locale falliti. Remoto: {error_msg}, Locale: {fallback_error}")
+
+    def encode_single(self, text: str, normalize_embeddings: bool = True, **kwargs):
+        """
+        Convenience wrapper to encode a single text and return a single vector.
+
+        Args:
+            text: Input text to embed
+            normalize_embeddings: Whether to normalize the vector
+            **kwargs: Forwarded to encode()
+
+        Returns:
+            1D embedding vector
+        """
+        emb = self.encode([text], normalize_embeddings=normalize_embeddings, **kwargs)
+        return emb[0]
     
     def get_service_info(self) -> Dict[str, Any]:
         """

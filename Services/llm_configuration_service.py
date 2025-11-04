@@ -27,10 +27,22 @@ import os
 import yaml
 import time
 import requests
+import json
+import sys
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 import threading
 from Classification.intelligent_classifier import IntelligentClassifier
+
+# Import DatabaseAIConfigService per persistenza database
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+try:
+    from Database.database_ai_config_service import DatabaseAIConfigService
+    DATABASE_SERVICE_AVAILABLE = True
+except ImportError:
+    DatabaseAIConfigService = None
+    DATABASE_SERVICE_AVAILABLE = False
+    print("⚠️ [LLMConfigService] DatabaseAIConfigService non disponibile, uso solo config.yaml")
 
 
 class LLMConfigurationService:
@@ -69,6 +81,16 @@ class LLMConfigurationService:
         self.models_cache = {}
         self.models_cache_timestamp = 0
         self.models_cache_ttl = 300  # 5 minuti TTL
+        
+        # 🆕 Inizializza servizio database per persistenza
+        self.db_service = None
+        if DATABASE_SERVICE_AVAILABLE:
+            try:
+                self.db_service = DatabaseAIConfigService()
+                print(f"✅ [LLMConfigService] DatabaseAIConfigService collegato")
+            except Exception as e:
+                print(f"⚠️ [LLMConfigService] Errore inizializzazione database service: {e}")
+                self.db_service = None
         
         # Carica configurazione iniziale
         self._reload_config()
@@ -189,15 +211,41 @@ class LLMConfigurationService:
         """
         Recupera parametri LLM per un tenant specifico
         
+        STRATEGIA DATABASE-FIRST:
+        1. Tenta lettura da database (llm_config JSON)
+        2. Fallback su config.yaml se database non disponibile
+        3. Fallback su default se nessuna configurazione trovata
+        
         Args:
             tenant_id: ID del tenant
             
         Returns:
             Dizionario con parametri LLM e metadati
             
-        Data ultima modifica: 2025-01-31
+        Data ultima modifica: 2025-11-04
         """
         try:
+            # 🆕 PRIORITÀ 1: Leggi da DATABASE
+            if self.db_service:
+                try:
+                    db_config = self.db_service.get_tenant_configuration(tenant_id)
+                    
+                    if db_config and db_config.get('llm_config'):
+                        llm_config = db_config['llm_config']
+                        
+                        print(f"📊 [LLMConfigService] Parametri LLM caricati da DATABASE per tenant {tenant_id}")
+                        
+                        return {
+                            'tenant_id': tenant_id,
+                            'parameters': llm_config,
+                            'source': 'database',
+                            'last_modified': db_config.get('updated_at'),
+                            'current_model': db_config.get('llm_engine', 'unknown')
+                        }
+                except Exception as db_error:
+                    print(f"⚠️ [LLMConfigService] Errore lettura database per {tenant_id}: {db_error}")
+            
+            # FALLBACK: Leggi da config.yaml (backward compatibility)
             if self.reload_enabled:
                 self._reload_config()
             
@@ -209,10 +257,12 @@ class LLMConfigurationService:
             
             tenant_config = classifier.load_tenant_llm_config(tenant_id)
             
+            print(f"📄 [LLMConfigService] Parametri LLM caricati da CONFIG.YAML per tenant {tenant_id}")
+            
             return {
                 'tenant_id': tenant_id,
                 'parameters': tenant_config,
-                'source': tenant_config.get('source', 'default'),
+                'source': tenant_config.get('source', 'config.yaml'),
                 'last_modified': self._get_tenant_last_modified(tenant_id),
                 'current_model': classifier.model_name
             }
@@ -236,15 +286,21 @@ class LLMConfigurationService:
         """
         Aggiorna parametri LLM per un tenant
         
+        STRATEGIA DATABASE-FIRST:
+        1. Valida parametri
+        2. Salva nel DATABASE (campo llm_config JSON)
+        3. Fallback su config.yaml se database non disponibile
+        4. Invalida cache per forzare reload
+        
         Args:
             tenant_id: ID del tenant
-            parameters: Nuovi parametri LLM
+            parameters: Nuovi parametri LLM (tokenization, generation, connection, etc)
             model_name: Nome modello per validazione
             
         Returns:
             Dizionario con risultato operazione
             
-        Data ultima modifica: 2025-01-31
+        Data ultima modifica: 2025-11-04
         """
         try:
             # Validazione parametri
@@ -255,6 +311,55 @@ class LLMConfigurationService:
                     'error': f"Parametri non validi: {validation_result['errors']}",
                     'tenant_id': tenant_id
                 }
+            
+            # 🆕 PRIORITÀ 1: Salva su DATABASE
+            if self.db_service:
+                try:
+                    # Recupera configurazione esistente
+                    current_config = self.db_service.get_tenant_configuration(tenant_id)
+                    
+                    if not current_config:
+                        print(f"⚠️ [LLMConfigService] Tenant {tenant_id} non trovato in database")
+                        # Procedi con fallback su config.yaml
+                    else:
+                        # Merge parametri esistenti con nuovi
+                        existing_llm_config = current_config.get('llm_config', {})
+                        
+                        # Aggiorna con nuovi parametri
+                        updated_llm_config = {**existing_llm_config, **parameters}
+                        
+                        # Salva nel database usando set_llm_engine con config completo
+                        db_result = self.db_service.set_llm_engine(
+                            tenant_id=tenant_id,
+                            model_name=model_name or current_config.get('llm_engine', 'gpt-4o'),
+                            **updated_llm_config
+                        )
+                        
+                        if db_result.get('success'):
+                            print(f"💾 [LLMConfigService] Parametri salvati su DATABASE per tenant {tenant_id}")
+                            
+                            # Invalida cache database
+                            self.db_service.clear_cache()
+                            
+                            return {
+                                'success': True,
+                                'tenant_id': tenant_id,
+                                'message': 'Parametri aggiornati con successo (database)',
+                                'parameters': updated_llm_config,
+                                'validation': validation_result,
+                                'saved_to': 'database',
+                                'timestamp': db_result.get('timestamp')
+                            }
+                        else:
+                            print(f"⚠️ [LLMConfigService] Errore salvataggio database: {db_result.get('error')}")
+                            # Procedi con fallback
+                    
+                except Exception as db_error:
+                    print(f"⚠️ [LLMConfigService] Errore salvataggio database: {db_error}")
+                    # Procedi con fallback su config.yaml
+            
+            # FALLBACK: Salva su config.yaml (backward compatibility)
+            print(f"📄 [LLMConfigService] Fallback: salvo su config.yaml per tenant {tenant_id}")
             
             # Backup configurazione corrente
             self._create_config_backup()
@@ -276,14 +381,15 @@ class LLMConfigurationService:
                 
                 self.cache_timestamp = os.path.getmtime(self.config_path)
             
-            print(f"💾 [LLMConfigService] Parametri aggiornati per tenant {tenant_id}")
+            print(f"💾 [LLMConfigService] Parametri aggiornati su CONFIG.YAML per tenant {tenant_id}")
             
             return {
                 'success': True,
                 'tenant_id': tenant_id,
-                'message': 'Parametri aggiornati con successo',
+                'message': 'Parametri aggiornati con successo (config.yaml)',
                 'parameters': parameters,
-                'validation': validation_result
+                'validation': validation_result,
+                'saved_to': 'config.yaml'
             }
             
         except Exception as e:

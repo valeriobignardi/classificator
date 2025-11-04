@@ -5931,10 +5931,21 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             embedding = None
             embedding_model = None
             
+            # Lazy acquire embedder se non presente
+            if self.embedder is None and hasattr(self, 'tenant') and self.tenant is not None:
+                try:
+                    import os, sys
+                    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'EmbeddingEngine'))
+                    from simple_embedding_manager import simple_embedding_manager
+                    self.embedder = simple_embedding_manager.get_embedder_for_tenant(self.tenant)
+                    self.logger.debug("Embedder acquisito lazy da SimpleEmbeddingManager per salvataggio MongoDB")
+                except Exception as e:
+                    self.logger.warning(f"Impossibile acquisire embedder lazy: {e}")
+            
             if self.embedder is not None:
                 try:
                     embedding = self.embedder.encode_single(conversation_text)
-                    embedding_model = getattr(self.embedder, 'model_name', 'unknown_embedder')
+                    embedding_model = getattr(self.embedder, 'model_name', None) or getattr(self.embedder, 'model_path', None) or 'unknown_embedder'
                 except Exception as e:
                     self.logger.warning(f"Errore generazione embedding per MongoDB: {e}")
             

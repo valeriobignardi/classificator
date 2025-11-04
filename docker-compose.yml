@@ -43,7 +43,7 @@ services:
     volumes:
       - semantic-cache:/app/semantic_cache
       - training-logs:/app/training_logs
-      - ./config.yaml:/app/config.yaml:ro
+      - ./config.yaml:/app/config.yaml
       - ./debug_logs:/app/debug_logs
     deploy:
       resources:

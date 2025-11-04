@@ -276,7 +276,9 @@ class QualityGateEngine:
                         "reasoning": f"LLM prediction selected (conf: {llm_confidence:.3f} vs ML: {ml_confidence:.3f})"
                     }
 
-            # NUOVO: Salva SEMPRE il risultato completo in MongoDB
+            # NUOVO: Salva SEMPRE il risultato completo in MongoDB (includi embedding, se presente)
+            # Determina un nome modello minimale per tracciare la provenienza embedding
+            emb_model_name = 'no_embedding' if embedding is None else 'unknown_embedder'
             mongo_saved = self.mongo_reader.save_classification_result(
                 session_id=session_id,
                 client_name=tenant,
@@ -286,7 +288,9 @@ class QualityGateEngine:
                 conversation_text=conversation_text,
                 needs_review=needs_review,
                 review_reason=reason if needs_review else None,
-                cluster_metadata=cluster_metadata  # 🔧 FIX: Aggiunti metadati cluster
+                cluster_metadata=cluster_metadata,  # 🔧 FIX: Aggiunti metadati cluster
+                embedding=embedding,
+                embedding_model=emb_model_name
             )
             
             if mongo_saved:
@@ -665,6 +669,8 @@ class QualityGateEngine:
                 # TODO: In futuro si potrebbe recuperare metadata completi dal DB
             
             # Usa MongoDB come sistema unificato per tutte le classificazioni
+            # Includi embedding se presente nel caso di review
+            emb_model_name = 'no_embedding' if not getattr(case, 'embedding', None) else 'unknown_embedder'
             success = self.mongo_reader.save_classification_result(
                 session_id=case.session_id,
                 client_name=case.tenant,
@@ -688,7 +694,9 @@ class QualityGateEngine:
                 needs_review=False,  # Risolto dall'umano
                 classified_by='human_supervisor',
                 notes=notes,
-                cluster_metadata=cluster_metadata  # 🔧 FIX: Aggiunti metadati cluster
+                cluster_metadata=cluster_metadata,  # 🔧 FIX: Aggiunti metadati cluster
+                embedding=getattr(case, 'embedding', None),
+                embedding_model=emb_model_name
             )
                 
             if success:

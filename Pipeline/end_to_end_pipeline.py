@@ -1876,6 +1876,15 @@ class EndToEndPipeline:
                 }
                 
                 # Salva come pending review (TUTTE le sessioni propagate devono essere reviewabili)
+                # Includi sempre embedding e modello se disponibili
+                embed_vec = None
+                try:
+                    if hasattr(self, '_last_embeddings') and self._last_embeddings is not None:
+                        if i < len(self._last_embeddings):
+                            embed_vec = self._last_embeddings[i].tolist()
+                except Exception:
+                    embed_vec = None
+
                 success = mongo_reader.save_classification_result(
                     session_id=session_id,
                     client_name=self.tenant.tenant_slug,  # 🔧 FIX: usa tenant_slug non tenant_id
@@ -1885,7 +1894,9 @@ class EndToEndPipeline:
                     review_reason='supervised_training_propagated',
                     classified_by='supervised_training_pipeline',
                     notes=f'Sessione propagata da cluster {cluster_id}',
-                    cluster_metadata=cluster_metadata
+                    cluster_metadata=cluster_metadata,
+                    embedding=embed_vec,
+                    embedding_model=self._get_embedder_name()
                 )
                 
                 if success:
@@ -2073,6 +2084,18 @@ class EndToEndPipeline:
                             cluster_metadata['selection_reason'] = 'outlier_representative_post_training'
                             cluster_metadata['is_outlier'] = True
                         
+                        # Prepara embedding rappresentante
+                        rep_embedding = None
+                        try:
+                            rep_embedding = self._get_embedder().encode_single(conversation_text)
+                            # Converti in lista se è numpy array
+                            try:
+                                rep_embedding = rep_embedding.tolist()
+                            except Exception:
+                                pass
+                        except Exception:
+                            rep_embedding = None
+
                         # 🎯 SALVATAGGIO COMPLETO CON ML+LLM PREDICTIONS
                         success = mongo_reader.save_classification_result(
                             session_id=session_id,
@@ -2085,7 +2108,9 @@ class EndToEndPipeline:
                             review_reason='supervised_training_representative_post_training',
                             classified_by='supervised_training_pipeline_post_training',
                             notes=f'Rappresentante cluster {cluster_id} classificato DOPO training supervisionato',
-                            cluster_metadata=cluster_metadata
+                            cluster_metadata=cluster_metadata,
+                            embedding=rep_embedding,
+                            embedding_model=self._get_embedder_name()
                         )
                         
                         if success:
@@ -2758,7 +2783,7 @@ class EndToEndPipeline:
                     # Determina review info
                     review_info = doc.get_review_info()
                     
-                    # Salva in MongoDB
+                    # Salva in MongoDB, includendo sempre embedding e modello
                     success = mongo_reader.save_classification_result(
                         session_id=doc.session_id,
                         client_name=self.tenant.tenant_slug,
@@ -2768,7 +2793,9 @@ class EndToEndPipeline:
                         review_reason=review_info['review_reason'],
                         classified_by=review_info['classified_by'],
                         notes=review_info['notes'],
-                        cluster_metadata=cluster_metadata
+                        cluster_metadata=cluster_metadata,
+                        embedding=doc.embedding,
+                        embedding_model=self._get_embedder_name()
                     )
                     
                     if success:
@@ -3407,6 +3434,15 @@ class EndToEndPipeline:
                 print(f"   📋 final_decision method: '{final_decision_method}' (DOVREBBE essere ENSEMBLE/LLM/ML)")
                 print(f"   📋 cluster_method: '{prediction.get('cluster_method', 'N/A') if prediction else 'N/A'}' (per metadata)")
                 
+                # Determina embedding per la sessione corrente dall'ultimo clustering
+                current_embed = None
+                try:
+                    if hasattr(self, '_last_embeddings') and self._last_embeddings is not None:
+                        if i < len(self._last_embeddings):
+                            current_embed = self._last_embeddings[i].tolist()
+                except Exception:
+                    current_embed = None
+
                 success = mongo_reader.save_classification_result(
                     session_id=session_id,
                     client_name=self.tenant_slug,
@@ -3424,8 +3460,8 @@ class EndToEndPipeline:
                     classified_by='post_training_pipeline',  # Specifica fase
                     notes=f"Classificazione post-training automatica (confidenza {confidence:.3f})",
                     cluster_metadata=cluster_metadata,  # Metadata cluster per filtri UI
-                    embedding=None,  # ✅ TEMPORAL FIX: Disabled embedding per ora
-                    embedding_model=None  # ✅ TEMPORAL FIX: Disabled embedding per ora
+                    embedding=current_embed,
+                    embedding_model=self._get_embedder_name()
                 )
                 
                 if success:
@@ -5904,6 +5940,15 @@ class EndToEndPipeline:
                             print(f"⚠️ Errore classificazione ensemble per {session_id}: {e}")
                             # Continua con ml_result=None, llm_result=None come fallback
                     
+                    # Prepara embedding dalla cache dell'ultimo clustering
+                    save_embed = None
+                    try:
+                        if hasattr(self, '_last_embeddings') and self._last_embeddings is not None:
+                            if i < len(self._last_embeddings):
+                                save_embed = self._last_embeddings[i].tolist()
+                    except Exception:
+                        save_embed = None
+
                     success = mongo_reader.save_classification_result(
                         session_id=session_id,
                         client_name=self.tenant.tenant_slug,  # 🔧 FIX: usa tenant_slug non tenant_id
@@ -5931,7 +5976,9 @@ class EndToEndPipeline:
                             'is_representative': False,  # Sessione propagata
                             'propagated_from': 'cluster_propagation',
                             'propagation_confidence': confidence
-                        }
+                        },
+                        embedding=save_embed,
+                        embedding_model=self._get_embedder_name()
                     )
                     
                     if success:

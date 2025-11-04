@@ -566,49 +566,124 @@ class OpenAIService:
                 
                 # Normalizza la risposta Responses API aggiungendo 'output_text' se assente
                 try:
+                    # 🔍 DEBUG: Log SEMPRE la risposta per diagnostica
+                    print(f"🔍 [GPT-5 DEBUG] Risposta ricevuta, keys: {list(response.keys()) if isinstance(response, dict) else 'NOT_DICT'}")
+                    if isinstance(response, dict) and 'output_text' in response:
+                        print(f"🔍 [GPT-5 DEBUG] output_text GIÀ PRESENTE: '{response['output_text'][:200] if response['output_text'] else 'VUOTO'}'")
+                    
                     if isinstance(response, dict) and 'output_text' not in response:
+                        # 🔍 DEBUG: Log struttura risposta per diagnosticare parsing
+                        print(f"🔍 [GPT-5 DEBUG] Risposta raw keys: {list(response.keys())}")
+                        
                         text_parts: List[str] = []
 
                         # Preferisci il campo 'output' standard della Responses API
                         output = response.get('output')
+                        if output:
+                            print(f"🔍 [GPT-5 DEBUG] Campo 'output' presente, tipo: {type(output)}")
+                        
                         if isinstance(output, list):
-                            for item in output:
+                            print(f"🔍 [GPT-5 DEBUG] Output è lista con {len(output)} items")
+                            for idx, item in enumerate(output):
                                 # Ogni item può essere un messaggio con 'content'
                                 content = item.get('content') if isinstance(item, dict) else None
+                                if content:
+                                    print(f"🔍 [GPT-5 DEBUG] Item {idx} ha 'content', tipo: {type(content)}")
+                                
                                 if isinstance(content, list):
-                                    for block in content:
+                                    for block_idx, block in enumerate(content):
                                         if isinstance(block, dict):
+                                            print(f"🔍 [GPT-5 DEBUG] Block {block_idx} keys: {list(block.keys())}")
                                             # Formati possibili: {'type': 'text', 'text': {'value': '...'}}
                                             # oppure {'type': 'output_text', 'text': {'value': '...'}}
                                             text_obj = block.get('text')
                                             if isinstance(text_obj, dict):
                                                 val = text_obj.get('value')
                                                 if isinstance(val, str):
+                                                    print(f"✅ [GPT-5 DEBUG] Estratto text.value: {val[:100]}...")
                                                     text_parts.append(val)
                                             elif isinstance(text_obj, str):
+                                                print(f"✅ [GPT-5 DEBUG] Estratto text diretto: {text_obj[:100]}...")
                                                 text_parts.append(text_obj)
                                             # Fallback: alcuni SDK espongono direttamente 'value'
                                             elif 'value' in block and isinstance(block.get('value'), str):
+                                                print(f"✅ [GPT-5 DEBUG] Estratto value diretto: {block.get('value')[:100]}...")
                                                 text_parts.append(block.get('value'))
 
                         # Alcune varianti possono mettere direttamente 'content' in root
                         if not text_parts:
+                            print(f"⚠️ [GPT-5 DEBUG] Nessun text_parts da output, tento root content")
                             root_content = response.get('content')
                             if isinstance(root_content, list):
+                                print(f"🔍 [GPT-5 DEBUG] Root content è lista con {len(root_content)} items")
                                 for block in root_content:
                                     if isinstance(block, dict):
                                         text_obj = block.get('text')
                                         if isinstance(text_obj, dict) and isinstance(text_obj.get('value'), str):
+                                            print(f"✅ [GPT-5 DEBUG] Estratto da root content: {text_obj['value'][:100]}...")
                                             text_parts.append(text_obj['value'])
                                         elif isinstance(text_obj, str):
+                                            print(f"✅ [GPT-5 DEBUG] Estratto text string da root: {text_obj[:100]}...")
                                             text_parts.append(text_obj)
 
                         normalized_text = ''.join(text_parts).strip()
+                        # Fallback JSON-only: se non c'è testo, prova a estrarre blocchi JSON/parsed
+                        if not normalized_text:
+                            try:
+                                parsed_obj = None
+                                output = response.get('output') if isinstance(response, dict) else None
+                                if isinstance(output, list):
+                                    for item in output:
+                                        if not isinstance(item, dict):
+                                            continue
+                                        # Alcune versioni annidano direttamente un campo 'parsed'
+                                        if parsed_obj is None and isinstance(item.get('parsed'), (dict, list)):
+                                            parsed_obj = item.get('parsed')
+                                        content = item.get('content')
+                                        if isinstance(content, list):
+                                            for block in content:
+                                                if not isinstance(block, dict):
+                                                    continue
+                                                if parsed_obj is None and isinstance(block.get('json'), (dict, list)):
+                                                    parsed_obj = block.get('json')
+                                                elif parsed_obj is None and isinstance(block.get('parsed'), (dict, list)):
+                                                    parsed_obj = block.get('parsed')
+                                        if parsed_obj is not None:
+                                            break
+                                # Prova anche nel root content
+                                if parsed_obj is None:
+                                    root_content = response.get('content') if isinstance(response, dict) else None
+                                    if isinstance(root_content, list):
+                                        for block in root_content:
+                                            if not isinstance(block, dict):
+                                                continue
+                                            if isinstance(block.get('json'), (dict, list)):
+                                                parsed_obj = block.get('json')
+                                                break
+                                            if isinstance(block.get('parsed'), (dict, list)):
+                                                parsed_obj = block.get('parsed')
+                                                break
+                                if parsed_obj is not None:
+                                    import json as _json
+                                    normalized_text = _json.dumps(parsed_obj, ensure_ascii=False)
+                                    response['output_parsed'] = parsed_obj
+                                    print("🧩 [GPT-5 DEBUG] Normalizzato da JSON strutturato (output_parsed presente)")
+                            except Exception as _json_fallback_err:
+                                print(f"⚠️ [GPT-5 DEBUG] Fallback JSON-only non riuscito: {_json_fallback_err}")
+                        print(f"📝 [GPT-5 DEBUG] Testo normalizzato finale: {len(normalized_text)} chars")
+                        
                         # Imposta sempre il campo per semplificare i chiamanti
                         response['output_text'] = normalized_text
+                        
+                        if not normalized_text:
+                            print(f"❌ [GPT-5 DEBUG] ATTENZIONE: output_text vuoto dopo normalizzazione!")
+                            print(f"❌ [GPT-5 DEBUG] Risposta completa: {response}")
+                            
                 except Exception as _normalize_err:
                     # Non bloccare la risposta in caso di formati inattesi
                     print(f"⚠️ [OpenAIService] Impossibile normalizzare Responses API: {_normalize_err}")
+                    import traceback
+                    print(f"⚠️ [OpenAIService] Traceback: {traceback.format_exc()}")
 
                 # Cache la risposta
                 self._cache_response(cache_key, response)

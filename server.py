@@ -1707,20 +1707,24 @@ def supervised_training(client_name: str):
     try:
         print(f"🎯 INIZIO TRAINING SUPERVISIONATO - Cliente: {client_name}")
         
-        # Recupera solo force_review dal body della richiesta
+        # Recupera parametri dal body della richiesta
         request_data = {}
-        if request.content_type and 'application/json' in request.content_type: # Controlla che il content-type sia JSON
+        if request.content_type and 'application/json' in request.content_type:  # Controlla che il content-type sia JSON
             try:
                 request_data = request.get_json() or {}
             except Exception as e:
                 print(f"⚠️  Errore parsing JSON: {e}")
                 request_data = {}
-        
-        # Solo force_review dal frontend, tutti gli altri parametri dal database
+
+        # Parametri utente gestiti dall'endpoint
         force_review = request_data.get('force_review', False)
-        
-        print(f"📋 Parametro utente:")
+        clear_mongo = request_data.get('clear_mongo', False)
+        force_retrain_ml = request_data.get('force_retrain_ml', False)
+
+        print(f"📋 Parametri utente:")
         print(f"  🔄 Forza review: {force_review}")
+        print(f"  🗑️  Clear Mongo: {clear_mongo}")
+        print(f"  🧹 Force retrain ML: {force_retrain_ml}")
         
         # 🆕 CARICA SOLO LE SOGLIE REVIEW QUEUE DAL DATABASE TAG.soglie
         # I parametri di clustering saranno caricati dalla pipeline tramite get_all_clustering_parameters_for_tenant()
@@ -1825,6 +1829,29 @@ def supervised_training(client_name: str):
                 'client': client_name
             }), 404
         
+        # Esegui eventuali pulizie richieste PRIMA dell'analisi
+        mongo_clear_stats = None
+        training_files_removed = 0
+
+        if clear_mongo:
+            try:
+                print(f"🗑️  CLEAR MONGO attivo: eliminazione collection per tenant {pipeline_key}...")
+                mongo_reader = MongoClassificationReader(tenant=pipeline.tenant)
+                mongo_clear_stats = mongo_reader.clear_tenant_collection(pipeline.tenant.tenant_slug)
+                if mongo_clear_stats.get('success'):
+                    print(f"✅ Collection Mongo cancellata: {mongo_clear_stats.get('deleted_count', 0)} documenti rimossi")
+                else:
+                    print(f"⚠️ Errore cancellazione Mongo: {mongo_clear_stats.get('error')}")
+            except Exception as clear_err:
+                print(f"⚠️ Errore CLEAR MONGO: {clear_err}")
+
+        if force_retrain_ml:
+            try:
+                training_files_removed = pipeline.cleanup_training_files(keep_latest=False)
+                print(f"🧹 Rimossi {training_files_removed} file di training ML per {pipeline_key}")
+            except Exception as cleanup_error:
+                print(f"⚠️ Impossibile pulire i file di training: {cleanup_error}")
+
         print(f"🚀 TRAINING SUPERVISIONATO CON DATASET COMPLETO")
         print(f"  📊 Estrazione: TUTTE le discussioni dal database")
         print(f"  🧩 Clustering: Su tutto il dataset disponibile")
@@ -1852,7 +1879,11 @@ def supervised_training(client_name: str):
             'message': f'Training supervisionato completato per {client_name}',
             'client': client_name,
             **results,  # Include tutti i risultati del training
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'clear_mongo': clear_mongo,
+            'force_retrain_ml': force_retrain_ml,
+            'mongo_clear_stats': mongo_clear_stats if mongo_clear_stats else None,
+            'training_files_removed': training_files_removed
         }
         
         print(f"✅ Training supervisionato completato per {client_name}")

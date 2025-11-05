@@ -1241,29 +1241,15 @@ class IntelligentClassifier:
             if not self.tenant:
                 raise ValueError("ERRORE PRINCIPIO UNIVERSALE: self.tenant è None!")
             
+            # Normalizza in forma canonica MAIUSCOLA
+            cleaned_label = clean_label_text(label_name)
+            if cleaned_label != label_name:
+                self.logger.info(f"🧹 Etichetta pulita prima dell'inserimento: '{label_name}' → '{cleaned_label}'")
+
+            description = label_description or f"Etichetta generata automaticamente: {cleaned_label}"
             tag_db = TagDatabaseConnector(tenant=self.tenant)
-            if tag_db.connetti():
-                # Verifica se l'etichetta esiste già
-                check_query = "SELECT COUNT(*) FROM tags WHERE tag_name = %s"
-                result = tag_db.esegui_query(check_query, (label_name,))
-                
-                if result and result[0][0] > 0:
-                    self.logger.info(f"Etichetta '{label_name}' già esistente nel database")
-                    tag_db.disconnetti()
-                    return True
-                
-                # Inserisce la nuova etichetta
-                description = label_description or f"Etichetta generata automaticamente: {label_name}"
-                insert_query = "INSERT INTO tags (tag_name, tag_description) VALUES (%s, %s)"
-                
-                if tag_db.esegui_comando(insert_query, (label_name, description)):
-                    self.logger.info(f"Nuova etichetta '{label_name}' aggiunta al database TAG")
-                    tag_db.disconnetti()
-                    return True
-                else:
-                    self.logger.error(f"Errore nell'inserimento dell'etichetta '{label_name}'")
-                    tag_db.disconnetti()
-                    return False
+            success = tag_db.add_tag_if_not_exists(tag_name=cleaned_label, tag_description=description)
+            return bool(success)
                     
         except Exception as e:
             self.logger.error(f"Errore nell'aggiunta dell'etichetta al database: {e}")
@@ -2723,7 +2709,8 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
             
             # Estrazione e validazione campi
             raw_predicted_label = result.get('predicted_label', '').strip()
-            predicted_label = clean_label_text(raw_predicted_label).lower()  # 🧹 PULIZIA ETICHETTA
+            # Mantiene forma MAIUSCOLA: clean_label_text già normalizza in uppercase
+            predicted_label = clean_label_text(raw_predicted_label)  # 🧹 PULIZIA ETICHETTA
             confidence = float(result.get('confidence', 0.0))
             motivation = result.get('motivation', '').strip()
             

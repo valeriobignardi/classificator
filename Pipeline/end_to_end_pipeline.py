@@ -2224,6 +2224,9 @@ class EndToEndPipeline:
             print(f"   📊 {len(self._ml_features_cache)} sessioni cached")
             print(f"   🔧 Feature shape: {next(iter(self._ml_features_cache.values())).shape}")
             print(f"   ⏰ Timestamp: {self._cache_valid_timestamp}")
+            # Debug: mostra prime 5 chiavi della cache
+            cache_keys = list(self._ml_features_cache.keys())[:5]
+            print(f"   🔑 Prime 5 chiavi cache: {cache_keys}")
             
             trace_all("_create_ml_features_cache", "EXIT", 
                      cached_sessions=len(self._ml_features_cache),
@@ -2248,9 +2251,17 @@ class EndToEndPipeline:
             
         Autore: Valerio Bignardi
         Data creazione: 2025-09-06
-        Ultima modifica: 2025-09-06 - Ottimizzazione BERTopic
+        Ultima modifica: 2025-11-04 - Aggiunto debug log
         """
-        return self._ml_features_cache.get(session_id)
+        cached = self._ml_features_cache.get(session_id)
+        if cached is None and len(self._ml_features_cache) > 0:
+            # Debug: mostra perché non trova la chiave
+            print(f"🔍 [CACHE DEBUG] Session '{session_id}' non trovato in cache")
+            print(f"   📊 Cache contiene {len(self._ml_features_cache)} elementi")
+            # Mostra se la chiave è simile a quelle presenti
+            cache_keys_sample = list(self._ml_features_cache.keys())[:3]
+            print(f"   🔑 Esempio chiavi cache: {cache_keys_sample}")
+        return cached
     
     def salva_classificazioni_puro(self,
                                  sessioni: Dict[str, Dict],
@@ -5416,6 +5427,8 @@ class EndToEndPipeline:
                             cached_features = self._get_cached_ml_features(rep['session_id'])
                             if cached_features is not None:
                                 print(f"   ✅ Usando features cached per rappresentante {rep['session_id']}")
+                            else:
+                                print(f"   ⚠️ Cache MISS per rappresentante {rep['session_id']} (cache size: {len(self._ml_features_cache)})")
                             
                             prediction = self.ensemble_classifier.predict_with_ensemble(
                                 rep_text,

@@ -194,17 +194,21 @@ class TagDatabaseConnector:
         try:
             cursor = self.connection.cursor()
             
+            # Normalizza in MAIUSCOLO per coerenza visiva e database
+            normalized_name = (tag_name or "").strip()
+            normalized_name = normalized_name.upper()
+            
             # Verifica se il tag esiste già per questo tenant (case-insensitive)
             check_query = """
             SELECT id, tag_name
             FROM tags 
             WHERE LOWER(tag_name) = LOWER(%s) AND tenant_id = %s
             """
-            cursor.execute(check_query, (tag_name, self.tenant_id))
+            cursor.execute(check_query, (normalized_name, self.tenant_id))
             result = cursor.fetchone()
             
             if result:
-                print(f"  ℹ️ Tag '{tag_name}' già esistente per tenant {self.tenant_id}")
+                print(f"  ℹ️ Tag '{normalized_name}' già esistente per tenant {self.tenant_id}")
                 return True
             else:
                 # Inserisce nuovo tag con tenant_id e tenant_name
@@ -213,9 +217,9 @@ class TagDatabaseConnector:
                 VALUES (%s, %s, %s, %s, NOW(), NOW())
                 """
                 
-                cursor.execute(insert_query, (self.tenant_id, self.tenant_name, tag_name, tag_description))
+                cursor.execute(insert_query, (self.tenant_id, self.tenant_name, normalized_name, tag_description))
                 self.connection.commit()
-                print(f"  ✅ Nuovo tag '{tag_name}' aggiunto per tenant {self.tenant_id}")
+                print(f"  ✅ Nuovo tag '{normalized_name}' aggiunto per tenant {self.tenant_id}")
                 return True
                 
         except Error as e:

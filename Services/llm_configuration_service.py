@@ -24,6 +24,7 @@ Funzionalità principali:
 """
 
 import os
+import copy
 import yaml
 import time
 import requests
@@ -303,7 +304,7 @@ class LLMConfigurationService:
         Data ultima modifica: 2025-11-04
         """
         try:
-            # Validazione parametri
+            # Validazione parametri (con auto‑adjust ai limiti del modello)
             validation_result = self.validate_parameters(parameters, model_name)
             if not validation_result['valid']:
                 return {
@@ -311,6 +312,8 @@ class LLMConfigurationService:
                     'error': f"Parametri non validi: {validation_result['errors']}",
                     'tenant_id': tenant_id
                 }
+            # Usa i parametri eventualmente aggiustati dal validatore
+            parameters_to_save = validation_result.get('adjusted_parameters', parameters)
             
             # 🆕 PRIORITÀ 1: Salva su DATABASE
             if self.db_service:
@@ -326,7 +329,7 @@ class LLMConfigurationService:
                         existing_llm_config = current_config.get('llm_config', {})
                         
                         # Aggiorna con nuovi parametri
-                        updated_llm_config = {**existing_llm_config, **parameters}
+                        updated_llm_config = {**existing_llm_config, **parameters_to_save}
                         
                         # Salva nel database usando set_llm_engine con config completo
                         db_result = self.db_service.set_llm_engine(
@@ -345,11 +348,11 @@ class LLMConfigurationService:
                                 'success': True,
                                 'tenant_id': tenant_id,
                                 'message': 'Parametri aggiornati con successo (database)',
-                                'parameters': updated_llm_config,
-                                'validation': validation_result,
-                                'saved_to': 'database',
-                                'timestamp': db_result.get('timestamp')
-                            }
+                            'parameters': updated_llm_config,
+                            'validation': validation_result,
+                            'saved_to': 'database',
+                            'timestamp': db_result.get('timestamp')
+                        }
                         else:
                             print(f"⚠️ [LLMConfigService] Errore salvataggio database: {db_result.get('error')}")
                             # Procedi con fallback
@@ -372,7 +375,7 @@ class LLMConfigurationService:
                 if tenant_id not in self.config_cache['tenant_configs']:
                     self.config_cache['tenant_configs'][tenant_id] = {}
                 
-                self.config_cache['tenant_configs'][tenant_id]['llm_parameters'] = parameters
+                self.config_cache['tenant_configs'][tenant_id]['llm_parameters'] = parameters_to_save
                 self.config_cache['tenant_configs'][tenant_id]['last_modified'] = datetime.now().isoformat()
                 
                 # Salva su file
@@ -387,7 +390,7 @@ class LLMConfigurationService:
                 'success': True,
                 'tenant_id': tenant_id,
                 'message': 'Parametri aggiornati con successo (config.yaml)',
-                'parameters': parameters,
+                'parameters': parameters_to_save,
                 'validation': validation_result,
                 'saved_to': 'config.yaml'
             }
@@ -547,6 +550,9 @@ class LLMConfigurationService:
         """
         errors = []
         warnings = []
+        adjustments = []
+        # Lavora su una copia per proporre eventuali correzioni automatiche
+        adjusted_parameters = copy.deepcopy(parameters) if isinstance(parameters, dict) else {}
         
         try:
             # Recupera vincoli modello
@@ -555,8 +561,8 @@ class LLMConfigurationService:
                 model_constraints = self.get_model_info(model_name)
             
             # Validazione tokenization
-            if 'tokenization' in parameters:
-                tokenization = parameters['tokenization']
+            if 'tokenization' in adjusted_parameters:
+                tokenization = adjusted_parameters['tokenization']
                 max_tokens = tokenization.get('max_tokens')
                 
                 if max_tokens is not None:
@@ -564,13 +570,21 @@ class LLMConfigurationService:
                         errors.append("max_tokens deve essere un intero >= 100")
                     elif model_constraints and max_tokens > model_constraints.get('max_input_tokens', 8000):
                         max_allowed = model_constraints.get('max_input_tokens', 8000)
-                        errors.append(f"max_tokens ({max_tokens}) supera il limite del modello {model_name} ({max_allowed})")
+                        # Auto‑adjust: clamp al limite del modello
+                        adjustments.append({
+                            'path': 'tokenization.max_tokens',
+                            'from': max_tokens,
+                            'to': max_allowed,
+                            'reason': 'clamped_to_model_limit'
+                        })
+                        tokenization['max_tokens'] = max_allowed
+                        warnings.append(f"max_tokens troppo alto: regolato automaticamente a {max_allowed} per {model_name}")
                     elif max_tokens > 8000:
                         warnings.append(f"max_tokens ({max_tokens}) molto alto, potrebbe impattare le performance")
             
             # Validazione generation
-            if 'generation' in parameters:
-                generation = parameters['generation']
+            if 'generation' in adjusted_parameters:
+                generation = adjusted_parameters['generation']
                 
                 # 🆕 GPT-5: Ignora parametri non supportati
                 is_gpt5 = model_name and model_name.lower() == 'gpt-5'
@@ -613,7 +627,15 @@ class LLMConfigurationService:
                         errors.append("generation.max_tokens deve essere >= 50")
                     elif model_constraints and max_tokens_out > model_constraints.get('max_output_tokens', 4000):
                         max_allowed = model_constraints.get('max_output_tokens', 4000)
-                        errors.append(f"generation.max_tokens ({max_tokens_out}) supera il limite del modello ({max_allowed})")
+                        # Auto‑adjust: clamp al limite del modello
+                        adjustments.append({
+                            'path': 'generation.max_tokens',
+                            'from': max_tokens_out,
+                            'to': max_allowed,
+                            'reason': 'clamped_to_model_limit'
+                        })
+                        generation['max_tokens'] = max_allowed
+                        warnings.append(f"generation.max_tokens troppo alto: regolato automaticamente a {max_allowed}")
             
             # Validazione connection
             if 'connection' in parameters:
@@ -629,7 +651,9 @@ class LLMConfigurationService:
                 'valid': len(errors) == 0,
                 'errors': errors,
                 'warnings': warnings,
-                'model_constraints': model_constraints
+                'model_constraints': model_constraints,
+                'adjusted_parameters': adjusted_parameters,
+                'adjustments': adjustments
             }
             
         except Exception as e:
@@ -676,6 +700,8 @@ class LLMConfigurationService:
                     'tenant_id': tenant_id,
                     'model_name': model_name
                 }
+            # Usa parametri aggiustati per il test
+            parameters = validation_result.get('adjusted_parameters', parameters)
             
             # 🆕 Determina provider del modello
             is_openai = model_name.lower() in ['gpt-4o', 'gpt-5', 'gpt-4', 'gpt-3.5-turbo']

@@ -101,6 +101,43 @@ const LLMParametersPanel: React.FC<LLMParametersPanelProps> = ({
     }
   }, [initialParameters]);
 
+  // Clamp automatico quando cambia il modello selezionato
+  useEffect(() => {
+    if (!selectedModel) return;
+    setParameters(prev => {
+      const maxIn = selectedModel.max_input_tokens || 8000;
+      const maxOut = selectedModel.max_output_tokens || 4000;
+      const curIn = prev.tokenization?.max_tokens ?? 8000;
+      const curOut = prev.generation?.max_tokens ?? 150;
+      const nextIn = Math.min(curIn, maxIn);
+      const nextOut = Math.min(curOut, maxOut);
+      if (nextIn !== curIn || nextOut !== curOut) {
+        const updatedTokenization = {
+          max_tokens: nextIn,
+          model_name: prev.tokenization?.model_name ?? 'cl100k_base',
+          truncation_strategy: prev.tokenization?.truncation_strategy ?? 'start'
+        };
+
+        const updatedGeneration = {
+          max_tokens: nextOut,
+          temperature: prev.generation?.temperature ?? 0.1,
+          top_k: prev.generation?.top_k ?? 40,
+          top_p: prev.generation?.top_p ?? 0.9,
+          repeat_penalty: prev.generation?.repeat_penalty ?? 1.1
+        };
+
+        const updated: Partial<LLMParameters> = {
+          ...prev,
+          tokenization: updatedTokenization,
+          generation: updatedGeneration
+        };
+        if (onParametersChange) onParametersChange(updated);
+        return updated;
+      }
+      return prev;
+    });
+  }, [selectedModel, onParametersChange]);
+
   /**
    * Valida parametri in real-time quando cambiano
    * 
@@ -325,7 +362,7 @@ const LLMParametersPanel: React.FC<LLMParametersPanelProps> = ({
             <input
               type="range"
               min="50"
-              max="2000"
+              max={selectedModel?.max_output_tokens || 2000}
               step="25"
               value={parameters.generation?.max_tokens || 150}
               onChange={(e) => updateParameter('generation', 'max_tokens', parseInt(e.target.value))}
@@ -334,7 +371,7 @@ const LLMParametersPanel: React.FC<LLMParametersPanelProps> = ({
             />
             <div className="range-labels">
               <span>50</span>
-              <span>2000</span>
+              <span>{(selectedModel?.max_output_tokens || 2000).toLocaleString()}</span>
             </div>
           </div>
 

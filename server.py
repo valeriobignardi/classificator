@@ -1733,6 +1733,11 @@ def supervised_training(client_name: str):
         print(f"  🔄 Forza review: {force_review}")
         print(f"  🗑️  Clear Mongo: {clear_mongo}")
         print(f"  🧹 Force retrain ML: {force_retrain_ml}")
+
+        # Comportamento atteso: se force_review è attivo, pulisci anche Mongo per evitare somma sessioni
+        if force_review and not clear_mongo:
+            clear_mongo = True
+            print("🔧 Force review attivo: abilito automaticamente clear_mongo")
         
         # 🆕 CARICA SOLO LE SOGLIE REVIEW QUEUE DAL DATABASE TAG.soglie
         # I parametri di clustering saranno caricati dalla pipeline tramite get_all_clustering_parameters_for_tenant()

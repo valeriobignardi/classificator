@@ -628,6 +628,72 @@ class DatabaseAIConfigService:
         self._cache_timestamp = None
         print("🗑️ Cache configurazioni svuotata")
 
+    def reset_llm_parameters(self, tenant_id: str) -> Dict[str, Any]:
+        """
+        Ripristina i parametri LLM ai valori di default per un tenant eliminando
+        la configurazione personalizzata (llm_config) dal database.
+
+        Non modifica il campo llm_engine per non cambiare il modello selezionato.
+
+        Args:
+            tenant_id: UUID del tenant
+
+        Returns:
+            dict: Risultato operazione
+        """
+        if not self._connetti():
+            return {
+                'success': False,
+                'error': 'Impossibile connettersi al database'
+            }
+
+        try:
+            cursor = self.connection.cursor()
+            # Verifica esistenza record
+            cursor.execute(
+                "SELECT 1 FROM engines WHERE tenant_id = %s AND is_active = TRUE",
+                (tenant_id,)
+            )
+            exists = cursor.fetchone() is not None
+
+            if not exists:
+                cursor.close()
+                return {
+                    'success': False,
+                    'error': f"Tenant {tenant_id} non trovato nella tabella engines"
+                }
+
+            # Imposta llm_config a NULL (o vuoto) e aggiorna timestamp
+            update_query = (
+                "UPDATE engines SET llm_config = NULL, updated_at = CURRENT_TIMESTAMP "
+                "WHERE tenant_id = %s AND is_active = TRUE"
+            )
+            cursor.execute(update_query, (tenant_id,))
+            self.connection.commit()
+            cursor.close()
+
+            # Invalida cache dopo la modifica
+            self._tenant_configs_cache.clear()
+            self._cache_timestamp = None
+
+            return {
+                'success': True,
+                'tenant_id': tenant_id,
+                'message': 'Parametri LLM resettati (llm_config svuotato nel database)',
+                'saved_to': 'database',
+                'timestamp': datetime.now().isoformat()
+            }
+
+        except Error as e:
+            if self.connection:
+                self.connection.rollback()
+            return {
+                'success': False,
+                'error': f'Errore database: {str(e)}'
+            }
+        finally:
+            self._disconnetti()
+
     def save_batch_processing_config(self, tenant_id: str, batch_config: Dict[str, Any]) -> bool:
         """
         Salva configurazione batch processing per tenant nel database

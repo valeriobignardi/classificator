@@ -2224,16 +2224,14 @@ class MongoClassificationReader:
                     'collection_name': collection_name
                 }
             
-            # Cancella tutti i documenti della collection
-            result = collection.delete_many({})
-            deleted_count = result.deleted_count
-            
-            print(f"🗑️ Cancellati {deleted_count} documenti dalla collection {collection_name}")
+            # Drop completo della collection per reset totale (più sicuro di delete_many)
+            collection.drop()
+            print(f"🗑️ Collection '{collection_name}' DROPPED (rimossi {count_before} documenti)")
             
             return {
                 'success': True,
-                'message': f'Collection {collection_name} cancellata con successo',
-                'deleted_count': deleted_count,
+                'message': f"Collection {collection_name} droppata con successo",
+                'deleted_count': count_before,
                 'collection_name': collection_name,
                 'timestamp': datetime.now().isoformat()
             }

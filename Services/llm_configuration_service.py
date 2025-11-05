@@ -416,41 +416,40 @@ class LLMConfigurationService:
         Data ultima modifica: 2025-01-31
         """
         try:
-            # Backup configurazione corrente
-            self._create_config_backup()
-            
-            with self.cache_lock:
-                # Rimuovi configurazione tenant specifica
-                if 'tenant_configs' in self.config_cache and tenant_id in self.config_cache['tenant_configs']:
-                    if 'llm_parameters' in self.config_cache['tenant_configs'][tenant_id]:
-                        del self.config_cache['tenant_configs'][tenant_id]['llm_parameters']
-                    
-                    # Se tenant config è vuoto, rimuovi completamente
-                    if not self.config_cache['tenant_configs'][tenant_id]:
-                        del self.config_cache['tenant_configs'][tenant_id]
-                
-                # Salva configurazione
-                with open(self.config_path, 'w', encoding='utf-8') as file:
-                    yaml.dump(self.config_cache, file, default_flow_style=False, sort_keys=False)
-                
-                self.cache_timestamp = os.path.getmtime(self.config_path)
-            
-            # Recupera parametri default
-            default_params = self.get_tenant_parameters(tenant_id)
-            
-            print(f"🔄 [LLMConfigService] Parametri resettati per tenant {tenant_id}")
-            
+            # STRATEGIA DATABASE-FIRST: reset su DB, senza scrivere file
+            if self.db_service:
+                try:
+                    db_result = self.db_service.reset_llm_parameters(tenant_id)
+                    if db_result.get('success'):
+                        print(f"🔄 [LLMConfigService] Parametri LLM resettati su DATABASE per tenant {tenant_id}")
+                        # Dopo il reset, ricarica parametri (fallback ai default)
+                        tenant_info = self.get_tenant_parameters(tenant_id)
+                        return {
+                            'success': True,
+                            'tenant_id': tenant_id,
+                            'message': 'Parametri resettati ai valori di default (database)',
+                            'default_parameters': tenant_info.get('parameters', {}),
+                            'saved_to': 'database'
+                        }
+                    else:
+                        print(f"⚠️ [LLMConfigService] Reset DB fallito: {db_result.get('error')}")
+                        # Se DB fallisce, prosegui con fallback file SOLO se possibile
+                except Exception as db_error:
+                    print(f"⚠️ [LLMConfigService] Errore reset su database: {db_error}")
+
+            # FALLBACK: modifica file disabilitata in ambienti read-only → non tentare scritture
+            # Restituisci default senza scrivere su file
+            tenant_info = self.get_tenant_parameters(tenant_id)
             return {
                 'success': True,
                 'tenant_id': tenant_id,
-                'message': 'Parametri resettati ai valori di default',
-                'default_parameters': default_params['parameters']
+                'message': 'Parametri di default restituiti (no file write in fallback)',
+                'default_parameters': tenant_info.get('parameters', {}),
+                'saved_to': 'none'
             }
-            
         except Exception as e:
             error_msg = f'Errore reset parametri: {str(e)}'
             print(f"❌ [LLMConfigService] {error_msg}")
-            
             return {
                 'success': False,
                 'error': error_msg,

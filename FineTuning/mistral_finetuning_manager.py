@@ -280,20 +280,30 @@ class MistralFineTuningManager:
             else:
                 self.logger.warning("⚠️ Auto-sync fallito, procedo con dati esistenti")
             
-            # FASE 1: Recupera decisioni umane dal file JSONL (tenant-aware)
+            # FASE 1: Recupera decisioni umane dal file JSONL (path canonico + fallback legacy)
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            
-            # Use tenant-aware filename if available
+            canonical_dir = os.path.join(project_root, 'data', 'training')
+            canonical_path = os.path.join(canonical_dir, f"training_decisions_{self.tenant.tenant_id}.jsonl")
+
+            # Build fallback list (legacy locations) in priority order
+            legacy_candidates = []
             if self.tenant_slug:
-                training_decisions_path = os.path.join(project_root, f"training_decisions_{self.tenant_slug.lower()}.jsonl")
-            else:
-                training_decisions_path = os.path.join(project_root, f"training_decisions_{client_name}.jsonl")
-            
-            self.logger.info(f"🔍 Leggendo decisioni umane da: {training_decisions_path}")
-            
+                legacy_candidates.append(os.path.join(project_root, f"training_decisions_{self.tenant_slug.lower()}.jsonl"))
+            legacy_candidates.append(os.path.join(project_root, f"training_decisions_{client_name}.jsonl"))
+            legacy_candidates.append(os.path.join(project_root, 'backup', f"training_decisions_{client_name}.jsonl"))
+
+            source_path = canonical_path if os.path.exists(canonical_path) else None
+            if source_path is None:
+                for cand in legacy_candidates:
+                    if os.path.exists(cand):
+                        source_path = cand
+                        break
+
+            self.logger.info(f"🔍 Sorgente training decisions: {source_path or canonical_path} (canonico preferito)")
+
             human_decisions = []
-            if os.path.exists(training_decisions_path):
-                with open(training_decisions_path, 'r', encoding='utf-8') as f:
+            if source_path and os.path.exists(source_path):
+                with open(source_path, 'r', encoding='utf-8') as f:
                     for line in f:
                         try:
                             decision = json.loads(line.strip())
@@ -1364,9 +1374,11 @@ ETICHETTE PRINCIPALI (da esempi cliente):"""
             
             self.logger.info(f"📊 Trovate {len(result)} classificazioni umane nel database")
             
-            # Costruisci path del file JSONL
+            # Costruisci path del file JSONL (CANONICO)
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            training_decisions_path = os.path.join(project_root, f"training_decisions_{client_name}.jsonl")
+            canonical_dir = os.path.join(project_root, 'data', 'training')
+            os.makedirs(canonical_dir, exist_ok=True)
+            training_decisions_path = os.path.join(canonical_dir, f"training_decisions_{self.tenant.tenant_id}.jsonl")
             
             # Leggi decisioni esistenti se non si deve sovrascrivere
             existing_decisions = {}

@@ -10,6 +10,8 @@ import sys
 import os
 import threading
 import yaml
+import json
+import glob
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 import traceback
@@ -663,9 +665,15 @@ class ClassificationService:
             if cache_key not in self.quality_gates:
                 print(f"🔧 Inizializzazione QualityGateEngine per tenant: {tenant.tenant_name} (con lock)")
                 
+                # Forza path canonico: data/training/training_decisions_{tenant_id}.jsonl
+                canonical_dir = os.path.join(os.path.dirname(__file__), 'data', 'training')
+                try:
+                    os.makedirs(canonical_dir, exist_ok=True)
+                except Exception:
+                    pass
                 qg_params = {
                     'tenant': tenant,
-                    'training_log_path': f"training_decisions_{tenant.tenant_slug}.jsonl"
+                    'training_log_path': os.path.join(canonical_dir, f"training_decisions_{tenant.tenant_id}.jsonl")
                 }
                 
                 if user_thresholds:
@@ -2795,6 +2803,153 @@ def get_tenants():
             'tenants': [],
             'total': 0
         }), 500
+
+@app.route('/api/training-files/<tenant_id>', methods=['GET'])
+def list_training_files(tenant_id: str):
+    """
+    Elenca i file di training disponibili per il tenant selezionato.
+
+    Restituisce una lista di file che corrispondono ai possibili pattern
+    di "training_decisions" associati al tenant.
+
+    Query params opzionali:
+      - include_backups: se 'true', include file in sottocartelle note (es. backup)
+    """
+    try:
+        # Risolvi tenant da UUID per ottenere slug e nome canonico
+        tenant = Tenant.from_uuid(tenant_id)
+        if not tenant:
+            return jsonify({'success': False, 'error': f'Tenant non trovato per UUID: {tenant_id}'}), 404
+
+        project_root = os.path.dirname(__file__)
+        canonical_path = os.path.join(project_root, 'data', 'training', f'training_decisions_{tenant.tenant_id}.jsonl')
+
+        candidates = []
+        # Aggiungi sempre l’entry canonica se esiste
+        if os.path.exists(canonical_path):
+            candidates.append(canonical_path)
+
+        # Fallback legacy: vecchi pattern nel root o backup/
+        legacy_found = set()
+        for path in glob.glob(os.path.join(project_root, 'training_decisions_*.jsonl')):
+            legacy_found.add(path)
+        for path in glob.glob(os.path.join(project_root, 'backup', 'training_decisions_*.jsonl')):
+            legacy_found.add(path)
+
+        # Seleziona solo quelli che sembrano legati al tenant (tenant slug o name oppure uuid)
+        lower_slug = (tenant.tenant_slug or '').lower()
+        lower_name = (tenant.tenant_name or '').lower()
+        for path in sorted(legacy_found):
+            base = os.path.basename(path).lower()
+            if tenant.tenant_id.lower() in base or (lower_slug and lower_slug in base) or (lower_name and lower_name in base):
+                if path != canonical_path:
+                    candidates.append(path)
+
+        files = []
+        for path in candidates:
+            try:
+                stat = os.stat(path)
+                files.append({
+                    'name': os.path.basename(path),
+                    'path': path,
+                    'size': stat.st_size,
+                    'modified_at': datetime.fromtimestamp(stat.st_mtime).isoformat()
+                })
+            except FileNotFoundError:
+                continue
+
+        return jsonify({
+            'success': True,
+            'tenant_id': tenant.tenant_id,
+            'tenant_name': tenant.tenant_name,
+            'tenant_slug': tenant.tenant_slug,
+            'files': files,
+        })
+    except Exception as e:
+        print(f"❌ Errore list_training_files: {e}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e), 'files': []}), 500
+
+@app.route('/api/training-files/<tenant_id>/content', methods=['GET'])
+def get_training_file_content(tenant_id: str):
+    """
+    Restituisce il contenuto di un file di training per il tenant.
+
+    Query params:
+      - file: nome file (basename) come restituito da /api/training-files/<tenant_id>
+      - limit: numero massimo di righe da restituire (default 500)
+    """
+    try:
+        tenant = Tenant.from_uuid(tenant_id)
+        if not tenant:
+            return jsonify({'success': False, 'error': f'Tenant non trovato per UUID: {tenant_id}'}), 404
+
+        file_name = request.args.get('file')
+        if not file_name:
+            return jsonify({'success': False, 'error': 'Parametro "file" mancante'}), 400
+
+        limit_param = request.args.get('limit', '500')
+        try:
+            limit = int(limit_param)
+            if limit <= 0:
+                limit = 500
+        except ValueError:
+            limit = 500
+
+        # Trova file consentiti per il tenant e valida il nome richiesto
+        # Costruisci lista consentita: canonico + legacy correlati
+        project_root = os.path.dirname(__file__)
+        allowed_paths = {}
+        canonical_path = os.path.join(project_root, 'data', 'training', f'training_decisions_{tenant.tenant_id}.jsonl')
+        if os.path.exists(canonical_path):
+            allowed_paths[os.path.basename(canonical_path)] = canonical_path
+
+        legacy_found = set()
+        for path in glob.glob(os.path.join(project_root, 'training_decisions_*.jsonl')):
+            legacy_found.add(path)
+        for path in glob.glob(os.path.join(project_root, 'backup', 'training_decisions_*.jsonl')):
+            legacy_found.add(path)
+        lower_slug = (tenant.tenant_slug or '').lower()
+        lower_name = (tenant.tenant_name or '').lower()
+        for path in legacy_found:
+            base = os.path.basename(path)
+            base_lower = base.lower()
+            if (tenant.tenant_id.lower() in base_lower) or (lower_slug and lower_slug in base_lower) or (lower_name and lower_name in base_lower):
+                allowed_paths[base] = path
+
+        if file_name not in allowed_paths:
+            return jsonify({'success': False, 'error': 'File non consentito o non trovato per il tenant'}), 404
+
+        target_path = allowed_paths[file_name]
+        if not os.path.exists(target_path):
+            return jsonify({'success': False, 'error': 'File non trovato'}), 404
+
+        content_lines = []
+        total_lines = 0
+        truncated = False
+        with open(target_path, 'r', encoding='utf-8') as f:
+            for i, line in enumerate(f, start=1):
+                total_lines = i
+                if i <= limit:
+                    content_lines.append(line.rstrip('\n'))
+        if total_lines > limit:
+            truncated = True
+
+        return jsonify({
+            'success': True,
+            'file': {
+                'name': os.path.basename(target_path),
+                'path': target_path,
+            },
+            'content': '\n'.join(content_lines),
+            'truncated': truncated,
+            'limit': limit,
+            'total_lines': total_lines
+        })
+    except Exception as e:
+        print(f"❌ Errore get_training_file_content: {e}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/tenants/sync', methods=['POST'])
 def sync_tenants_from_remote():

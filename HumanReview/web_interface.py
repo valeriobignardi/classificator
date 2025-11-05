@@ -81,10 +81,19 @@ class HumanReviewWebInterface:
         tenant_name = tenant.tenant_name
         
         if tenant_name not in self.quality_gates:
+            # Path canonico: data/training/training_decisions_{tenant_id}.jsonl
+            try:
+                project_root = os.path.join(os.path.dirname(__file__), '..')
+                canonical_dir = os.path.abspath(os.path.join(project_root, 'data', 'training'))
+                os.makedirs(canonical_dir, exist_ok=True)
+                training_log_path = os.path.join(canonical_dir, f"training_decisions_{tenant.tenant_id}.jsonl")
+            except Exception:
+                training_log_path = f"training_decisions_{tenant.tenant_id}.jsonl"
+
             # Passa l'oggetto Tenant completo a QualityGateEngine
             self.quality_gates[tenant_name] = QualityGateEngine(
                 tenant=tenant,
-                training_log_path=f"training_decisions_{tenant_name}.jsonl"
+                training_log_path=training_log_path
             )
         return self.quality_gates[tenant_name]
     

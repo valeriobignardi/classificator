@@ -948,7 +948,10 @@ class MongoClassificationReader:
             case_doc = collection.find_one(filter_dict, {
                 "confidence": 1,
                 "metadata": 1,
-                "session_id": 1
+                "session_id": 1,
+                "testo_completo": 1,
+                "testo": 1,
+                "conversazione": 1
             })
             
             if not case_doc:
@@ -960,6 +963,13 @@ class MongoClassificationReader:
             is_representative = cluster_metadata.get("is_representative", False)
             cluster_id = cluster_metadata.get("cluster_id")
             current_confidence = case_doc.get("confidence", 0)
+            # Estrai session_id e testo conversazione per training log
+            resolved_session_id = case_doc.get("session_id")
+            resolved_conversation_text = (
+                case_doc.get("testo_completo")
+                or case_doc.get("testo")
+                or case_doc.get("conversazione")
+            )
             
             print(f"🔍 Risoluzione caso {case_id}: rappresentante={is_representative}, cluster_id={cluster_id}")
             
@@ -1019,7 +1029,9 @@ class MongoClassificationReader:
                 "cluster_id": cluster_id,
                 "is_representative": is_representative,
                 "human_decision": human_decision,
-                "human_confidence": human_confidence
+                "human_confidence": human_confidence,
+                "session_id": resolved_session_id,
+                "conversation_text": resolved_conversation_text
             }
             
         except Exception as e:

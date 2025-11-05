@@ -26,6 +26,7 @@ import ClusteringParametersManager from './components/ClusteringParametersManage
 import ClusteringStatisticsManager from './components/ClusteringStatisticsManager';
 import ReviewQueueThresholdManager from './components/ReviewQueueThresholdManager';
 import AIConfigurationManager from './components/AIConfigurationManager';
+import TrainingFilesViewer from './components/TrainingFilesViewer';
 import TenantSelector from './components/TenantSelector';
 import { TenantProvider, useTenant } from './contexts/TenantContext';
 import { apiService } from './services/apiService';
@@ -102,7 +103,7 @@ function AppContent() {
 
   const handleCaseSelect = (caseItem: ReviewCase) => {
     setSelectedCase(caseItem);
-    setCurrentTab(5); // Switch to case detail tab (index 5 now)
+    setCurrentTab(6); // Switch to case detail tab (index 6 now)
   };
 
   const handleCaseResolved = () => {
@@ -113,7 +114,7 @@ function AppContent() {
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     // Non permettere di cambiare al tab caso se non c'è un caso selezionato
-    const caseTabIndex = selectedCase ? 5 : -1; // Corretto: ora è indice 5
+    const caseTabIndex = selectedCase ? 6 : -1; // Corretto: ora è indice 6
     if (newValue === caseTabIndex && !selectedCase) {
       return;
     }
@@ -223,6 +224,7 @@ function AppContent() {
               <Tab label="Configurazione" />
               <Tab label="Parametri Clustering" />
               <Tab label="📊 Statistiche Clustering" />
+              <Tab label="File Training" />
               {selectedCase && (
                 <Tab label={`Caso: ${selectedCase.session_id.substring(0, 8)}...`} />
               )}
@@ -299,8 +301,12 @@ function AppContent() {
             <ClusteringStatisticsManager />
           </TabPanel>
 
+          <TabPanel value={currentTab} index={5}>
+            <TrainingFilesViewer />
+          </TabPanel>
+
           {selectedCase && (
-            <TabPanel value={currentTab} index={5}>
+            <TabPanel value={currentTab} index={6}>
               <CaseDetail
                 case={selectedCase}
                 tenant={tenant}

@@ -105,7 +105,27 @@ class QualityGateEngine:
             
         self.tenant = tenant
         self.tenant_name = tenant.tenant_name  # Mantieni per compatibilità 
-        self.training_log_path = training_log_path or f"training_decisions_{tenant.tenant_slug}.jsonl"
+        # Forza path canonico per training decisions: data/training/training_decisions_{tenant_id}.jsonl
+        if training_log_path is None:
+            try:
+                project_root = os.path.join(os.path.dirname(__file__), '..')
+                canonical_dir = os.path.abspath(os.path.join(project_root, 'data', 'training'))
+                os.makedirs(canonical_dir, exist_ok=True)
+                self.training_log_path = os.path.join(canonical_dir, f"training_decisions_{tenant.tenant_id}.jsonl")
+            except Exception:
+                # Fallback in caso di problemi nel calcolo del path
+                self.training_log_path = f"training_decisions_{tenant.tenant_id}.jsonl"
+        else:
+            # Se viene fornito dall'esterno, usalo così com'è
+            # (gli entrypoint aggiornati forniscono già il path canonico)
+            # Assicurati che la cartella esista se è un path in una dir
+            try:
+                parent = os.path.dirname(training_log_path)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
+            except Exception:
+                pass
+            self.training_log_path = training_log_path
         
         # Usa config fornito o carica dal file
         if config is None:
@@ -596,9 +616,13 @@ class QualityGateEngine:
             return result
         
         # Log della decisione per training futuro (manteniamo il log file)
+        # Usa il vero session_id e conversation_text quando disponibili
+        true_session_id = result.get("session_id", case_id)
+        conversation_text = result.get("conversation_text")
+
         decision_log = convert_numpy_types({
             'case_id': case_id,
-            'session_id': case_id,  # Per ora usiamo case_id come session_id
+            'session_id': true_session_id,
             'tenant': self.tenant_name,
             'ml_prediction': '',  # Recupereremo dai dati MongoDB se necessario
             'ml_confidence': 0.0,
@@ -606,6 +630,7 @@ class QualityGateEngine:
             'llm_confidence': 0.0,
             'human_decision': human_decision,
             'human_confidence': human_confidence,
+            'conversation_text': conversation_text,
             'uncertainty_score': 0.8,  # Default
             'novelty_score': 0.5,      # Default
             'reason': 'mongo_review_with_cluster_propagation',
@@ -893,23 +918,79 @@ class QualityGateEngine:
             
             # Determina se è il primo addestramento o un riaddestramento
             is_first_training = self._is_first_ml_training()
-            
+
+            # Config: includere LLM anche nei riaddestramenti (default: True)
+            include_llm_in_retraining = True
+            try:
+                include_llm_in_retraining = bool(
+                    self.config.get('supervised_training', {}).get('include_llm_in_retraining', True)
+                )
+            except Exception:
+                include_llm_in_retraining = True
+
             if is_first_training:
-                self.logger.info("🚀 PRIMO ADDESTRAMENTO: Uso review umane + classificazioni LLM")
+                self.logger.info("🚀 PRIMO ADDESTRAMENTO: Uso review umane + classificazioni LLM (finali)")
                 training_data = self._load_all_training_data_for_first_training()
             else:
-                self.logger.info("🔄 RIADDESTRAMENTO: Uso solo review umane")
-                training_data = self._load_human_decisions_for_training()
+                if include_llm_in_retraining:
+                    self.logger.info("🔄 RIADDESTRAMENTO: Uso review umane + classificazioni LLM (finali)")
+                    human_decisions = self._load_human_decisions_for_training()
+                    llm_classifications = self._load_llm_classifications_from_mongodb()
+                    combined = []
+                    if human_decisions:
+                        combined.extend(human_decisions)
+                    if llm_classifications:
+                        combined.extend(llm_classifications)
+                    training_data = self._remove_duplicate_training_data(combined)
+                    self.logger.info(f"Dataset riaddestramento: {len(training_data)} esempi totali")
+                else:
+                    self.logger.info("🔄 RIADDESTRAMENTO: Uso solo review umane (config)")
+                    training_data = self._load_human_decisions_for_training()
             
             if not training_data:
                 self.logger.warning("Nessun dato di training trovato")
                 return False
+
+            # Breakdown dataset: umani vs LLM e statistiche LLM caricate
+            try:
+                human_count = sum(1 for d in training_data if d.get('source', 'human_review') != 'llm_classification')
+                llm_count = sum(1 for d in training_data if d.get('source') == 'llm_classification')
+                breakdown_msg = f"📊 Dataset training: totale={len(training_data)}, umani={human_count}, llm={llm_count}"
+                # Aggiungi stats caricate dal loader LLM se presenti
+                llm_stats = getattr(self, '_last_llm_load_stats', None)
+                if llm_stats:
+                    breakdown_msg += (
+                        f" | LLM candidates={llm_stats.get('total_candidates', 0)}"
+                        f", excluded_propagated={llm_stats.get('propagated_excluded', 0)}"
+                        f", included_after_filter={llm_stats.get('included_after_filter', 0)}"
+                        f", skipped_no_text={llm_stats.get('skipped_no_text', 0)}"
+                        f", final_included={llm_stats.get('final_included', llm_count)}"
+                    )
+                self.logger.info(breakdown_msg)
+            except Exception as _bd_e:
+                self.logger.debug(f"Impossibile calcolare breakdown dataset: {_bd_e}")
             
             # 2. Prepara dati per training
             X_new, y_new = self._prepare_training_data(training_data)
             if X_new is None or len(X_new) == 0:
                 self.logger.warning("Nessun dato di training valido preparato")
                 return False
+
+            # 2b. Validazioni minime dataset (classi e campioni)
+            try:
+                import numpy as _np
+                unique_labels = _np.unique(y_new)
+                min_samples_cfg = int(self.config.get('ensemble_disagreement', {}).get('min_training_examples_for_ml', 20))
+                if len(unique_labels) < 2:
+                    self.logger.warning("Dataset non valido: meno di 2 classi distinte. Blocco riaddestramento.")
+                    return False
+                if len(y_new) < max(2 * len(unique_labels), min_samples_cfg):
+                    self.logger.warning(
+                        f"Dataset troppo piccolo: {len(y_new)} esempi, classi={len(unique_labels)} (min richiesti ~{max(2*len(unique_labels), min_samples_cfg)})."
+                    )
+                    return False
+            except Exception as _ve:
+                self.logger.debug(f"Validazione dataset non disponibile: {_ve}")
             
             # 3. Carica modello esistente e combinare con nuovi dati
             success = self._update_ml_model_with_new_data(X_new, y_new)
@@ -1080,43 +1161,121 @@ class QualityGateEngine:
             from mongo_classification_reader import MongoClassificationReader
             mongo_reader = MongoClassificationReader(tenant=self.tenant)
             mongo_reader.connect()
-            
+
             try:
-                # Cerca classificazioni fatte SOLO da LLM (non review umane e non ML)
-                query = {
-                    'client_name': self.tenant.tenant_slug,
-                    '$and': [
-                        {'classification_method': {'$regex': 'llm', '$options': 'i'}},
-                        {'classification_method': {'$not': {'$regex': 'human', '$options': 'i'}}},
-                        {'classification_method': {'$not': {'$regex': 'ml', '$options': 'i'}}},
-                        {'llm_prediction': {'$exists': True, '$ne': None}},
-                        {'needs_review': {'$ne': True}}  # Non prendere quelli ancora in review
+                # Usa la collection corretta per il tenant
+                collection = mongo_reader.db[mongo_reader.get_collection_name()]
+
+                # Base candidates: finali non pending/non human_reviewed con llm_prediction presente
+                base_filters = [
+                    {'review_status': {'$ne': 'pending'}},
+                    {'human_reviewed': {'$ne': True}},
+                    {'llm_prediction': {'$exists': True, '$ne': ''}}
+                ]
+
+                # Filtri propagazione da escludere
+                propagated_or = {
+                    '$or': [
+                        {'metadata.propagated': True},
+                        {'metadata.propagated_from': {'$exists': True, '$ne': None}},
+                        {'session_type': 'propagated'}
                     ]
                 }
-                
-                llm_classifications = list(mongo_reader.collection.find(query))
-                
+
+                # Statistiche: candidati totali e propagati esclusi
+                try:
+                    total_candidates = collection.count_documents({'$and': base_filters})
+                    propagated_excluded = collection.count_documents({'$and': base_filters + [propagated_or]})
+                except Exception:
+                    total_candidates = 0
+                    propagated_excluded = 0
+
+                # Query effettiva: escludi propagati
+                query = {
+                    '$and': base_filters + [
+                        {'$or': [
+                            {'metadata.propagated': {'$exists': False}},
+                            {'metadata.propagated': {'$ne': True}}
+                        ]},
+                        {'$or': [
+                            {'metadata.propagated_from': {'$exists': False}},
+                            {'metadata.propagated_from': None}
+                        ]},
+                        {'$or': [
+                            {'session_type': {'$exists': False}},
+                            {'session_type': {'$ne': 'propagated'}}
+                        ]}
+                    ]
+                }
+
+                projection = {
+                    'session_id': 1,
+                    'testo_completo': 1,
+                    'testo': 1,
+                    'conversazione': 1,
+                    'classification': 1,
+                    'predicted_label': 1,
+                    'classificazione': 1,
+                    'llm_prediction': 1,
+                    'llm_confidence': 1,
+                    'confidence': 1
+                }
+
+                llm_classifications = list(collection.find(query, projection))
+
+                # Conteggio after-filter (prima di scartare per testo mancante)
+                try:
+                    included_after_filter = collection.count_documents(query)
+                except Exception:
+                    included_after_filter = 0
+
                 # Converte in formato compatibile con training log
+                skipped_no_text = 0
                 for classification in llm_classifications:
-                    session_id = classification.get('session_id')
-                    llm_prediction = classification.get('llm_prediction')
-                    conversation_text = classification.get('conversation_text')
-                    
-                    if session_id and llm_prediction and conversation_text:
+                    session_id = classification.get('session_id') or str(classification.get('_id'))
+                    # Etichetta finale preferita: classification/predicted_label/classificazione → fallback a llm_prediction
+                    final_label = (
+                        classification.get('classification')
+                        or classification.get('predicted_label')
+                        or classification.get('classificazione')
+                        or classification.get('llm_prediction')
+                    )
+                    conversation_text = (
+                        classification.get('testo_completo')
+                        or classification.get('testo')
+                        or classification.get('conversazione')
+                    )
+
+                    if session_id and final_label and conversation_text:
                         training_entry = {
                             'session_id': session_id,
-                            'human_decision': llm_prediction,  # Usa LLM prediction come "decisione"
-                            'conversation_text': conversation_text,  # 🔧 AGGIUNTO: Include il testo direttamente
+                            'human_decision': final_label,  # usa etichetta finale con fallback a LLM
+                            'conversation_text': conversation_text,
                             'source': 'llm_classification',
-                            'original_confidence': classification.get('confidence', 0.5)
+                            'original_confidence': classification.get('confidence', classification.get('llm_confidence', 0.5))
                         }
                         llm_data.append(training_entry)
-                    elif session_id and llm_prediction:
+                    elif session_id and final_label:
                         # Se manca conversation_text, logga per debug
-                        self.logger.warning(f"Classificazione LLM {session_id} senza conversation_text - saltata")
-                
+                        skipped_no_text += 1
+                        self.logger.warning(f"Classificazione LLM {session_id} senza testo conversazione - saltata")
+
                 self.logger.info(f"Trovate {len(llm_data)} classificazioni LLM utilizzabili per training")
-                
+
+                # Salva statistiche per log di retraining
+                try:
+                    self._last_llm_load_stats = {
+                        'total_candidates': int(total_candidates),
+                        'propagated_excluded': int(propagated_excluded),
+                        'included_after_filter': int(included_after_filter),
+                        'skipped_no_text': int(skipped_no_text),
+                        'final_included': int(len(llm_data)),
+                    }
+                except Exception:
+                    self._last_llm_load_stats = {
+                        'final_included': int(len(llm_data))
+                    }
+
             finally:
                 mongo_reader.disconnect()
                 
@@ -1172,10 +1331,27 @@ class QualityGateEngine:
         training_data = []
         
         try:
-            if not os.path.exists(self.training_log_path):
+            path_to_read = self.training_log_path
+            if not os.path.exists(path_to_read):
+                # Fallback legacy: cerca vecchi pattern nel root o in backup/
+                try:
+                    project_root = os.path.join(os.path.dirname(__file__), '..')
+                    legacy_candidates = [
+                        os.path.join(project_root, f'training_decisions_{getattr(self.tenant, "tenant_slug", "").lower()}.jsonl'),
+                        os.path.join(project_root, f'training_decisions_{getattr(self.tenant, "tenant_name", "").lower()}.jsonl'),
+                        os.path.join(project_root, 'backup', f'training_decisions_{getattr(self.tenant, "tenant_slug", "").lower()}.jsonl'),
+                        os.path.join(project_root, 'backup', f'training_decisions_{getattr(self.tenant, "tenant_name", "").lower()}.jsonl'),
+                    ]
+                    for cand in legacy_candidates:
+                        if cand and os.path.exists(cand):
+                            path_to_read = cand
+                            break
+                except Exception:
+                    pass
+            if not os.path.exists(path_to_read):
                 return training_data
-            
-            with open(self.training_log_path, 'r', encoding='utf-8') as f:
+
+            with open(path_to_read, 'r', encoding='utf-8') as f:
                 for line_num, line in enumerate(f, 1):
                     try:
                         line = line.strip()

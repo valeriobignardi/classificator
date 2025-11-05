@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { ReviewCase, ReviewStats } from '../types/ReviewCase';
+import { TrainingFileListResponse, TrainingFileContentResponse } from '../types/TrainingFile';
 import { Tenant } from '../types/Tenant';
 
 // Usa sempre URL relativi per passare attraverso il proxy nginx
@@ -156,6 +157,20 @@ class ApiService {
   async getUIConfig(): Promise<any> {
     return this.handleRequest(
       axios.get(`${API_BASE_URL}/config/ui`)
+    );
+  }
+
+  // TRAINING FILES
+  async listTrainingFiles(tenant_id: string): Promise<TrainingFileListResponse> {
+    return this.handleRequest(
+      axios.get(`${API_BASE_URL}/training-files/${tenant_id}`)
+    );
+  }
+
+  async getTrainingFileContent(tenant_id: string, fileName: string, limit: number = 500): Promise<TrainingFileContentResponse> {
+    const params = new URLSearchParams({ file: fileName, limit: String(limit) });
+    return this.handleRequest(
+      axios.get(`${API_BASE_URL}/training-files/${tenant_id}/content?${params.toString()}`)
     );
   }
 

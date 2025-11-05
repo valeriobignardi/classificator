@@ -1,0 +1,1434 @@
+openapi: 3.0.3
+info:
+  title: Sistema di Classificazione Intelligente - API Documentation
+  description: |
+    Documentazione completa delle API del sistema di classificazione intelligente.
+    
+    **Funzionalità principali:**
+    - **Classificazione**: Classificazione singola e batch di testi con supporto multi-tenant
+    - **Training**: Addestramento modelli supervisionato e ottimizzazione parametri
+    - **Review Management**: Gestione interfaccia di revisione manuale con supporto cluster
+    - **Statistics**: Statistiche dettagliate e dashboard per analisi performance
+    - **Prompt Management**: Gestione dinamica dei prompt per diversi tenant
+    - **Embedding Service**: Servizio di embedding separato per scalabilità
+    
+    **Architettura:**
+    - FastAPI per API principali di classificazione
+    - Flask per interfaccia di revisione e statistiche
+    - MongoDB per storage classificazioni e embedding
+    - MySQL per configurazioni e metadati
+    - Docker per containerizzazione servizi
+    
+  version: "2.1.0"
+  contact:
+    name: Team AI Classification
+    email: support@classificatore.ai
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8000
+    description: API Server Principale (FastAPI)
+  - url: http://localhost:5000
+    description: Server Review e Statistiche (Flask)
+  - url: http://localhost:8001
+    description: Embedding Service (Docker)
+
+tags:
+  - name: Classification
+    description: Classificazione testi singola e batch
+  - name: Training
+    description: Addestramento modelli e ottimizzazione
+  - name: Statistics
+    description: Statistiche e metriche sistema
+  - name: Review Management
+    description: Gestione revisione manuale e review queue
+  - name: Prompt Management
+    description: Gestione prompt dinamici per tenant
+  - name: Health & System
+    description: Status sistema e health check
+  - name: Embedding Service
+    description: Servizio embedding separato
+
+paths:
+  # ==================== CLASSIFICATION APIs ====================
+  /classify:
+    post:
+      tags:
+        - Classification
+      summary: Classificazione Singola
+      description: |
+        Classifica un singolo testo utilizzando il sistema ensemble con GPT-5 + BERTopic + Clustering.
+        
+        **Funzionalità:**
+        - Classificazione multi-livello con confidence scoring
+        - Supporto motivazione dettagliata per decisione
+        - Cache embedding per ottimizzazione performance
+        - Session ID per tracciamento conversazioni
+      operationId: classifyText
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClassificationRequest'
+            examples:
+              humanitas_esempio:
+                summary: Richiesta informazioni esami Humanitas
+                value:
+                  text: "Vorrei sapere gli orari per fare le analisi del sangue"
+                  tenant_id: "humanitas"
+                  session_id: "sess_20250101_001"
+                  additional_context: "Richiesta telefonica paziente"
+      responses:
+        '200':
+          description: Classificazione completata con successo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassificationResult'
+              examples:
+                success_response:
+                  summary: Classificazione riuscita
+                  value:
+                    success: true
+                    classification: "INFO_ESAMI_PRESTAZIONI"
+                    confidence: 0.92
+                    motivation: "Il testo richiede informazioni specifiche su orari per esami di laboratorio"
+                    session_id: "sess_20250101_001"
+                    model_used: "gpt-5-ensemble"
+                    processing_time_ms: 1247
+        '400':
+          description: Richiesta non valida
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Errore interno del server
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /classify/batch:
+    post:
+      tags:
+        - Classification
+      summary: Classificazione Batch
+      description: |
+        Classifica multiple frasi in una singola richiesta per ottimizzazione performance.
+        
+        **Caratteristiche:**
+        - Elaborazione parallela con controllo concorrenza
+        - Gestione errori granulare per singolo item
+        - Risposta strutturata con risultati parziali in caso di errori
+      operationId: classifyBatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchClassificationRequest'
+            examples:
+              batch_example:
+                summary: Batch di 3 classificazioni
+                value:
+                  texts:
+                    - "Voglio disdire la prenotazione"
+                    - "Quando aprite domani?"
+                    - "Ho bisogno del referto delle analisi"
+                  tenant_id: "humanitas"
+                  session_id: "batch_sess_001"
+      responses:
+        '200':
+          description: Batch elaborato (anche con errori parziali)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchClassificationResult'
+
+  # ==================== TRAINING APIs ====================
+  /train:
+    post:
+      tags:
+        - Training
+      summary: Avvia Training Supervisionato
+      description: |
+        Avvia processo di training supervisionato utilizzando i dati di feedback della review queue.
+        
+        **Processo:**
+        1. Recupera dati validati dalla review queue
+        2. Prepara dataset di training con feedback umano
+        3. Addestra modello con validazione incrociata
+        4. Aggiorna parametri ottimali in database
+      operationId: startTraining
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TrainingRequest'
+      responses:
+        '200':
+          description: Training avviato con successo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrainingResponse'
+
+  /optimize:
+    post:
+      tags:
+        - Training
+      summary: Ottimizzazione Parametri
+      description: |
+        Esegue ottimizzazione automatica dei parametri del sistema ensemble.
+        
+        **Ottimizzazioni:**
+        - Grid search per parametri BERTopic (n_neighbors, min_cluster_size)
+        - Tuning confidence threshold per GPT-5
+        - Bilanciamento pesi ensemble components
+      operationId: optimizeParameters
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OptimizationRequest'
+      responses:
+        '200':
+          description: Ottimizzazione completata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OptimizationResponse'
+
+  # ==================== STATISTICS APIs ====================
+  /statistics:
+    get:
+      tags:
+        - Statistics
+      summary: Statistiche Sistema Globali
+      description: |
+        Recupera statistiche complete del sistema di classificazione.
+        
+        **Metriche incluse:**
+        - Distribuzione classificazioni per tenant
+        - Performance modelli (accuracy, precision, recall)
+        - Volumi di elaborazione temporali
+        - Status review queue
+      operationId: getSystemStatistics
+      parameters:
+        - name: tenant_id
+          in: query
+          description: Filtra per tenant specifico
+          schema:
+            type: string
+        - name: date_from
+          in: query
+          description: Data inizio periodo (YYYY-MM-DD)
+          schema:
+            type: string
+            format: date
+        - name: date_to
+          in: query
+          description: Data fine periodo (YYYY-MM-DD)
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Statistiche recuperate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemStatistics'
+
+  # ==================== REVIEW MANAGEMENT APIs ====================
+  /api/review/{tenant_id}/cases:
+    get:
+      tags:
+        - Review Management
+      summary: Lista Casi Review Queue
+      description: |
+        Recupera tutti i casi nella review queue per un tenant con supporto filtri avanzati.
+        
+        **Funzionalità Filtri:**
+        - **Representatives**: Mostra solo rappresentanti di cluster
+        - **Propagated**: Include conversazioni propagate da cluster
+        - **Outliers**: Include sessioni outlier non clusterizzate
+        - **Label Filter**: Filtra per classificazione specifica
+        
+        **Logica 3 Livelli Review Queue:**
+        1. **Cluster Representatives**: Casi rappresentativi per validazione cluster
+        2. **Propagated Cases**: Conversazioni simili a cluster validati
+        3. **Outlier Cases**: Casi individuali non raggruppabili
+      operationId: getReviewCases
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          description: UUID del tenant
+          schema:
+            type: string
+            format: uuid
+          example: "015007d9-d413-11ef-86a5-96000228e7fe"
+        - name: limit
+          in: query
+          description: Numero massimo di casi da restituire
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+        - name: label
+          in: query
+          description: Filtra per etichetta specifica
+          schema:
+            type: string
+        - name: include_representatives
+          in: query
+          description: Include rappresentanti di cluster
+          schema:
+            type: boolean
+            default: true
+        - name: include_propagated
+          in: query
+          description: Include conversazioni propagate
+          schema:
+            type: boolean
+            default: true
+        - name: include_outliers
+          in: query
+          description: Include sessioni outlier
+          schema:
+            type: boolean
+            default: true
+      responses:
+        '200':
+          description: Lista casi recuperata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewCasesResponse'
+        '404':
+          description: Tenant non trovato
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/review/{tenant_id}/cases/{case_id}:
+    get:
+      tags:
+        - Review Management
+      summary: Dettagli Caso Specifico
+      description: Recupera dettagli completi di un caso nella review queue
+      operationId: getReviewCase
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: case_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Dettagli caso recuperati
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewCaseDetail'
+
+  /api/review/{tenant_id}/cases/{case_id}/resolve:
+    post:
+      tags:
+        - Review Management
+      summary: Risolvi Caso Review
+      description: |
+        Risolve un caso nella review queue con feedback umano.
+        
+        **Azioni Supportate:**
+        - **approve**: Approva classificazione automatica
+        - **reject**: Rifiuta e fornisce classificazione corretta
+        - **skip**: Salta caso per revisione successiva
+        
+        **Effetti Risoluzione:**
+        - Aggiorna database con feedback umano
+        - Propaga decisione a casi simili nel cluster
+        - Contribuisce al dataset per training supervisionato
+      operationId: resolveReviewCase
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: case_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveReviewRequest'
+      responses:
+        '200':
+          description: Caso risolto con successo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolveReviewResponse'
+
+  /api/review/{client_name}/labels:
+    get:
+      tags:
+        - Review Management
+      summary: Etichette Disponibili
+      description: Recupera tutte le etichette/classificazioni disponibili per un cliente
+      operationId: getAvailableLabels
+      parameters:
+        - name: client_name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Etichette recuperate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LabelsResponse'
+
+  /api/review/{client_name}/clusters:
+    get:
+      tags:
+        - Review Management
+      summary: Informazioni Cluster
+      description: |
+        Recupera informazioni dettagliate sui cluster per analisi e gestione review queue.
+        
+        **Informazioni Cluster:**
+        - Dimensione cluster e testi rappresentativi
+        - Etichetta dominante e confidence media
+        - Stato validazione (pending, approved, rejected)
+      operationId: getClusters
+      parameters:
+        - name: client_name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: include_propagated
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Informazioni cluster recuperate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClustersResponse'
+
+  /api/review/{client_name}/stats:
+    get:
+      tags:
+        - Review Management
+      summary: Statistiche Review per Cliente
+      description: Statistiche specifiche della review queue per un cliente
+      operationId: getReviewStats
+      parameters:
+        - name: client_name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Statistiche review recuperate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewStatsResponse'
+
+  # ==================== PROMPT MANAGEMENT APIs ====================
+  /api/prompts/{tenant_id}:
+    get:
+      tags:
+        - Prompt Management
+      summary: Lista Prompt per Tenant
+      description: Recupera tutti i prompt configurati per un tenant specifico
+      operationId: getPrompts
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Lista prompt recuperata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptListResponse'
+
+    post:
+      tags:
+        - Prompt Management
+      summary: Crea Nuovo Prompt
+      description: Crea un nuovo prompt per un tenant
+      operationId: createPrompt
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePromptRequest'
+      responses:
+        '201':
+          description: Prompt creato
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptModel'
+
+  /api/prompts/{prompt_id}:
+    put:
+      tags:
+        - Prompt Management
+      summary: Aggiorna Prompt
+      description: Aggiorna un prompt esistente
+      operationId: updatePrompt
+      parameters:
+        - name: prompt_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePromptRequest'
+      responses:
+        '200':
+          description: Prompt aggiornato
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptModel'
+
+    delete:
+      tags:
+        - Prompt Management
+      summary: Elimina Prompt
+      description: Elimina un prompt esistente
+      operationId: deletePrompt
+      parameters:
+        - name: prompt_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Prompt eliminato
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeletePromptResponse'
+
+  /api/prompts/{prompt_id}/preview:
+    get:
+      tags:
+        - Prompt Management
+      summary: Anteprima Prompt
+      description: Genera anteprima di un prompt con variabili sostituite
+      operationId: previewPrompt
+      parameters:
+        - name: prompt_id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: sample_text
+          in: query
+          description: Testo di esempio per anteprima
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Anteprima generata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptPreviewResponse'
+
+  # ==================== HEALTH & SYSTEM APIs ====================
+  /:
+    get:
+      tags:
+        - Health & System
+      summary: Root Endpoint
+      description: Endpoint di benvenuto del sistema
+      operationId: getRoot
+      responses:
+        '200':
+          description: Sistema attivo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Sistema di Classificazione Intelligente - API Server"
+                  version:
+                    type: string
+                    example: "2.1.0"
+                  status:
+                    type: string
+                    example: "active"
+
+  /health:
+    get:
+      tags:
+        - Health & System
+      summary: Health Check Completo
+      description: |
+        Verifica stato di salute completo del sistema includendo:
+        - Connessione database MySQL
+        - Connessione MongoDB
+        - Status servizi esterni
+        - Metriche performance
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Sistema sano
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemStatus'
+
+  /models/status:
+    get:
+      tags:
+        - Health & System
+      summary: Status Modelli
+      description: Stato dei modelli di classificazione caricati in memoria
+      operationId: getModelsStatus
+      responses:
+        '200':
+          description: Status modelli
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelsStatusResponse'
+
+  # ==================== EMBEDDING SERVICE APIs ====================
+  /embed:
+    post:
+      tags:
+        - Embedding Service
+      summary: Genera Embedding
+      description: |
+        Genera embedding per testo utilizzando il servizio separato.
+        
+        **Modelli Supportati:**
+        - sentence-transformers/all-MiniLM-L6-v2 (default, leggero)
+        - sentence-transformers/all-mpnet-base-v2 (più accurato)
+        - custom models configurabili
+      servers:
+        - url: http://localhost:8001
+      operationId: generateEmbedding
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmbeddingRequest'
+      responses:
+        '200':
+          description: Embedding generato
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingResponse'
+
+  /batch_similarity:
+    post:
+      tags:
+        - Embedding Service
+      summary: Similarità Batch
+      description: Calcola similarità coseno tra un testo e una lista di testi di riferimento
+      servers:
+        - url: http://localhost:8001
+      operationId: calculateBatchSimilarity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchSimilarityRequest'
+      responses:
+        '200':
+          description: Similarità calcolate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchSimilarityResponse'
+
+components:
+  schemas:
+    # ==================== REQUEST SCHEMAS ====================
+    ClassificationRequest:
+      type: object
+      required:
+        - text
+        - tenant_id
+      properties:
+        text:
+          type: string
+          description: Testo da classificare
+          example: "Vorrei sapere gli orari per fare le analisi del sangue"
+          maxLength: 5000
+        tenant_id:
+          type: string
+          description: Identificativo tenant
+          example: "humanitas"
+        session_id:
+          type: string
+          description: ID sessione per tracciamento conversazione
+          example: "sess_20250101_001"
+        additional_context:
+          type: string
+          description: Contesto aggiuntivo opzionale
+          example: "Richiesta telefonica paziente"
+        model_preference:
+          type: string
+          enum: ["gpt-5", "ensemble", "bertopic"]
+          description: Preferenza modello (default: ensemble)
+
+    BatchClassificationRequest:
+      type: object
+      required:
+        - texts
+        - tenant_id
+      properties:
+        texts:
+          type: array
+          items:
+            type: string
+          description: Lista di testi da classificare
+          maxItems: 50
+        tenant_id:
+          type: string
+          description: Identificativo tenant
+        session_id:
+          type: string
+          description: ID sessione condiviso per il batch
+
+    TrainingRequest:
+      type: object
+      required:
+        - tenant_id
+      properties:
+        tenant_id:
+          type: string
+          description: Tenant per cui avviare il training
+        use_review_feedback:
+          type: boolean
+          default: true
+          description: Usa feedback dalla review queue
+        validation_split:
+          type: number
+          default: 0.2
+          minimum: 0.1
+          maximum: 0.5
+
+    OptimizationRequest:
+      type: object
+      required:
+        - tenant_id
+      properties:
+        tenant_id:
+          type: string
+        optimization_type:
+          type: string
+          enum: ["bertopic", "ensemble", "full"]
+          default: "full"
+        max_iterations:
+          type: integer
+          default: 10
+          minimum: 1
+          maximum: 50
+
+    ResolveReviewRequest:
+      type: object
+      required:
+        - action
+      properties:
+        action:
+          type: string
+          enum: ["approve", "reject", "skip"]
+          description: Azione da eseguire sul caso
+        correct_label:
+          type: string
+          description: Etichetta corretta (obbligatoria per action=reject)
+        feedback_notes:
+          type: string
+          description: Note aggiuntive del reviewer
+        propagate_to_cluster:
+          type: boolean
+          default: true
+          description: Propaga decisione a tutto il cluster
+
+    CreatePromptRequest:
+      type: object
+      required:
+        - name
+        - template
+        - classification_type
+      properties:
+        name:
+          type: string
+          description: Nome del prompt
+        template:
+          type: string
+          description: Template del prompt con variabili
+        classification_type:
+          type: string
+          description: Tipo di classificazione
+        is_active:
+          type: boolean
+          default: true
+        variables:
+          type: object
+          description: Variabili disponibili nel template
+
+    UpdatePromptRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        template:
+          type: string
+        classification_type:
+          type: string
+        is_active:
+          type: boolean
+        variables:
+          type: object
+
+    EmbeddingRequest:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          description: Testo per cui generare embedding
+        model:
+          type: string
+          default: "sentence-transformers/all-MiniLM-L6-v2"
+          description: Modello da utilizzare
+        normalize:
+          type: boolean
+          default: true
+          description: Normalizza il vettore risultante
+
+    BatchSimilarityRequest:
+      type: object
+      required:
+        - query_text
+        - reference_texts
+      properties:
+        query_text:
+          type: string
+          description: Testo di query
+        reference_texts:
+          type: array
+          items:
+            type: string
+          description: Testi di riferimento per similarità
+        model:
+          type: string
+          default: "sentence-transformers/all-MiniLM-L6-v2"
+
+    # ==================== RESPONSE SCHEMAS ====================
+    ClassificationResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        classification:
+          type: string
+          description: Etichetta classificazione
+          example: "INFO_ESAMI_PRESTAZIONI"
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: Confidence score della classificazione
+        motivation:
+          type: string
+          description: Spiegazione della decisione
+        session_id:
+          type: string
+          description: ID sessione utilizzato
+        model_used:
+          type: string
+          description: Modello utilizzato per la classificazione
+        processing_time_ms:
+          type: integer
+          description: Tempo di elaborazione in millisecondi
+        metadata:
+          type: object
+          properties:
+            cluster_id:
+              type: string
+              description: ID cluster BERTopic assegnato
+            embedding_model:
+              type: string
+              description: Modello embedding utilizzato
+            gpt_raw_response:
+              type: string
+              description: Risposta grezza GPT-5
+        error:
+          type: string
+          description: Messaggio errore (presente solo se success=false)
+
+    BatchClassificationResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClassificationResult'
+        total_processed:
+          type: integer
+        successful_count:
+          type: integer
+        error_count:
+          type: integer
+        processing_time_ms:
+          type: integer
+        batch_session_id:
+          type: string
+
+    TrainingResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        training_id:
+          type: string
+          description: ID univoco del processo di training
+        status:
+          type: string
+          enum: ["started", "running", "completed", "failed"]
+        tenant_id:
+          type: string
+        estimated_duration_minutes:
+          type: integer
+        dataset_size:
+          type: integer
+          description: Numero di esempi nel dataset
+        message:
+          type: string
+
+    OptimizationResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        optimization_id:
+          type: string
+        best_parameters:
+          type: object
+          description: Parametri ottimali trovati
+        performance_improvement:
+          type: number
+          description: Miglioramento percentuale performance
+        iterations_completed:
+          type: integer
+        total_time_minutes:
+          type: number
+
+    SystemStatistics:
+      type: object
+      properties:
+        total_classifications:
+          type: integer
+          description: Totale classificazioni eseguite
+        classifications_today:
+          type: integer
+        active_tenants:
+          type: integer
+        model_performance:
+          type: object
+          properties:
+            accuracy:
+              type: number
+              format: float
+            precision:
+              type: number
+              format: float
+            recall:
+              type: number
+              format: float
+        review_queue_stats:
+          type: object
+          properties:
+            pending_reviews:
+              type: integer
+            resolved_today:
+              type: integer
+            average_resolution_time_minutes:
+              type: number
+        system_health:
+          type: object
+          properties:
+            mongodb_connected:
+              type: boolean
+            mysql_connected:
+              type: boolean
+            embedding_service_available:
+              type: boolean
+        tenant_distribution:
+          type: array
+          items:
+            type: object
+            properties:
+              tenant_name:
+                type: string
+              classification_count:
+                type: integer
+              percentage:
+                type: number
+
+    ReviewCasesResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        cases:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReviewCase'
+        total:
+          type: integer
+        tenant_id:
+          type: string
+        tenant_name:
+          type: string
+        tenant_slug:
+          type: string
+        labels:
+          type: array
+          items:
+            type: string
+        statistics:
+          $ref: '#/components/schemas/ReviewQueueStatistics'
+
+    ReviewCase:
+      type: object
+      properties:
+        case_id:
+          type: string
+        session_id:
+          type: string
+        text:
+          type: string
+          description: Testo della conversazione
+        predicted_classification:
+          type: string
+          description: Classificazione automatica
+        confidence:
+          type: number
+          format: float
+        status:
+          type: string
+          enum: ["pending", "approved", "rejected", "skipped"]
+        cluster_id:
+          type: string
+          description: ID cluster di appartenenza
+        is_representative:
+          type: boolean
+          description: True se è rappresentante del cluster
+        is_outlier:
+          type: boolean
+          description: True se è un outlier
+        created_at:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+
+    ReviewCaseDetail:
+      allOf:
+        - $ref: '#/components/schemas/ReviewCase'
+        - type: object
+          properties:
+            similar_cases:
+              type: array
+              items:
+                $ref: '#/components/schemas/ReviewCase'
+              description: Casi simili nello stesso cluster
+            classification_history:
+              type: array
+              items:
+                type: object
+                properties:
+                  timestamp:
+                    type: string
+                    format: date-time
+                  action:
+                    type: string
+                  previous_classification:
+                    type: string
+                  new_classification:
+                    type: string
+                  reviewer:
+                    type: string
+
+    ReviewQueueStatistics:
+      type: object
+      properties:
+        total_pending:
+          type: integer
+        representatives_pending:
+          type: integer
+        outliers_pending:
+          type: integer
+        propagated_pending:
+          type: integer
+        resolved_today:
+          type: integer
+        average_confidence:
+          type: number
+          format: float
+
+    ResolveReviewResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        case_id:
+          type: string
+        action_performed:
+          type: string
+        propagated_count:
+          type: integer
+          description: Numero di casi simili aggiornati
+        updated_classification:
+          type: string
+        message:
+          type: string
+
+    LabelsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        labels:
+          type: array
+          items:
+            type: string
+        client:
+          type: string
+        statistics:
+          type: object
+          additionalProperties:
+            type: integer
+
+    ClustersResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        clusters:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClusterInfo'
+        total:
+          type: integer
+        client:
+          type: string
+
+    ClusterInfo:
+      type: object
+      properties:
+        cluster_id:
+          type: string
+        size:
+          type: integer
+          description: Numero di elementi nel cluster
+        representative_texts:
+          type: array
+          items:
+            type: string
+          description: Testi rappresentativi del cluster
+        dominant_label:
+          type: string
+          description: Etichetta più frequente nel cluster
+        confidence_avg:
+          type: number
+          format: float
+          description: Confidence media nel cluster
+        status:
+          type: string
+          enum: ["pending", "validated", "rejected"]
+
+    ReviewStatsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        client:
+          type: string
+        stats:
+          type: object
+          properties:
+            total_cases:
+              type: integer
+            pending_reviews:
+              type: integer
+            resolved_reviews:
+              type: integer
+            accuracy_rate:
+              type: number
+              format: float
+
+    PromptListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        prompts:
+          type: array
+          items:
+            $ref: '#/components/schemas/PromptModel'
+        total:
+          type: integer
+
+    PromptModel:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        template:
+          type: string
+        classification_type:
+          type: string
+        tenant_id:
+          type: string
+        is_active:
+          type: boolean
+        variables:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PromptPreviewResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        rendered_prompt:
+          type: string
+          description: Prompt con variabili sostituite
+        variables_used:
+          type: object
+          description: Variabili utilizzate nella sostituzione
+
+    DeletePromptResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+
+    SystemStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: ["healthy", "degraded", "unhealthy"]
+        version:
+          type: string
+        uptime_seconds:
+          type: integer
+        database_connections:
+          type: object
+          properties:
+            mysql:
+              type: boolean
+            mongodb:
+              type: boolean
+        services:
+          type: object
+          properties:
+            classification_service:
+              type: boolean
+            embedding_service:
+              type: boolean
+            training_service:
+              type: boolean
+        performance_metrics:
+          type: object
+          properties:
+            avg_response_time_ms:
+              type: number
+            requests_per_minute:
+              type: number
+            error_rate:
+              type: number
+
+    ModelsStatusResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        models:
+          type: object
+          properties:
+            gpt5_available:
+              type: boolean
+            bertopic_loaded:
+              type: boolean
+            embedding_model:
+              type: string
+        memory_usage:
+          type: object
+          properties:
+            total_mb:
+              type: number
+            models_mb:
+              type: number
+            available_mb:
+              type: number
+
+    EmbeddingResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        embedding:
+          type: array
+          items:
+            type: number
+          description: Vettore embedding
+        dimension:
+          type: integer
+          description: Dimensione del vettore
+        model:
+          type: string
+        processing_time_ms:
+          type: integer
+
+    BatchSimilarityResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        similarities:
+          type: array
+          items:
+            type: number
+          description: Score di similarità per ogni testo di riferimento
+        query_text:
+          type: string
+        model:
+          type: string
+        processing_time_ms:
+          type: integer
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          description: Messaggio di errore
+        error_code:
+          type: string
+          description: Codice errore specifico
+        timestamp:
+          type: string
+          format: date-time
+        request_id:
+          type: string
+          description: ID richiesta per tracciamento
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        Chiave API per autenticazione. 
+        
+        **Ottenimento:**
+        - Contatta l'amministratore di sistema
+        - Genera tramite interfaccia di gestione tenant
+        
+        **Formato:** `X-API-Key: your-api-key-here`
+    
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Token JWT per autenticazione avanzata.
+        
+        **Scopes disponibili:**
+        - `classify:read` - Classificazione testi
+        - `review:write` - Gestione review queue  
+        - `admin:full` - Accesso amministrativo completo
+
+security:
+  - ApiKeyAuth: []
+  - BearerAuth: []
+
+externalDocs:
+  description: "Documentazione completa del sistema"
+  url: "https://github.com/classificatore/docs"

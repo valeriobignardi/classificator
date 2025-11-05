@@ -148,25 +148,27 @@ const ReviewStats: React.FC<ReviewStatsProps> = ({ tenant, refreshTrigger }) => 
     }
   }, [loadLabelStatistics, refreshTrigger, selectedTenant]);
 
-  // Genera colori per il grafico a torta
+  // Genera colori distinti per il grafico a torta (senza duplicati evidenti)
   const generateColors = (count: number) => {
-    const colors = [
-      '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF',
-      '#FF9F40', '#FF6384', '#C9CBCF', '#4BC0C0', '#FF6384',
-      '#36A2EB', '#FFCE56', '#FF9F40', '#9966FF', '#C9CBCF'
-    ];
-    
-    return Array.from({ length: count }, (_, i) => colors[i % colors.length]);
+    return Array.from({ length: count }, (_, i) => {
+      const hue = Math.round((360 / Math.max(count, 1)) * i);
+      return `hsl(${hue}, 70%, 55%)`;
+    });
   };
 
-  // Prepara dati per il grafico a torta
+  // Ordina le etichette per occorrenze come nella tabella, per coerenza visiva
+  const sortedLabelStats = React.useMemo(() => {
+    return [...labelStats].sort((a, b) => b.total_count - a.total_count);
+  }, [labelStats]);
+
+  // Prepara dati per il grafico a torta (usando l'ordinamento della tabella)
   const pieChartData = {
-    labels: labelStats.map(stat => stat.tag_name),
+    labels: sortedLabelStats.map(stat => stat.tag_name),
     datasets: [
       {
-        data: labelStats.map(stat => stat.total_count),
-        backgroundColor: generateColors(labelStats.length),
-        borderColor: generateColors(labelStats.length).map(color => color + '80'),
+        data: sortedLabelStats.map(stat => stat.total_count),
+        backgroundColor: generateColors(sortedLabelStats.length),
+        borderColor: generateColors(sortedLabelStats.length).map(c => c.replace('hsl(', 'hsla(').replace(')', ', 0.8)')),
         borderWidth: 2,
       },
     ],
@@ -349,9 +351,7 @@ const ReviewStats: React.FC<ReviewStatsProps> = ({ tenant, refreshTrigger }) => 
                         </TableRow>
                       </TableHead>
                       <TableBody>
-                        {labelStats
-                          .sort((a, b) => b.total_count - a.total_count)
-                          .map((stat, index) => (
+                        {sortedLabelStats.map((stat, index) => (
                           <TableRow key={stat.tag_name} hover>
                             <TableCell>
                               <Box display="flex" alignItems="center" gap={1}>

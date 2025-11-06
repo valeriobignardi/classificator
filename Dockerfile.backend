@@ -66,8 +66,9 @@ RUN mkdir -p \
     /app/.cache/torch \
     /app/.cache/cuml \
     /app/.cache/numba \
-    /app/.cache/cupy && \
-    chown -R appuser:appuser /app
+    /app/.cache/cupy \
+    /data/training && \
+    chown -R appuser:appuser /app /data || true
 
 # Esponi porta del server Flask
 EXPOSE 5000

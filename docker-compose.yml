@@ -29,6 +29,8 @@ services:
       TZ: ${TZ:-Europe/Rome}
       FLASK_ENV: production
       FLASK_DEBUG: "0"
+      # Directory per file di training (JSONL) – deve essere /data/training
+      TRAINING_DATA_DIR: /data/training
       MONGODB_URL: mongodb://localhost:27017/classificazioni
       MYSQL_HOST: localhost
       MYSQL_PORT: 3306
@@ -42,7 +44,7 @@ services:
       PRELOAD_MODELS: "false"
     volumes:
       - semantic-cache:/app/semantic_cache
-      - training-logs:/app/training_logs
+      - /data/training:/data/training
       - ./config.yaml:/app/config.yaml
       - ./debug_logs:/app/debug_logs
     deploy:

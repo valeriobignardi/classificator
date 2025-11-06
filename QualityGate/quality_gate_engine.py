@@ -109,9 +109,23 @@ class QualityGateEngine:
         if training_log_path is None:
             try:
                 project_root = os.path.join(os.path.dirname(__file__), '..')
-                canonical_dir = os.path.abspath(os.path.join(project_root, 'data', 'training'))
+                # Consenti override via env var
+                env_dir = os.getenv('TRAINING_DATA_DIR') or os.getenv('TRAINING_LOG_DIR')
+                default_dir = os.path.abspath(os.path.join(project_root, 'data', 'training'))
+                canonical_dir = os.path.abspath(env_dir) if env_dir else default_dir
+                # Tenta creazione directory
                 os.makedirs(canonical_dir, exist_ok=True)
-                self.training_log_path = os.path.join(canonical_dir, f"training_decisions_{tenant.tenant_id}.jsonl")
+                candidate_path = os.path.join(canonical_dir, f"training_decisions_{tenant.tenant_id}.jsonl")
+                # Verifica scrivibilità: prova a toccare il file (append + close)
+                try:
+                    with open(candidate_path, 'a', encoding='utf-8') as _f:
+                        pass
+                    self.training_log_path = candidate_path
+                except Exception:
+                    # Fallback su /tmp se non scrivibile
+                    tmp_dir = os.path.abspath(os.path.join('/tmp', 'classificatore', 'training'))
+                    os.makedirs(tmp_dir, exist_ok=True)
+                    self.training_log_path = os.path.join(tmp_dir, f"training_decisions_{tenant.tenant_id}.jsonl")
             except Exception:
                 # Fallback in caso di problemi nel calcolo del path
                 self.training_log_path = f"training_decisions_{tenant.tenant_id}.jsonl"
@@ -661,6 +675,51 @@ class QualityGateEngine:
         # Log in JSON per training futuro
         with open(self.training_log_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(decision_log, ensure_ascii=False) + '\n')
+
+        # 🆕 Aggiorna il file di training ML con la correzione umana (sostituisce la label LLM)
+        try:
+            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+            training_dir = os.path.join(project_root, 'training_files')
+            tenant_slug = getattr(self.tenant, 'tenant_slug', self.tenant_name)
+            if os.path.isdir(training_dir) and tenant_slug:
+                import glob as _glob
+                pattern = os.path.join(training_dir, f"ml_training_{tenant_slug}_*.json")
+                files = _glob.glob(pattern)
+                if files:
+                    latest_training_file = max(files, key=os.path.getmtime)
+                    try:
+                        with open(latest_training_file, 'r', encoding='utf-8') as _f:
+                            _data = json.load(_f)
+                        _records = _data.get('training_records', [])
+                        _updated = False
+                        _now = datetime.now().isoformat()
+                        for _rec in _records:
+                            if _rec.get('session_id') == true_session_id:
+                                _rec['human_corrected_label'] = human_decision
+                                _rec['human_reviewed'] = True
+                                _rec['needs_review'] = False
+                                _rec['last_updated'] = _now
+                                _updated = True
+                                break
+                        if _updated:
+                            _meta = _data.get('metadata', {})
+                            _meta['last_human_update'] = _now
+                            _data['metadata'] = _meta
+                            with open(latest_training_file, 'w', encoding='utf-8') as _f:
+                                json.dump(_data, _f, indent=2, ensure_ascii=False)
+                            self.logger.info(
+                                f"✅ Training file aggiornato con correzione per {true_session_id}: {latest_training_file}"
+                            )
+                        else:
+                            self.logger.info(
+                                f"ℹ️ Sessione {true_session_id} non presente in {latest_training_file} (nessun update)"
+                            )
+                    except Exception as _upd_e:
+                        self.logger.warning(
+                            f"⚠️ Impossibile aggiornare training file {latest_training_file}: {_upd_e}"
+                        )
+        except Exception as _outer_upd_e:
+            self.logger.debug(f"Update training file skipped: {_outer_upd_e}")
         
         # Aggiorna cache dei tag umani
         self._update_human_tags_cache(human_decision)

@@ -666,7 +666,10 @@ class ClassificationService:
                 print(f"🔧 Inizializzazione QualityGateEngine per tenant: {tenant.tenant_name} (con lock)")
                 
                 # Forza path canonico: data/training/training_decisions_{tenant_id}.jsonl
-                canonical_dir = os.path.join(os.path.dirname(__file__), 'data', 'training')
+                # Usa env var se disponibile, altrimenti directory di default; fallback /tmp
+                env_dir = os.getenv('TRAINING_DATA_DIR') or os.getenv('TRAINING_LOG_DIR')
+                default_dir = os.path.join(os.path.dirname(__file__), 'data', 'training')
+                canonical_dir = os.path.abspath(env_dir) if env_dir else default_dir
                 try:
                     os.makedirs(canonical_dir, exist_ok=True)
                 except Exception:
@@ -1739,6 +1742,24 @@ def supervised_training(client_name: str):
             clear_mongo = True
             print("🔧 Force review attivo: abilito automaticamente clear_mongo")
         
+        # 📁 Assicura cartella e file JSONL canonici per training decisions (anche con 0 review)
+        try:
+            from Utils.tenant import Tenant as _TenantForPath
+            # Risolvi sempre oggetto Tenant per costruire il path canonico
+            _tenant_for_path = _TenantForPath.from_slug(client_name) if (len(client_name) != 36 or '-' not in client_name) else _TenantForPath.from_uuid(client_name)
+            env_dir = os.getenv('TRAINING_DATA_DIR') or os.getenv('TRAINING_LOG_DIR')
+            default_dir = os.path.join(os.path.dirname(__file__), 'data', 'training')
+            canonical_dir = os.path.abspath(env_dir) if env_dir else os.path.abspath(default_dir)
+            os.makedirs(canonical_dir, exist_ok=True)
+            training_log_path = os.path.join(canonical_dir, f"training_decisions_{_tenant_for_path.tenant_id}.jsonl")
+            # "Touch" del file per garantirne l'esistenza anche se non ci sono decisioni
+            if not os.path.exists(training_log_path):
+                with open(training_log_path, 'a', encoding='utf-8'):
+                    pass
+            print(f"📄 Path training decisions pronto: {training_log_path}")
+        except Exception as _path_e:
+            print(f"⚠️ Impossibile preparare cartella/file training decisions: {_path_e}")
+
         # 🆕 CARICA SOLO LE SOGLIE REVIEW QUEUE DAL DATABASE TAG.soglie
         # I parametri di clustering saranno caricati dalla pipeline tramite get_all_clustering_parameters_for_tenant()
         try:
@@ -1858,6 +1879,24 @@ def supervised_training(client_name: str):
             except Exception as clear_err:
                 print(f"⚠️ Errore CLEAR MONGO: {clear_err}")
 
+        # 🧹 Se l'utente ha selezionato FORCE REVIEW, rimuovi anche il JSONL del tenant
+        jsonl_removed = False
+        jsonl_path = None
+        if force_review:
+            try:
+                env_dir = os.getenv('TRAINING_DATA_DIR') or os.getenv('TRAINING_LOG_DIR')
+                default_dir = os.path.join(os.path.dirname(__file__), 'data', 'training')
+                canonical_dir = os.path.abspath(env_dir) if env_dir else os.path.abspath(default_dir)
+                jsonl_path = os.path.join(canonical_dir, f"training_decisions_{pipeline.tenant.tenant_id}.jsonl")
+                if os.path.exists(jsonl_path):
+                    os.remove(jsonl_path)
+                    jsonl_removed = True
+                    print(f"🧹 FORCE REVIEW: rimosso file JSONL del tenant: {jsonl_path}")
+                else:
+                    print(f"ℹ️ FORCE REVIEW: nessun file JSONL da rimuovere in {jsonl_path}")
+            except Exception as jsonl_err:
+                print(f"⚠️ Errore rimozione JSONL training decisions: {jsonl_err}")
+
         if force_retrain_ml:
             try:
                 training_files_removed = pipeline.cleanup_training_files(keep_latest=False)
@@ -1896,6 +1935,8 @@ def supervised_training(client_name: str):
             'clear_mongo': clear_mongo,
             'force_retrain_ml': force_retrain_ml,
             'mongo_clear_stats': mongo_clear_stats if mongo_clear_stats else None,
+            'jsonl_removed': jsonl_removed,
+            'jsonl_path': jsonl_path,
             'training_files_removed': training_files_removed
         }
         
@@ -2827,7 +2868,10 @@ def list_training_files(tenant_id: str):
             return jsonify({'success': False, 'error': f'Tenant non trovato per UUID: {tenant_id}'}), 404
 
         project_root = os.path.dirname(__file__)
-        canonical_path = os.path.join(project_root, 'data', 'training', f'training_decisions_{tenant.tenant_id}.jsonl')
+        env_dir = os.getenv('TRAINING_DATA_DIR') or os.getenv('TRAINING_LOG_DIR')
+        default_dir = os.path.join(project_root, 'data', 'training')
+        canonical_dir = os.path.abspath(env_dir) if env_dir else default_dir
+        canonical_path = os.path.join(canonical_dir, f'training_decisions_{tenant.tenant_id}.jsonl')
 
         candidates = []
         # Aggiungi sempre l’entry canonica se esiste
@@ -2839,6 +2883,10 @@ def list_training_files(tenant_id: str):
         for path in glob.glob(os.path.join(project_root, 'training_decisions_*.jsonl')):
             legacy_found.add(path)
         for path in glob.glob(os.path.join(project_root, 'backup', 'training_decisions_*.jsonl')):
+            legacy_found.add(path)
+        # Anche eventuale fallback /tmp
+        tmp_dir = os.path.join('/tmp', 'classificatore', 'training')
+        for path in glob.glob(os.path.join(tmp_dir, 'training_decisions_*.jsonl')):
             legacy_found.add(path)
 
         # Seleziona solo quelli che sembrano legati al tenant (tenant slug o name oppure uuid)
@@ -2905,7 +2953,10 @@ def get_training_file_content(tenant_id: str):
         # Costruisci lista consentita: canonico + legacy correlati
         project_root = os.path.dirname(__file__)
         allowed_paths = {}
-        canonical_path = os.path.join(project_root, 'data', 'training', f'training_decisions_{tenant.tenant_id}.jsonl')
+        env_dir = os.getenv('TRAINING_DATA_DIR') or os.getenv('TRAINING_LOG_DIR')
+        default_dir = os.path.join(project_root, 'data', 'training')
+        canonical_dir = os.path.abspath(env_dir) if env_dir else default_dir
+        canonical_path = os.path.join(canonical_dir, f'training_decisions_{tenant.tenant_id}.jsonl')
         if os.path.exists(canonical_path):
             allowed_paths[os.path.basename(canonical_path)] = canonical_path
 
@@ -2913,6 +2964,9 @@ def get_training_file_content(tenant_id: str):
         for path in glob.glob(os.path.join(project_root, 'training_decisions_*.jsonl')):
             legacy_found.add(path)
         for path in glob.glob(os.path.join(project_root, 'backup', 'training_decisions_*.jsonl')):
+            legacy_found.add(path)
+        tmp_dir = os.path.join('/tmp', 'classificatore', 'training')
+        for path in glob.glob(os.path.join(tmp_dir, 'training_decisions_*.jsonl')):
             legacy_found.add(path)
         lower_slug = (tenant.tenant_slug or '').lower()
         lower_name = (tenant.tenant_name or '').lower()

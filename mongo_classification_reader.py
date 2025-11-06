@@ -1465,24 +1465,42 @@ class MongoClassificationReader:
                     doc["embedding_model"] = "unknown"
                     print(f"⚠️ [EMBEDDING] Modello non specificato, usato 'unknown'")
             
-            # Aggiunge risultati ML se forniti
+            # Helper normalizzazione etichette (uppercase + underscore, rimuove speciali)
+            def _normalize_label_local(label_value: Any) -> str:
+                try:
+                    label_str = str(label_value or "").strip()
+                except Exception:
+                    label_str = ""
+                if not label_str:
+                    return ""
+                import re as _re
+                label_str = label_str.replace('\\', ' ')
+                label_str = _re.sub(r'[\"\']', '', label_str)
+                label_str = _re.sub(r'[^A-Za-z0-9_\s]', '_', label_str)
+                label_str = _re.sub(r'\s+', '_', label_str)
+                label_str = _re.sub(r'_+', '_', label_str).strip('_')
+                return label_str.upper()
+
+            # Aggiunge risultati ML se forniti (normalizzati)
             if ml_result and ml_result.get("predicted_label"):
-                doc["ml_prediction"] = ml_result.get("predicted_label", "")
+                _ml_label = _normalize_label_local(ml_result.get("predicted_label", ""))
+                doc["ml_prediction"] = _ml_label
                 doc["ml_confidence"] = float(ml_result.get("confidence", 0.0))
                 # NUOVO: Aggiungi campi separati per tracciabilità
-                doc["classification_ML"] = ml_result.get("predicted_label", "")
+                doc["classification_ML"] = _ml_label
                 doc["precision_ML"] = float(ml_result.get("confidence", 0.0))
             else:
                 # 🚨 FIX: Anche quando ML non disponibile, salva campi vuoti per coerenza UI
                 doc["ml_prediction"] = ""
                 doc["ml_confidence"] = 0.0
             
-            # Aggiunge risultati LLM se forniti
+            # Aggiunge risultati LLM se forniti (normalizzati)
             if llm_result and llm_result.get("predicted_label"):
-                doc["llm_prediction"] = llm_result.get("predicted_label", "")
+                _llm_label = _normalize_label_local(llm_result.get("predicted_label", ""))
+                doc["llm_prediction"] = _llm_label
                 doc["llm_confidence"] = float(llm_result.get("confidence", 0.0))
                 # NUOVO: Aggiungi campi separati per tracciabilità
-                doc["classification_LLM"] = llm_result.get("predicted_label", "")
+                doc["classification_LLM"] = _llm_label
                 doc["precision_LLM"] = float(llm_result.get("confidence", 0.0))
                 if "reasoning" in llm_result:
                     doc["llm_reasoning"] = llm_result["reasoning"]
@@ -1493,8 +1511,8 @@ class MongoClassificationReader:
             
             # 🆕 CALCOLA E SALVA DISAGREEMENT METRICS
             if ml_result and llm_result:
-                ml_label = ml_result.get("predicted_label", "")
-                llm_label = llm_result.get("predicted_label", "")
+                ml_label = _normalize_label_local(ml_result.get("predicted_label", ""))
+                llm_label = _normalize_label_local(llm_result.get("predicted_label", ""))
                 ml_conf = float(ml_result.get("confidence", 0.0))
                 llm_conf = float(llm_result.get("confidence", 0.0))
                 
@@ -1523,8 +1541,9 @@ class MongoClassificationReader:
             
             # Aggiunge decisione finale
             if final_decision:
-                doc["classification"] = final_decision.get("predicted_label", "")
-                doc["predicted_label"] = final_decision.get("predicted_label", "")  # 🔧 FIX: Campo per interfaccia
+                _final_label = _normalize_label_local(final_decision.get("predicted_label", ""))
+                doc["classification"] = _final_label
+                doc["predicted_label"] = _final_label  # 🔧 FIX: Campo per interfaccia
                 doc["confidence"] = float(final_decision.get("confidence", 0.0))
                 doc["classification_method"] = final_decision.get("method", "unknown")
                 if "reasoning" in final_decision:
@@ -1533,11 +1552,11 @@ class MongoClassificationReader:
                 # 🚨 FIX CRITICO: Estrai anche ml_prediction e llm_prediction da final_decision
                 # Questo serve per i documenti propagati che non hanno ml_result/llm_result separati
                 if "ml_prediction" in final_decision and not ml_result:
-                    doc["ml_prediction"] = final_decision.get("ml_prediction", "")
+                    doc["ml_prediction"] = _normalize_label_local(final_decision.get("ml_prediction", ""))
                     doc["ml_confidence"] = float(final_decision.get("ml_confidence", 0.0)) if final_decision.get("ml_confidence") is not None else 0.0
                 
                 if "llm_prediction" in final_decision and not llm_result:
-                    doc["llm_prediction"] = final_decision.get("llm_prediction", "")
+                    doc["llm_prediction"] = _normalize_label_local(final_decision.get("llm_prediction", ""))
                     doc["llm_confidence"] = float(final_decision.get("llm_confidence", 0.0)) if final_decision.get("llm_confidence") is not None else 0.0
             
             # Determina review status

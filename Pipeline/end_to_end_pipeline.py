@@ -25,6 +25,7 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Semant
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'LLMClassifier'))
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'HumanReview'))
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'LabelDeduplication'))
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Database'))
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Models'))
 
@@ -2535,7 +2536,7 @@ class EndToEndPipeline:
         stats['saved_count'] = saved_count
         
         print(f"   ✅ Documenti salvati: {saved_count}")
-        
+
         # 3. FASE: Statistiche finali
         print(f"\n [COMPLETATO] Pipeline unificato completato:")
         print(f"   📁 Documenti totali: {stats['total_documents']}")
@@ -2576,7 +2577,23 @@ class EndToEndPipeline:
         except Exception as auto_fix_error:
             print(f"⚠️ [ENSEMBLE AUTO-FIX] Errore durante il tentativo di riaddestramento automatico: {auto_fix_error}")
             self.ensemble_classifier.reset_feature_mismatch_flag()
-        
+
+        # 4. FASE: Sync su MySQL remoto per tenant (conversations_tags, ai_session_tags)
+        try:
+            from Database.remote_tag_sync import RemoteTagSyncService
+            sync_service = RemoteTagSyncService()
+            sync_result = sync_service.sync_session_tags(self.tenant, documenti)
+            if sync_result.get('success'):
+                print(
+                    f"✅ [REMOTE TAG SYNC] Sincronizzati tag: "
+                    f"tags ins={sync_result.get('tag_inserts', 0)}, upd={sync_result.get('tag_updates', 0)}; "
+                    f"sessioni ins={sync_result.get('session_inserts', 0)}, upd={sync_result.get('session_updates', 0)}"
+                )
+            else:
+                print(f"⚠️ [REMOTE TAG SYNC] Errore sincronizzazione: {sync_result.get('error')}")
+        except Exception as sync_error:
+            print(f"⚠️ [REMOTE TAG SYNC] Errore inizializzazione: {sync_error}")
+
         trace_all("classifica_e_salva_documenti_unified", "EXIT", return_value=stats)
         return stats
     
@@ -3592,6 +3609,44 @@ class EndToEndPipeline:
             print(f"⚠️ Errore nella visualizzazione statistiche avanzate: {e}")
             import traceback
             traceback.print_exc()
+
+        # 🔄 Sync remoto MySQL anche per il percorso legacy di classificazione completa
+        try:
+            from Database.remote_tag_sync import RemoteTagSyncService
+            sync_service = RemoteTagSyncService()
+            # Ricostruisci lista documenti minimi per sync a partire da predictions/session_ids
+            # In questo percorso, abbiamo 'predictions' e 'session_ids' locali, ma non oggetti DocumentoProcessing.
+            # Creiamo adapter con gli attributi necessari.
+            class _DocAdapter:
+                def __init__(self, session_id, pred):
+                    self.session_id = session_id
+                    self.predicted_label = pred.get('predicted_label') if isinstance(pred, dict) else None
+                    self.propagated_label = pred.get('propagated_label') if isinstance(pred, dict) else None
+                    self.llm_prediction = pred.get('llm_prediction') if isinstance(pred, dict) else None
+                    self.ml_prediction = pred.get('ml_prediction') if isinstance(pred, dict) else None
+                    self.confidence = pred.get('confidence') if isinstance(pred, dict) else None
+                    self.classification_method = pred.get('method') if isinstance(pred, dict) else None
+                    self.classified_by = 'post_training_pipeline'
+
+            _docs = []
+            try:
+                for sid in session_ids:
+                    pred = predictions.get(sid, {}) if isinstance(predictions, dict) else {}
+                    _docs.append(_DocAdapter(sid, pred))
+            except Exception:
+                _docs = []
+
+            if _docs:
+                sync_result = sync_service.sync_session_tags(self.tenant, _docs)
+                if sync_result.get('success'):
+                    print(
+                        f"✅ [REMOTE TAG SYNC] (legacy) tags ins={sync_result.get('tag_inserts', 0)}, upd={sync_result.get('tag_updates', 0)}; "
+                        f"sessioni ins={sync_result.get('session_inserts', 0)}, upd={sync_result.get('session_updates', 0)}"
+                    )
+                else:
+                    print(f"⚠️ [REMOTE TAG SYNC] (legacy) Errore sincronizzazione: {sync_result.get('error')}")
+        except Exception as sync_error:
+            print(f"⚠️ [REMOTE TAG SYNC] (legacy) Errore inizializzazione: {sync_error}")
         
         trace_all("classifica_e_salva_sessioni", "EXIT", return_value=stats)
         return stats
@@ -7374,10 +7429,12 @@ class EndToEndPipeline:
             # Estrai records di training
             training_records = training_file_data.get('training_records', [])
             
-            # Filtra solo records pronti per training (con correzioni umane o conferme)
+            # Regola attesa: usa TUTTI i casi LLM come base training,
+            # sostituiti dalla decisione umana quando presente
             ready_for_training = []
             human_corrected = 0
             llm_confirmed = 0
+            llm_default = 0
             
             for record in training_records:
                 # Record è pronto se ha correzione umana O è stato confermato nella review
@@ -7408,11 +7465,27 @@ class EndToEndPipeline:
                     }
                     ready_for_training.append(training_record)
                     llm_confirmed += 1
+                else:
+                    # Fallback: usa la predizione LLM/ensemble come etichetta di training
+                    # anche se non è stata revisionata. Verrà sovrascritta da correzioni umane future.
+                    if record.get('predicted_label') and record.get('conversation_text'):
+                        training_record = {
+                            'session_id': record['session_id'],
+                            'conversation_text': record['conversation_text'],
+                            'predicted_label': record['predicted_label'],
+                            'confidence': float(record.get('confidence', 0.6)),  # confidenza base
+                            'cluster_id': record.get('cluster_id', -1),
+                            'is_representative': record.get('is_representative', False),
+                            'source': 'llm_predicted'
+                        }
+                        ready_for_training.append(training_record)
+                        llm_default += 1
             
             print(f"   ✅ File caricato: {len(training_records)} records totali")
             print(f"   📊 Pronti per training: {len(ready_for_training)}")
             print(f"   🔧 Corretti dall'umano: {human_corrected}")
             print(f"   ✅ Confermati LLM: {llm_confirmed}")
+            print(f"   🤖 LLM default (non revisionati): {llm_default}")
             
             # Salva path del file per riferimenti futuri
             self._last_training_file_path = training_file_path

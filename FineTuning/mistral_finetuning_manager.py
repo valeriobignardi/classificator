@@ -1345,10 +1345,19 @@ ETICHETTE PRINCIPALI (da esempi cliente):"""
         """
         try:
             self.logger.info(f"🔄 Sincronizzazione training decisions per {client_name}")
-            
+
+            # Prepara SEMPRE la directory e il path canonico, anche se non ci sono risultati
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            canonical_dir = os.path.join(project_root, 'data', 'training')
+            try:
+                os.makedirs(canonical_dir, exist_ok=True)
+            except Exception as _mk_e:
+                self.logger.warning(f"⚠️ Impossibile creare directory canonica {canonical_dir}: {_mk_e}")
+            training_decisions_path = os.path.join(canonical_dir, f"training_decisions_{self.tenant.tenant_id}.jsonl")
+
             # Connetti al database TAG
             self.tag_db.connetti()
-            
+
             # Query per ottenere tutte le classificazioni umane validate per il cliente
             query = """
             SELECT 
@@ -1368,18 +1377,19 @@ ETICHETTE PRINCIPALI (da esempi cliente):"""
             result = self.tag_db.esegui_query(query, (client_name,))
             
             if not result:
-                self.logger.warning(f"⚠️ Nessuna classificazione umana trovata per {client_name}")
+                # Nessun risultato: assicura che il file esista comunque per i flussi ML
+                try:
+                    with open(training_decisions_path, 'a', encoding='utf-8'):
+                        pass
+                    self.logger.info(f"📄 Nessuna decisione trovata. File vuoto pronto: {training_decisions_path}")
+                except Exception as _touch_e:
+                    self.logger.warning(f"⚠️ Impossibile creare/toccare file training decisions: {_touch_e}")
                 self.tag_db.disconnetti()
                 return False
             
             self.logger.info(f"📊 Trovate {len(result)} classificazioni umane nel database")
             
-            # Costruisci path del file JSONL (CANONICO)
-            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            canonical_dir = os.path.join(project_root, 'data', 'training')
-            os.makedirs(canonical_dir, exist_ok=True)
-            training_decisions_path = os.path.join(canonical_dir, f"training_decisions_{self.tenant.tenant_id}.jsonl")
-            
+            # Costruisci path del file JSONL (CANONICO) - già preparato sopra
             # Leggi decisioni esistenti se non si deve sovrascrivere
             existing_decisions = {}
             if not overwrite_existing and os.path.exists(training_decisions_path):

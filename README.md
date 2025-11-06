@@ -1,169 +1,162 @@
-# Sistema di Classificazione Conversazioni Multi-Tenant
+# Sistema di Classificazione Conversazioni Multi‑Tenant
 
-## Panoramica Generale
+Piattaforma completa per classificare conversazioni testuali in contesti multi‑tenant, con Review Umana, riaddestramento ML, configurazione LLM per tenant, clustering e statistiche.
 
-Questo progetto è un sistema avanzato per la classificazione automatica di conversazioni testuali (come chat, email o ticket di supporto). È progettato per essere **multi-tenant**, il che significa che può gestire più clienti contemporaneamente, mantenendo i loro dati, modelli e configurazioni completamente isolati.
+Indice rapido
+- Panoramica
+- Funzionalità Chiave
+- Guida Operativa (UI)
+- API Principali (Quick‑ref)
+- Persistenza e Path
+- Architettura (sintesi)
+- Setup e Avvio
+- Note Operative
 
-L'obiettivo principale è analizzare grandi volumi di conversazioni per:
-1.  **Classificare** ogni conversazione assegnandole un'etichetta (o "tag") da un set predefinito (es. "Supporto Tecnico", "Informazioni Commerciali").
-2.  **Scoprire** nuove categorie o argomenti emergenti in modo non supervisionato attraverso il clustering.
-3.  **Fornire** insight operativi e strategici sui contenuti delle interazioni con i clienti.
+## Panoramica
 
-Il sistema è costruito per essere robusto, scalabile ed efficiente, sfruttando tecniche di Machine Learning, Deep Learning (LLM) e accelerazione hardware (GPU).
-
----
-
-## Architettura
-
-Il sistema è composto da diversi moduli specializzati che collaborano per orchestrare i flussi di lavoro di analisi.
-
-![Diagramma Architettura (placeholder)](https://via.placeholder.com/800x400.png?text=Diagramma+Architettura)
-
-### Componenti Chiave
-
--   **API Server (`server.py`)**:
-    -   Basato su **Flask**, espone le funzionalità del sistema tramite un'interfaccia RESTful.
-    -   Gestisce le richieste in entrata, orchestra le pipeline per i diversi tenant e restituisce i risultati.
-
--   **Orchestratore (`Pipeline/end_to_end_pipeline.py`)**:
-    -   È il cuore del sistema, la classe `EndToEndPipeline` gestisce l'intero processo, dall'estrazione dei dati al salvataggio dei risultati.
-    -   Coordina il lavoro di tutti gli altri componenti (embedding, clustering, classificazione).
-
--   **Classificatore Ensemble (`Classification/advanced_ensemble_classifier.py`)**:
-    -   Un sofisticato classificatore ibrido che combina:
-        -   **Modelli ML Tradizionali**: Un `VotingClassifier` che include RandomForest, SVM e Logistic Regression per riconoscere pattern statistici.
-        -   **Large Language Model (LLM)**: Un modello linguistico (es. Mistral) per una profonda comprensione semantica del testo.
-    -   Utilizza una strategia di "voting" intelligente per combinare le predizioni, risolvendo i disaccordi e sfruttando i punti di forza di entrambi gli approcci.
-
--   **Motore di Clustering (`Clustering/hdbscan_clusterer.py`)**:
-    -   Utilizza l'algoritmo **HDBSCAN** per raggruppare conversazioni simili in cluster, senza bisogno di etichette predefinite.
-    -   **Supporto GPU**: Sfrutta `cuML` per eseguire il clustering su GPU, ottenendo un'accelerazione drastica (fino a 10-20x più veloce della CPU).
-    -   **Clustering Incrementale**: Supporta la persistenza del modello, permettendo di classificare nuovi dati in cluster esistenti senza dover rieseguire l'analisi completa.
-
--   **Topic Modeling (`TopicModeling/bertopic_feature_provider.py`)**:
-    -   Usa **BERTopic** per analizzare il corpus e identificare i topic principali.
-    -   Le informazioni sui topic vengono usate come *feature aggiuntive* per arricchire i dati di training del classificatore ML, migliorandone l'accuratezza.
-
--   **Embedding Engine (`EmbeddingEngine/`)**:
-    -   **Architettura Modulare**: Basato su un'interfaccia astratta (`base_embedder.py`), permette di integrare facilmente diversi modelli di embedding (es. LaBSE, OpenAI, BGE).
-    -   **Implementazione Principale**: Utilizza **LaBSE** (`labse_embedder.py`), un modello di sentence-transformer agnostico rispetto alla lingua, ideale per contesti multilingue.
-    -   **Gestione Robusta (`simple_embedding_manager.py`)**: Un manager singleton gestisce il ciclo di vita degli embedder. Per garantire l'isolamento tra tenant e prevenire conflitti di memoria (specialmente su GPU), il manager mantiene un solo modello attivo alla volta. Quando la configurazione cambia, esegue un "reset atomico", distruggendo l'istanza corrente e creandone una nuova, garantendo così uno stato sempre pulito.
-    -   Responsabile della conversione del testo in vettori numerici (embeddings) di alta qualità.
-
--   **Storage**:
-    -   **MySQL (Database Sorgente)**: Il sistema si connette a un database MySQL remoto per leggere le conversazioni originali da analizzare. Questo è il punto di partenza del flusso di dati.
-    -   **MySQL (Database Locale `TAG`)**: Un database MySQL locale (`TagDatabase/`) funge da cache di configurazione. Contiene le informazioni sui tenant e, soprattutto, l'elenco dei tag di classificazione validi per ciascuno di essi. Questo garantisce che il sistema utilizzi sempre un set di etichette coerente.
-    -   **MongoDB (Database dei Risultati)**: Utilizzato per salvare i risultati dettagliati delle classificazioni e delle analisi (`MongoDB/`). Per ogni conversazione, viene creato un documento JSON che include l'etichetta predetta, la confidenza, l'ID del cluster e il vettore di embedding. Questo approccio sfrutta la flessibilità di MongoDB per dati semi-strutturati e permette un'analisi approfondita dei risultati.
-
----
-
-## Flussi di Lavoro (Workflow)
-
-Il sistema supporta diversi flussi di lavoro, attivabili tramite API.
-
-### 1. Training Supervisionato
-
--   **Endpoint**: `POST /train/<client_name>`
--   **Scopo**: Addestrare i modelli di classificazione su un set di dati etichettato.
--   **Processo**:
-    1.  **Estrazione Dati**: Le conversazioni e le relative etichette vengono lette dal database MySQL.
-    2.  **Preprocessing**: Il testo viene pulito e preparato per l'analisi.
-    3.  **Embedding**: Le conversazioni vengono trasformate in vettori numerici tramite l'Embedding Engine.
-    4.  **Feature Enhancement**: Il modello BERTopic viene addestrato sul corpus per estrarre feature relative ai topic.
-    5.  **Training del Classificatore**: L'`AdvancedEnsembleClassifier` viene addestrato utilizzando gli embedding e le feature di topic.
-    6.  **Salvataggio Modelli**: I modelli addestrati (classificatore, BERTopic, etc.) vengono salvati su disco per un uso futuro.
-
-### 2. Classificazione Completa (con Re-Clustering)
-
--   **Endpoint**: `POST /classify/all/<client_name>?force_reprocess=true`
--   **Scopo**: Analizzare l'intero set di dati di un cliente, rieseguendo il clustering per scoprire nuove categorie.
--   **Processo**:
-    1.  **Caricamento Modelli**: Vengono caricati i modelli di classificazione precedentemente addestrati.
-    2.  **Estrazione Dati**: Tutte le conversazioni del cliente vengono estratte.
-    3.  **Embedding**: Tutte le conversazioni vengono vettorizzate.
-    4.  **Clustering Completo**: `HDBSCANClusterer` viene eseguito sull'intero set di embedding. Questo processo (potenzialmente lungo ma accelerato da GPU) identifica cluster di conversazioni simili. Viene salvato un nuovo modello di clustering.
-    5.  **Classificazione**: L'`AdvancedEnsembleClassifier` predice l'etichetta per ogni conversazione.
-    6.  **Salvataggio Risultati**: I risultati (etichetta predetta, cluster, confidenza, etc.) vengono salvati in MongoDB.
-
-### 3. Classificazione Incrementale (Veloce)
-
--   **Endpoint**: `POST /classify/new/<client_name>`
--   **Scopo**: Analizzare solo le nuove conversazioni in modo rapido ed efficiente.
--   **Processo**:
-    1.  **Caricamento Modelli**: Vengono caricati sia i modelli di classificazione sia il **modello di clustering** salvato durante l'ultima esecuzione completa.
-    2.  **Estrazione Dati**: Vengono estratte solo le conversazioni nuove (non ancora analizzate).
-    3.  **Embedding**: Solo le nuove conversazioni vengono vettorizzate.
-    4.  **Clustering Incrementale**: Invece di rieseguire il clustering, il modello HDBSCAN caricato viene usato per **predire** a quale cluster esistente appartengono le nuove conversazioni (`predict_new_points`). Questo passo è estremamente veloce.
-    5.  **Classificazione**: L'ensemble classifier assegna un'etichetta a ogni nuova conversazione.
-    6.  **Salvataggio Risultati**: I risultati vengono aggiunti in MongoDB.
-
----
+Obiettivi principali:
+- Classificare conversazioni assegnando etichette da un set tenant‑specific.
+- Selezionare automaticamente i casi “difficili” per Review Umana (disagreement, bassa confidenza, novità).
+- Riaddestrare periodicamente il modello ML usando le decisioni umane + classificazioni LLM filtrate.
+- Analizzare i dati con clustering/visualizzazioni e, se necessario, fine‑tuning del modello LLM.
 
 ## Funzionalità Chiave
 
--   **Multi-tenancy**: Pieno supporto per gestire più clienti in modo isolato e sicuro.
--   **Classificazione Ibrida**: Combina la velocità e la capacità di generalizzazione dei modelli ML con la profonda comprensione contestuale degli LLM.
--   **Accelerazione GPU**: Utilizzo di `cuML` per il clustering HDBSCAN, che riduce i tempi di elaborazione da ore a minuti su grandi dataset.
--   **Efficienza Incrementale**: La capacità di processare nuovi dati senza rielaborare l'intero storico permette un'analisi quasi in tempo reale.
--   **Configurabilità Estrema**: La maggior parte dei parametri (soglie di confidenza, parametri di clustering, etc.) è definita nel file `config.yaml` e può essere modificata dinamicamente.
--   **Human-in-the-loop**: Il sistema è predisposto per l'integrazione con un'interfaccia di revisione umana (`human-review-ui/`), essenziale per il controllo qualità, la correzione degli errori e il riaddestramento continuo dei modelli.
+- Review Umana e Training Supervisionato
+  - Selezione casi attraverso Quality Gate (ensemble disagreement, soglie di confidenza, novelty)
+  - Risoluzione caso con propagazione ai membri del cluster (se rappresentante)
+  - Tracciamento decisioni in file JSONL per riaddestramento ML
+- Riaddestramento Modello ML
+  - Automatico (threshold decisioni) o manuale via API/UI
+  - Dataset combinato: review umane + classificazioni LLM (filtrate, senza propagati, con testo completo)
+- Classifica Tutto / Batch
+  - Pipeline end‑to‑end con opzioni force (reprocess totale, force_review, clean training ML)
+- Configurazione Parametri
+  - Soglie Review Queue (DB `TAG.soglie`), parametri clustering (UMAP/HDBSCAN), batch
+- Configurazione Avanzata LLM per Tenant
+  - Scelta modello (Ollama/OpenAI), parametri tokenization/generation
+  - Validazione e clamp automatico ai limiti del modello (input/output tokens)
+  - Reset parametri (DB‑first, nessuna scrittura su file)
+- Statistiche e Visualizzazioni
+  - Panoramica review/classificazioni, distribuzione etichette, visualizzazioni 2D/3D clustering
+- Fine‑Tuning
+  - Gestore Mistral tenant‑aware per generazione dataset + addestramento modelli personalizzati
 
----
+## Guida Operativa (UI)
 
-## Guida Rapida
+### 1) Selezione Tenant
+- Barra laterale → elenco tenant da `/api/tenants` (UUID/Slug/Name).
+- Tutte le sezioni operano sul tenant attivo.
 
-### Prerequisiti
+### 2) Dashboard di Review
+- Elenco casi pending (rappresentanti, outlier; propagati opzionali).
+- Dettaglio caso con decisione umana (label, confidenza, note) e tracciamento propagazione.
 
--   Python 3.9+
--   NVIDIA GPU con driver CUDA e cuDF/cuML installati (per il supporto GPU)
--   Accesso a un'istanza MySQL e MongoDB.
+### 3) Training Supervisionato
+- Avvio da UI o `POST /api/train/supervised/<tenant>`.
+- Parametri tipici:
+  - `force_review`: forza la review dei casi; attiva auto‑clear Mongo per evitare somma sessioni.
+  - `force_retrain_ml`: pulizia training ML.
+- La risoluzione dei casi scrive nel JSONL di training del tenant.
 
-### Installazione
+### 4) File Training (nuova sezione UI)
+- Lista per tenant dei file riconosciuti in:
+  - `TRAINING_DATA_DIR` (se impostata) → `data/training` → fallback `/tmp/classificatore/training`.
+- Convenzione nomi: `training_decisions_{tenant_id}.jsonl`.
+- Visualizzazione contenuto con caricamento progressivo.
 
-1.  Clonare il repository:
-    ```bash
-    git clone <repository-url>
-    cd classificatore
-    ```
+### 5) Riaddestramento ML
+- Automatico ogni N decisioni (config qualità) oppure manuale.
+- Primo training: review umane + LLM finali.
+- Riaddestramenti: review umane (opzionale + LLM, secondo config).
+- Validazioni: numero classi >= 2, dataset minimo.
 
-2.  Creare un ambiente virtuale e installare le dipendenze:
-    ```bash
-    python -m venv .venv
-    source .venv/bin/activate
-    pip install -r requirements.txt
-    ```
-    *Nota: per il supporto GPU, potrebbero essere necessarie versioni specifiche di alcune librerie. Fare riferimento a `requirements_bertopic.txt` e alla documentazione di RAPIDS.*
+### 6) Configurazione Parametri
+- Review Queue Thresholds (DB `TAG.soglie`): soglie rappresentanti/outlier/propagazione.
+- Parametri Clustering: UMAP/HDBSCAN con strumenti di test e visualizzazioni.
+- Batch Processing (persistenza `engines.llm_config`): `classification_batch_size`, `max_parallel_calls`.
 
-### Configurazione
+### 7) Configurazione Avanzata LLM
+- Modelli disponibili per tenant: `/api/llm/models/<tenant_id>` (Ollama + OpenAI).
+- Parametri per tenant: `/api/llm/parameters/<tenant_id>` (get/put).
+- Validazione con clamp automatico ai limiti del modello (token input/output).
+- Reset default: `POST /api/llm/reset-parameters/<tenant_id>` → cancella `llm_config` in DB (no file write).
+- Note: GPT‑5 non supporta alcuni parametri generation (ignorati con warning).
 
-1.  Copiare `config.example.yaml` in `config.yaml`.
-2.  Modificare `config.yaml` per inserire:
-    -   Le credenziali di connessione per MySQL e MongoDB.
-    -   I percorsi per il salvataggio dei modelli.
-    -   I parametri per il clustering e la classificazione.
-    -   L'URL dell'endpoint per l'LLM (se si usa un servizio come Ollama).
+### 8) Statistiche
+- Review/Generali: `/api/review/<tenant_id>/stats`.
+- Clustering: `/api/statistics/<tenant>/clustering?include_visualizations=true&sample_limit=5000`.
+- UI: distribuzione etichette, counts, visualizzazioni 2D/3D (PCA, t‑SNE).
 
-### Avvio del Server
+### 9) Fine‑Tuning
+- Gestore Mistral tenant‑aware: dataset da `data/training/training_decisions_{tenant_id}.jsonl` + recupero conversazioni.
+- Supporto naming/registry per modelli e switch in pipeline.
 
-Eseguire il server Flask:
+## API Principali (Quick‑ref)
+
 ```bash
-python server.py
+# Training supervisionato (forza review; auto‑clear Mongo abilitato se force_review=true)
+curl -X POST http://localhost:5000/api/train/supervised/<tenant_slug> \
+  -H "Content-Type: application/json" \
+  -d '{"force_review": true, "force_retrain_ml": false}'
+
+# Classifica tutto con ri‑process da zero
+curl -X POST http://localhost:5000/classify/all/<tenant_slug> \
+  -H "Content-Type: application/json" \
+  -d '{"force_reprocess_all": true}'
+
+# Parametri LLM (get/put) e reset default
+# a) GET  /api/llm/parameters/<tenant_id>
+# b) PUT  /api/llm/parameters/<tenant_id>   # body: { parameters, model_name? }
+# c) POST /api/llm/reset-parameters/<tenant_id>
+
+# Modelli LLM disponibili per tenant
+curl http://localhost:5000/api/llm/models/<tenant_id>
+
+# File di training per tenant
+curl http://localhost:5000/api/training-files/<tenant_id>
 ```
-Il server sarà in ascolto sulla porta specificata nella configurazione (default: 5000).
 
-### Esempi di Chiamate API
+## Persistenza e Path
 
--   **Addestrare i modelli per il cliente "humanitas"**:
-    ```bash
-    curl -X POST http://localhost:5000/train/humanitas
-    ```
+- JSONL training decisions (per tenant):
+  - `TRAINING_DATA_DIR` (env consigliata) → `data/training` → fallback `/tmp/classificatore/training`.
+  - Nome: `training_decisions_{tenant_id}.jsonl`.
+- Modelli ML + Fine‑tuned: directory tenant‑aware (gestore interno).
+- MongoDB: un’unica collection per tenant: `{tenant_slug}_{tenant_id}`.
 
--   **Eseguire una classificazione completa per "humanitas"**:
-    ```bash
-    curl -X POST "http://localhost:5000/classify/all/humanitas?force_reprocess=true"
-    ```
+## Architettura (sintesi)
 
--   **Classificare solo le nuove conversazioni per "humanitas"**:
-    ```bash
-    curl -X POST http://localhost:5000/classify/new/humanitas
-    ```
+- API Server (`server.py`): Flask REST, orchestrazione multi‑tenant.
+- Pipeline (`Pipeline/end_to_end_pipeline.py`): flusso end‑to‑end (estrazione → embedding → clustering → classificazione → salvataggio).
+- Ensemble Classifier (`Classification/advanced_ensemble_classifier.py`): ML+LLM con quality gate.
+- Clustering (`Clustering/hdbscan_clusterer.py`): HDBSCAN/UMAP (CPU/GPU), rappresentanti e propagazione.
+- Embedding Engine (`EmbeddingEngine/`): manager modulare (LaBSE, BGE, OpenAI...).
+- Storage:
+  - MySQL (origine + TAG locale per tenants/tags/soglie)
+  - MongoDB (risultati e metadata)
+  - File JSONL (training decisions per tenant)
+
+## Setup e Avvio
+
+1) Requisiti
+- Python 3.11, Docker (consigliato), MySQL, MongoDB, opzionale GPU
+
+2) Configurazione base
+- Copia `config_template.yaml` → `config.yaml` e configura: MySQL, MongoDB, LLM/Embedding, parametri default.
+
+3) Docker Compose (consigliato)
+- Monta una directory host scrivibile su `/data/training` e imposta `TRAINING_DATA_DIR=/data/training` (compose già allineato).
+
+4) Avvio
+```bash
+docker compose build && docker compose up -d
+# Backend health: http://localhost:5000/health
+```
+
+## Note Operative
+
+- Etichette normalizzate in Mongo (MAIUSCOLO + underscore) al salvataggio → elimina duplicati case‑insensitive.
+- Se la directory configurata non è scrivibile, salvataggio training su `/tmp/classificatore/training` (l’UI la legge comunque).
+- Il clamp automatico dei token evita errori quando si cambia modello LLM con limiti diversi.
+

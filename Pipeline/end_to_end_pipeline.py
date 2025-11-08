@@ -2868,6 +2868,38 @@ class EndToEndPipeline:
                     if success:
                         saved_count += 1
                         
+                        # 🆕 CORREZIONE: Salva classificazioni automatiche anche nel file JSONL per training ML
+                        try:
+                            # Crea istanza temporanea del QualityGateEngine per salvare nel JSONL
+                            from QualityGate.quality_gate_engine import QualityGateEngine
+                            
+                            # Determina metodo di classificazione
+                            classification_method = review_info['classified_by']
+                            if 'llm' in classification_method.lower():
+                                classification_method = 'llm_automatic'
+                            elif 'ensemble' in classification_method.lower():
+                                classification_method = 'ensemble_automatic'
+                            else:
+                                classification_method = 'automatic_training'
+                            
+                            # Crea istanza temporanea del quality gate per salvare nel JSONL
+                            temp_qg = QualityGateEngine(tenant=self.tenant, confidence_threshold=0.7)
+                            
+                            # Salva nel JSONL per training futuro
+                            jsonl_saved = temp_qg.log_automatic_classification_to_jsonl(
+                                session_id=doc.session_id,
+                                classification_result=final_decision,
+                                conversation_text=doc.testo_completo,
+                                classification_method=classification_method
+                            )
+                            
+                            if not jsonl_saved and i < 3:  # Log solo primi errori
+                                print(f"     ⚠️ {doc.session_id}: Salvato in MongoDB ma non in JSONL")
+                        except Exception as jsonl_e:
+                            if i < 3:  # Log solo primi errori
+                                print(f"     ⚠️ {doc.session_id}: Errore salvataggio JSONL: {jsonl_e}")
+                        
+
                         # Debug per primi documenti
                         if i < 5:
                             doc_type = doc.get_document_type()

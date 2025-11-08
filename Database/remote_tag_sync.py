@@ -3,6 +3,7 @@ import yaml
 import mysql.connector
 from mysql.connector import Error
 from typing import List, Dict, Any, Optional
+from datetime import datetime
 
 # Utilities and connectors from the project
 from Utils.tenant import Tenant
@@ -137,9 +138,19 @@ class RemoteTagSyncService:
         Returns:
             Summary dict with counters and optional error
         """
+        # 🚨 LOGGING AGGIUNTO PER DEBUG
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"\n🔍 [{timestamp}] RemoteTagSyncService.sync_session_tags() CHIAMATO")
+        print(f"   📋 Tenant: {getattr(tenant, 'tenant_slug', 'N/A')} (ID: {getattr(tenant, 'tenant_id', 'N/A')})")
+        print(f"   📊 Documenti ricevuti: {len(documenti) if documenti else 0}")
+        
         tenant_slug = getattr(tenant, 'tenant_slug', None) or getattr(tenant, 'tenant_name', None)
         if not tenant_slug:
-            return {'success': False, 'error': 'tenant_slug non disponibile'}
+            error_msg = 'tenant_slug non disponibile'
+            print(f"   ❌ ERRORE: {error_msg}")
+            return {'success': False, 'error': error_msg}
+        
+        print(f"   🎯 Target schema: {tenant_slug}")
 
         # Prepare description lookup from local TAG database
         tag_desc_map = self._get_local_tag_descriptions(tenant)
@@ -226,19 +237,25 @@ class RemoteTagSyncService:
 
             conn.commit()
 
-            return {
+            result = {
                 'success': True,
                 'tag_inserts': tag_inserts,
                 'tag_updates': tag_updates,
                 'session_inserts': session_inserts,
                 'session_updates': session_updates,
             }
+            
+            # 🚨 LOGGING RISULTATO
+            print(f"   ✅ SYNC COMPLETATO: {result}")
+            return result
         except Error as e:
             try:
                 conn.rollback()
             except Exception:
                 pass
-            return {'success': False, 'error': f"Errore durante sync remoto: {e}"}
+            error_result = {'success': False, 'error': f"Errore durante sync remoto: {e}"}
+            print(f"   ❌ SYNC FALLITO: {error_result}")
+            return error_result
         finally:
             try:
                 cur.close()

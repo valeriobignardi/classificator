@@ -9,6 +9,7 @@ from flask_cors import CORS
 import sys
 import os
 import threading
+from threading import Event
 import yaml
 import json
 import glob
@@ -480,6 +481,181 @@ def sanitize_for_json(obj):
     else:
         # Tipi già serializzabili (str, int, float, bool, None)
         return obj
+
+
+# ============================================================================
+# SCHEDULER CLASSIFICAZIONE AUTOMATICA (Background Thread)
+# ============================================================================
+class AutoClassificationScheduler:
+    """
+    Scheduler leggero basato su threading per classificazione automatica periodica
+    delle nuove sessioni per uno o più tenant.
+    """
+
+    def __init__(self, service: 'ClassificationService'):
+        self.service = service
+        self._thread: Optional[threading.Thread] = None
+        self._stop_event: Event = Event()
+        self._running = False
+        self._last_cycle_started_at: Optional[float] = None
+        self._state_lock = threading.Lock()
+        # Stato runtime esposto via API
+        self.enabled = False
+        self.interval_seconds = 600
+        self.tenants_filter: Optional[List[str]] = None  # Slugs o UUID
+        self.max_tenants_per_cycle: Optional[int] = None
+        self.last_results_by_tenant: Dict[str, Dict[str, Any]] = {}
+        self.total_cycles = 0
+        self.load_config()
+
+    def load_config(self):
+        """Carica/aggiorna configurazione da config.yaml (sezione 'scheduler')."""
+        try:
+            cfg_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+            with open(cfg_path, 'r', encoding='utf-8') as f:
+                cfg = yaml.safe_load(f) or {}
+            sched = (cfg or {}).get('scheduler', {}) or {}
+            with self._state_lock:
+                self.enabled = bool(sched.get('enabled', False))
+                self.interval_seconds = int(sched.get('interval_seconds', 600))
+                tenants = sched.get('tenants')
+                if isinstance(tenants, list) and tenants:
+                    # Normalizza stringhe vuote
+                    self.tenants_filter = [t for t in tenants if isinstance(t, str) and t.strip()]
+                else:
+                    self.tenants_filter = None
+                self.max_tenants_per_cycle = sched.get('max_tenants_per_cycle')
+                if self.max_tenants_per_cycle is not None:
+                    try:
+                        self.max_tenants_per_cycle = int(self.max_tenants_per_cycle)
+                    except Exception:
+                        self.max_tenants_per_cycle = None
+        except Exception as e:
+            print(f"⚠️ [SCHEDULER] Impossibile caricare config scheduler: {e}")
+
+    def _get_active_tenants(self) -> List[str]:
+        """
+        Restituisce la lista di tenant su cui eseguire la classificazione.
+        Se configurato un filtro esplicito, lo usa; altrimenti legge dal DB TAG.tenants.
+        """
+        # Se filtro esplicito
+        with self._state_lock:
+            if self.tenants_filter:
+                return list(self.tenants_filter)
+
+        # Recupera dal DB locale dei tenants
+        try:
+            connector = TagDatabaseConnector.create_for_tenant_resolution()
+            tenants = connector.get_all_tenants() or []
+            slugs = [t.get('tenant_slug') for t in tenants if t.get('tenant_slug')]
+            if not slugs:
+                print("⚠️ [SCHEDULER] Nessun tenant attivo trovato in TAG.tenants")
+            return slugs
+        except Exception as e:
+            print(f"⚠️ [SCHEDULER] Errore recupero tenants: {e}")
+            return []
+
+    def _classify_for_tenant(self, tenant_identifier: str) -> Dict[str, Any]:
+        """Esegue classificazione incrementale per un tenant e restituisce risultato sintetico."""
+        start_ts = time.time()
+        try:
+            result = self.service.classify_new_sessions(client_name=tenant_identifier)
+            sanitized = sanitize_for_json(result)
+            summary = {
+                'tenant': tenant_identifier,
+                'success': bool(sanitized.get('success', False)),
+                'message': sanitized.get('message'),
+                'sessions_processed': sanitized.get('sessions_processed') or sanitized.get('classification_stats', {}).get('saved_count'),
+                'sessions_errors': sanitized.get('sessions_errors') or sanitized.get('classification_stats', {}).get('errors'),
+                'timestamp': datetime.now().isoformat(),
+                'duration_seconds': round(time.time() - start_ts, 3)
+            }
+            return summary
+        except Exception as e:
+            print(f"❌ [SCHEDULER] Errore classificazione tenant {tenant_identifier}: {e}")
+            return {
+                'tenant': tenant_identifier,
+                'success': False,
+                'error': str(e),
+                'timestamp': datetime.now().isoformat(),
+                'duration_seconds': round(time.time() - start_ts, 3)
+            }
+
+    def _run_loop(self):
+        print("🟢 [SCHEDULER] Loop avviato")
+        while not self._stop_event.is_set():
+            cycle_started_at = time.time()
+            with self._state_lock:
+                self._last_cycle_started_at = cycle_started_at
+            tenants = self._get_active_tenants()
+            if tenants:
+                print(f"⏱️ [SCHEDULER] Avvio ciclo su {len(tenants)} tenant")
+            else:
+                print("⏱️ [SCHEDULER] Nessun tenant da processare")
+
+            processed = 0
+            for tenant in tenants:
+                if self._stop_event.is_set():
+                    break
+                summary = self._classify_for_tenant(tenant)
+                with self._state_lock:
+                    self.last_results_by_tenant[tenant] = summary
+                processed += 1
+                with self._state_lock:
+                    if self.max_tenants_per_cycle and processed >= self.max_tenants_per_cycle:
+                        print(f"⏸️ [SCHEDULER] Raggiunto limite per ciclo ({self.max_tenants_per_cycle})")
+                        break
+
+            with self._state_lock:
+                self.total_cycles += 1
+
+            # Attesa fino al prossimo ciclo
+            wait_seconds = self.interval_seconds
+            for _ in range(wait_seconds):
+                if self._stop_event.is_set():
+                    break
+                time.sleep(1)
+
+        print("🛑 [SCHEDULER] Loop terminato")
+
+    def start(self) -> bool:
+        with self._state_lock:
+            if self._running:
+                print("ℹ️ [SCHEDULER] Già in esecuzione")
+                return False
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self._run_loop, daemon=True)
+            self._thread.start()
+            self._running = True
+            print("✅ [SCHEDULER] Avviato")
+            return True
+
+    def stop(self) -> bool:
+        with self._state_lock:
+            if not self._running:
+                print("ℹ️ [SCHEDULER] Non in esecuzione")
+                return False
+            self._stop_event.set()
+        # Attendi termine thread
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
+        with self._state_lock:
+            self._running = False
+            print("✅ [SCHEDULER] Arrestato")
+        return True
+
+    def status(self) -> Dict[str, Any]:
+        with self._state_lock:
+            return {
+                'enabled': self.enabled,
+                'running': self._running,
+                'interval_seconds': self.interval_seconds,
+                'tenants_filter': self.tenants_filter,
+                'max_tenants_per_cycle': self.max_tenants_per_cycle,
+                'last_cycle_started_at': self._last_cycle_started_at,
+                'total_cycles': self.total_cycles,
+                'last_results_by_tenant': self.last_results_by_tenant,
+            }
 
 class ClassificationService:
     """
@@ -1395,6 +1571,9 @@ class ClassificationService:
 classification_service = ClassificationService()
 llm_config_service = LLMConfigurationService()
 
+# Istanzia lo scheduler e collega il service
+auto_scheduler = AutoClassificationScheduler(service=classification_service)
+
 @app.route('/', methods=['GET'])
 def home():
     """Endpoint di base per verificare che il servizio sia attivo"""
@@ -1411,6 +1590,53 @@ def home():
             'health': '/health'
         }
     })
+
+# ================================
+# API SCHEDULER AUTOMATICO
+# ================================
+@app.route('/scheduler/status', methods=['GET'])
+@app.route('/api/scheduler/status', methods=['GET'])
+def scheduler_status():
+    try:
+        auto_scheduler.load_config()
+        return jsonify(sanitize_for_json(auto_scheduler.status())), 200
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/scheduler/start', methods=['POST'])
+@app.route('/api/scheduler/start', methods=['POST'])
+def scheduler_start():
+    try:
+        auto_scheduler.load_config()
+        started = auto_scheduler.start()
+        return jsonify({'success': True, 'started': started, 'status': sanitize_for_json(auto_scheduler.status())}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/scheduler/stop', methods=['POST'])
+@app.route('/api/scheduler/stop', methods=['POST'])
+def scheduler_stop():
+    try:
+        stopped = auto_scheduler.stop()
+        return jsonify({'success': True, 'stopped': stopped, 'status': sanitize_for_json(auto_scheduler.status())}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/scheduler/run-now/<client_name>', methods=['POST'])
+@app.route('/api/scheduler/run-now/<client_name>', methods=['POST'])
+def scheduler_run_now(client_name: str):
+    """Esegue immediatamente una classificazione incrementale per un tenant specifico."""
+    try:
+        summary = auto_scheduler._classify_for_tenant(client_name)
+        # Aggiorna stato interno
+        with auto_scheduler._state_lock:
+            auto_scheduler.last_results_by_tenant[client_name] = summary
+        return jsonify({'success': True, 'result': sanitize_for_json(summary)}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -1526,6 +1752,8 @@ def classify_all_sessions(client_name: str):
         return jsonify(error_response), 500
 
 @app.route('/classify/new/<client_name>', methods=['POST'])
+@app.route('/api/classify/new/<client_name>', methods=['POST'])
+@app.route('/api/<client_name>/classify_new_sessions', methods=['POST'])
 def classify_new_sessions(client_name: str):
     """
     Rotta 2: Classifica solo le nuove sessioni non ancora processate
@@ -2726,6 +2954,85 @@ def api_resolve_case(tenant_id: str, case_id: str):
             'case_id': case_id,
             'tenant_id': tenant_id
         }), 500
+
+@app.route('/api/review/<tenant_id>/clusters/<cluster_id>/resolve-majority', methods=['POST'])
+def api_resolve_cluster_majority(tenant_id: str, cluster_id: str):
+    """
+    Risolve in batch i rappresentanti pending di un cluster applicando
+    l'etichetta di maggioranza tra i rappresentanti del cluster.
+    """
+    try:
+        # Risolvi tenant
+        tenant = Tenant.from_uuid(tenant_id)
+        if not tenant:
+            return jsonify({'success': False, 'error': f'Tenant non trovato: {tenant_id}'}), 404
+
+        mongo_reader = classification_service.get_mongo_reader(tenant.tenant_slug)
+        quality_gate = classification_service.get_quality_gate(tenant.tenant_slug)
+
+        sessions = mongo_reader.get_review_queue_sessions(
+            tenant.tenant_slug,
+            limit=10000,
+            label_filter=None,
+            show_representatives=True,
+            show_propagated=False,
+            show_outliers=False
+        )
+        if not sessions:
+            return jsonify({'success': False, 'error': 'Nessun caso pending per questo tenant'}), 404
+
+        str_cluster = str(cluster_id)
+        cluster_sessions = [s for s in sessions if str(s.get('cluster_id')) == str_cluster]
+        if not cluster_sessions:
+            return jsonify({'success': False, 'error': f'Nessun rappresentante pending per cluster {cluster_id}'}), 404
+
+        from collections import Counter
+        labels = []
+        for s in cluster_sessions:
+            lbl = (s.get('classification') or s.get('ml_prediction') or s.get('llm_prediction') or '').strip()
+            if lbl:
+                labels.append(lbl.upper())
+        if not labels:
+            return jsonify({'success': False, 'error': 'Impossibile determinare etichetta di maggioranza'}), 400
+
+        majority_label = Counter(labels).most_common(1)[0][0]
+
+        data = request.get_json(silent=True) or {}
+        notes = data.get('notes', f'batch_majority_cluster_{cluster_id}')
+
+        resolved = 0
+        errors = []
+        for s in cluster_sessions:
+            case_id = s.get('case_id') or s.get('id')
+            if not case_id:
+                continue
+            try:
+                res = quality_gate.resolve_review_case(
+                    case_id=case_id,
+                    human_decision=majority_label,
+                    human_confidence=0.9,
+                    notes=notes
+                )
+                if res.get('case_resolved', False):
+                    resolved += 1
+                else:
+                    errors.append({'case_id': case_id, 'error': res.get('error')})
+            except Exception as re:
+                errors.append({'case_id': case_id, 'error': str(re)})
+
+        return jsonify({
+            'success': True,
+            'tenant_id': tenant_id,
+            'cluster_id': cluster_id,
+            'majority_label': majority_label,
+            'resolved_count': resolved,
+            'total_candidates': len(cluster_sessions),
+            'errors': errors
+        }), 200
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/review/<client_name>/stats', methods=['GET'])
 def api_get_review_stats(client_name: str):
@@ -4234,6 +4541,9 @@ def get_all_sessions(client):
                         cluster_id = found_cluster_id
                         break
             
+            # Flag rappresentante dai metadati, se presente
+            is_representative_flag = bool(session_doc.get('metadata', {}).get('is_representative', False))
+
             session_info = {
                 'session_id': session_id,
                 'conversation_text': conversation_text[:500] + '...' if len(conversation_text) > 500 else conversation_text,
@@ -4250,6 +4560,8 @@ def get_all_sessions(client):
                 'confidence': confidence,
                 # 🆕 CLUSTER ID DIRETTO per React (ricerca robusta)
                 'cluster_id': cluster_id,
+                # 🆕 FLAG RAPPRESENTANTE per raggruppamento in UI
+                'is_representative': is_representative_flag,
                 # INFORMAZIONI PULSANTE PER REACT
                 'review_button': button_info
             }
@@ -8883,6 +9195,17 @@ if __name__ == "__main__":
     debug_mode = os.environ.get('FLASK_DEBUG', 'True').lower() == 'true'
     
     print(f"🚀 Avvio server Flask - Debug: {debug_mode}")
+    
+    # Avvio scheduler automatico se abilitato da config
+    try:
+        auto_scheduler.load_config()
+        if auto_scheduler.enabled:
+            print(f"🗓️  [STARTUP] Scheduler abilitato - intervallo: {auto_scheduler.interval_seconds}s")
+            auto_scheduler.start()
+        else:
+            print("⏸️  [STARTUP] Scheduler disabilitato (config.scheduler.enabled = false)")
+    except Exception as e:
+        print(f"⚠️ [STARTUP] Errore avvio scheduler: {e}")
     
     # Avvio del server con configurazione ottimizzata
     # FORZA use_reloader=False per evitare problemi con watchdog

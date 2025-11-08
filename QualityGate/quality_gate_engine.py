@@ -798,6 +798,60 @@ class QualityGateEngine:
             self.logger.error(f"Stack trace: {traceback.format_exc()}")
             return False
 
+    def log_automatic_classification_to_jsonl(self, session_id: str, classification_result: Dict[str, Any], 
+                                            conversation_text: str, classification_method: str = "llm_automatic") -> bool:
+        """
+        Salva le classificazioni automatiche nel file JSONL per il training ML.
+        
+        Scopo: Estendere il file training_decisions_*.jsonl con classificazioni automatiche
+               generate durante il training supervisionado, non solo decisioni umane.
+        
+        Parametri input:
+            - session_id: ID della sessione
+            - classification_result: Risultato della classificazione automatica
+            - conversation_text: Testo della conversazione 
+            - classification_method: Metodo di classificazione (default: "llm_automatic")
+            
+        Output:
+            - bool: True se salvato con successo, False altrimenti
+            
+        Autore: Valerio Bignardi
+        Data: 2025-11-07 - Aggiunta per correggere training JSONL incompleto
+        """
+        try:
+            # Prepara entry per JSONL (simile a log_decision ma per classificazioni automatiche)
+            decision_log = {
+                'case_id': session_id,
+                'timestamp': datetime.now().isoformat(),
+                'tenant': self.tenant_name,
+                'ml_prediction': '',  # Non disponibile per classificazioni LLM pure
+                'ml_confidence': 0.0,
+                'llm_prediction': classification_result.get('predicted_label', ''),
+                'llm_confidence': classification_result.get('confidence', 0.0),
+                'human_decision': classification_result.get('predicted_label', ''),  # Usa predizione LLM come decisione
+                'human_confidence': classification_result.get('confidence', 0.0),
+                'conversation_text': conversation_text,
+                'uncertainty_score': 1.0 - classification_result.get('confidence', 0.5),
+                'novelty_score': 0.5,  # Default per classificazioni automatiche
+                'reason': f'automatic_classification_{classification_method}',
+                'notes': f'Classificazione automatica durante training supervisionado - Metodo: {classification_method}',
+                'resolved_at': datetime.now().isoformat(),
+                'cluster_propagation': classification_result.get('cluster_metadata', {}),
+                'source': 'automatic_training'  # Marca per distinguere da decisioni umane
+            }
+            
+            # Scrivi nel file JSONL
+            with open(self.training_log_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(decision_log, ensure_ascii=False) + '\n')
+                
+            self.logger.debug(f"✅ Classificazione automatica salvata in JSONL: "
+                             f"session_id={session_id}, label={classification_result.get('predicted_label', '')}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Errore nel salvataggio classificazione automatica in JSONL: {e}")
+            return False
+
     def add_to_review_queue(self, session_id: str, conversation_text: str, 
                            reason: str = "manual_addition",
                            ml_prediction: str = "",

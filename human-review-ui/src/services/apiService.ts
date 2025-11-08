@@ -58,6 +58,20 @@ class ApiService {
     );
   }
 
+  async resolveClusterMajority(tenant_id: string, cluster_id: string, options?: { notes?: string }): Promise<{
+    success: boolean;
+    tenant_id: string;
+    cluster_id: string;
+    majority_label: string;
+    resolved_count: number;
+    total_candidates: number;
+    errors: Array<{ case_id: string; error: string }>;
+  }> {
+    return this.handleRequest(
+      axios.post(`${API_BASE_URL}/review/${tenant_id}/clusters/${cluster_id}/resolve-majority`, options || {})
+    );
+  }
+
   async getCaseDetail(tenant_id: string, caseId: string): Promise<{ case: ReviewCase }> {
     console.log('🔍 [DEBUG] ApiService.getCaseDetail() - Avvio richiesta');
     console.log('🔍 [DEBUG] Tenant ID:', tenant_id, 'Case ID:', caseId);

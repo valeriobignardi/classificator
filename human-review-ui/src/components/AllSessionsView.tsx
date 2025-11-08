@@ -101,6 +101,9 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ tenantIdentifier, ten
     force_reprocess_all: false
   });
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  // Raggruppamento per cluster
+  const [groupByCluster, setGroupByCluster] = useState<boolean>(false);
+  const [onlyRepresentatives, setOnlyRepresentatives] = useState<boolean>(true);
 
   const loadSessions = useCallback(async () => {
     setLoading(true);
@@ -435,9 +438,72 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ tenantIdentifier, ten
               }
               label="Includi sessioni reviewate"
             />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={groupByCluster}
+                  onChange={(e) => setGroupByCluster(e.target.checked)}
+                  size="small"
+                  color="primary"
+                />
+              }
+              label="Raggruppa per Cluster"
+            />
+            {groupByCluster && (
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={onlyRepresentatives}
+                    onChange={(e) => setOnlyRepresentatives(e.target.checked)}
+                    size="small"
+                    color="success"
+                  />
+                }
+                label="Solo Rappresentanti"
+              />
+            )}
           </Box>
         </CardContent>
       </Card>
+
+      {/* Raggruppamento per Cluster (vista riassuntiva) */}
+      {groupByCluster && (
+        <Box mb={3} display="flex" flexDirection="column" gap={2}>
+          {getUniqueClusters().map((cid) => {
+            if (cid === 'all') return null as any;
+            const clusterSessions = filteredSessions.filter(s => {
+              const sid = s.cluster_id !== undefined && s.cluster_id !== null ? s.cluster_id.toString() : undefined;
+              return sid === cid;
+            });
+            const reps = clusterSessions.filter((s: any) => s.is_representative === true);
+            const items = onlyRepresentatives ? reps : clusterSessions;
+            return (
+              <Card key={cid}>
+                <CardContent>
+                  <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
+                    <Typography variant="h6">📊 Cluster {cid}</Typography>
+                    <Chip label={`${items.length} elementi`} size="small" />
+                  </Box>
+                  {items.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary">Nessun rappresentante disponibile per questo cluster.</Typography>
+                  ) : (
+                    <Box display="flex" flexWrap="wrap" gap={1}>
+                      {items.map((s: any) => (
+                        <Chip key={s.session_id}
+                              label={`${(s.classifications && s.classifications[0]?.tag_name) || 'N/A'} • ${s.session_id.substring(0,8)}…`}
+                              color={s.is_representative ? 'primary' : 'default'}
+                              variant={s.is_representative ? 'filled' : 'outlined'}
+                              size="small"
+                        />
+                      ))}
+                    </Box>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
+        </Box>
+      )}
 
       {/* Sessions Grid - SAME STYLE AS REVIEW DASHBOARD */}
       {filteredSessions.length === 0 && !loading ? (

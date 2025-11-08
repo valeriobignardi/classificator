@@ -7935,6 +7935,12 @@ def get_clustering_statistics(tenant_id):
                             'classification_method': pred_info['method']
                         })
 
+                    # Etichetta testuale da mostrare nel grafico (anche per outliers)
+                    label_text = display_label
+                    if cid == -1 and pred_info and pred_info.get('prediction'):
+                        label_text = pred_info['prediction']
+                    point['label_text'] = label_text
+
                 # Aggiorna info cluster con le etichette finali predominanti
                 if 'cluster_info' in visualization_data:
                     for cid, info in visualization_data['cluster_info'].items():

@@ -43,6 +43,7 @@ interface VisualizationData {
     z?: number;
     cluster_id: number;
     cluster_label: string;
+    label_text?: string;
     session_id: string;
     text_preview: string;
     classification?: string;  // Solo in modalità Statistics
@@ -161,6 +162,7 @@ const ClusterVisualizationComponent: React.FC<ClusterVisualizationProps> = ({
       const clusterIdNum = parseInt(clusterId);
       const isOutlier = clusterIdNum === -1;
       const clusterLabel = points[0]?.cluster_label || `Cluster ${clusterId}`;
+      const pointLabelTexts = points.map(p => p.label_text || clusterLabel);
       
       // Determina coordinate in base al tipo visualizzazione
       let coordinates: any = {};
@@ -172,7 +174,7 @@ const ClusterVisualizationComponent: React.FC<ClusterVisualizationProps> = ({
             y: points.map(p => p.y),
             // Mostra etichette opzionali in 2D
             mode: showLabels ? 'markers+text' : 'markers',
-            text: showLabels ? points.map(() => clusterLabel) : undefined,
+            text: showLabels ? pointLabelTexts : undefined,
             textposition: showLabels ? 'top center' : undefined,
             type: 'scatter'
           };
@@ -184,7 +186,7 @@ const ClusterVisualizationComponent: React.FC<ClusterVisualizationProps> = ({
             y: points.map(p => p.y),
             // Mostra etichette opzionali in 2D
             mode: showLabels ? 'markers+text' : 'markers',
-            text: showLabels ? points.map(() => clusterLabel) : undefined,
+            text: showLabels ? pointLabelTexts : undefined,
             textposition: showLabels ? 'top center' : undefined,
             type: 'scatter'
           };
@@ -197,7 +199,7 @@ const ClusterVisualizationComponent: React.FC<ClusterVisualizationProps> = ({
             z: points.map(p => p.z || 0),
             // In 3D, Plotly supporta text ma non textposition
             mode: showLabels ? 'markers+text' : 'markers',
-            text: showLabels ? points.map(() => clusterLabel) : undefined,
+            text: showLabels ? pointLabelTexts : undefined,
             type: 'scatter3d'
           };
           break;

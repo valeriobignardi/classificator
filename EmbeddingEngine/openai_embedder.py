@@ -97,8 +97,32 @@ class OpenAIEmbedder(BaseEmbedder):
         self.max_tokens = max_tokens
         self.timeout = timeout
         
-        # Setup OpenAI client (nuova sintassi v1.0+)
-        self.client = openai.OpenAI(api_key=self.api_key)
+        # Setup OpenAI client con supporto Azure OpenAI
+        azure_endpoint = os.getenv('AZURE_OPENAI_ENDPOINT')
+        azure_api_key = os.getenv('AZURE_OPENAI_API_KEY')
+        
+        if azure_endpoint and azure_api_key:
+            # Configurazione Azure OpenAI
+            from openai import AzureOpenAI
+            self.client = AzureOpenAI(
+                api_key=azure_api_key,
+                api_version=os.getenv('AZURE_OPENAI_API_VERSION', '2024-10-21'),
+                azure_endpoint=azure_endpoint
+            )
+            self.use_azure = True
+            
+            # Per Azure, usa il deployment name invece del model name
+            # Il deployment name deve corrispondere a quello configurato su Azure Portal
+            self.deployment_name = os.getenv('AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT', model_name)
+            print(f"🌩️ OpenAI Embedder configurato per Azure OpenAI")
+            print(f"   📍 Endpoint: {azure_endpoint}")
+            print(f"   🚀 Deployment: {self.deployment_name}")
+        else:
+            # Configurazione OpenAI standard
+            self.client = openai.OpenAI(api_key=self.api_key)
+            self.use_azure = False
+            self.deployment_name = model_name  # Per OpenAI standard, usa il model name
+            print(f"🤖 OpenAI Embedder configurato per OpenAI standard")
         
         # Setup logging
         self.logger = logging.getLogger(__name__)
@@ -226,8 +250,9 @@ class OpenAIEmbedder(BaseEmbedder):
         """
         try:
             # Richiesta API OpenAI (nuova sintassi v1.0+)
+            # Per Azure usa deployment_name, per OpenAI standard usa model_name
             response = self.client.embeddings.create(
-                model=self.model_name,
+                model=self.deployment_name,
                 input=texts
             )
             

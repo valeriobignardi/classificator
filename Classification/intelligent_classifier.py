@@ -762,12 +762,12 @@ class IntelligentClassifier:
                 self.is_openai_model = self._is_openai_model(self.model_name)
                 
                 if self.is_openai_model:
-                    # Inizializza servizio OpenAI con configurazione da config.yaml
+                    # Inizializza servizio OpenAI (legge configurazione da .env per Azure)
+                    # OpenAIService ora gestisce automaticamente Azure OpenAI vs OpenAI standard
                     openai_config = self.config.get('llm', {}).get('openai', {})
                     self.openai_service = OpenAIService(
                         max_parallel_calls=openai_config.get('max_parallel_calls', 200),
-                        rate_limit_per_minute=openai_config.get('rate_limit_per_minute', 10000),
-                        base_url=openai_config.get('api_base', 'https://api.openai.com/v1')
+                        rate_limit_per_minute=openai_config.get('rate_limit_per_minute', 10000)
                     )
                     if enable_logging:
                         print(f"🤖 [OpenAI] Servizio inizializzato per modello: {self.model_name}")

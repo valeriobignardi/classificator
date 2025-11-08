@@ -108,26 +108,60 @@ class OpenAIService:
         api_key: str = None, 
         max_parallel_calls: int = 200,
         rate_limit_per_minute: int = 10000,
-        base_url: str = "https://api.openai.com/v1"
+        base_url: str = None,
+        use_azure: bool = None
     ):
         """
-        Inizializza servizio OpenAI con configurazione parallelismo
+        Inizializza servizio OpenAI con configurazione parallelismo e supporto Azure
         
         Args:
-            api_key: Chiave API OpenAI (da .env se non specificata)
+            api_key: Chiave API OpenAI/Azure (da .env se non specificata)
             max_parallel_calls: Max chiamate parallele simultanee
             rate_limit_per_minute: Limite chiamate per minuto
-            base_url: URL base API OpenAI
+            base_url: URL base API (auto-detect Azure se None)
+            use_azure: Forza uso Azure OpenAI (auto-detect se None)
         """
-        # Carica API key da environment se non fornita
-        self.api_key = api_key or os.getenv('OPENAI_API_KEY')
+        # Auto-detect Azure OpenAI configuration
+        azure_endpoint = os.getenv('AZURE_OPENAI_ENDPOINT')
+        azure_api_key = os.getenv('AZURE_OPENAI_API_KEY')
+        
+        # Determina se usare Azure OpenAI
+        if use_azure is None:
+            self.use_azure = bool(azure_endpoint and azure_api_key)
+        else:
+            self.use_azure = use_azure
+        
+        # Configurazione Azure OpenAI
+        if self.use_azure:
+            self.api_key = api_key or azure_api_key or os.getenv('OPENAI_API_KEY')
+            self.azure_endpoint = azure_endpoint.rstrip('/')
+            self.azure_api_version = os.getenv('AZURE_OPENAI_API_VERSION', '2024-10-21')
+            self.base_url = base_url or f"{self.azure_endpoint}/openai"
+            
+            # Deployment names e versioni per Azure
+            self.gpt4o_deployment = os.getenv('AZURE_OPENAI_GPT4O_DEPLOYMENT', 'gpt-4o')
+            self.gpt4o_version = os.getenv('AZURE_OPENAI_GPT4O_VERSION', '2024-11-20')
+            self.gpt5_deployment = os.getenv('AZURE_OPENAI_GPT5_DEPLOYMENT', 'gpt-5')
+            self.gpt5_version = os.getenv('AZURE_OPENAI_GPT5_VERSION', '2025-08-07')
+            
+            print(f"🌩️ [OpenAIService] Configurato per Azure OpenAI")
+            print(f"   📍 Endpoint: {self.azure_endpoint}")
+            print(f"   📅 API Version: {self.azure_api_version}")
+            print(f"   🤖 GPT-4o: {self.gpt4o_deployment} (v{self.gpt4o_version})")
+            print(f"   🚀 GPT-5: {self.gpt5_deployment} (v{self.gpt5_version})")
+        else:
+            # Configurazione OpenAI standard
+            self.api_key = api_key or os.getenv('OPENAI_API_KEY')
+            self.base_url = base_url or "https://api.openai.com/v1"
+            print(f"🤖 [OpenAIService] Configurato per OpenAI standard - Base URL: {self.base_url}")
+        
         if not self.api_key:
-            raise ValueError("OPENAI_API_KEY non trovata in environment o parametri")
+            raise ValueError("API Key non trovata - configurare OPENAI_API_KEY o AZURE_OPENAI_API_KEY")
         
         # Configurazione parallelismo e rate limiting
         self.max_parallel_calls = max_parallel_calls
         self.rate_limit_per_minute = rate_limit_per_minute
-        self.base_url = base_url.rstrip('/')
+        self.base_url = self.base_url.rstrip('/')
         
         # Controllo concorrenza
         self.semaphore = asyncio.Semaphore(max_parallel_calls)
@@ -144,14 +178,22 @@ class OpenAIService:
         self.cache_ttl = 300  # 5 minuti TTL
         self.cache_lock = threading.Lock()
         
-        # Headers HTTP standard
-        self.headers = {
-            'Authorization': f'Bearer {self.api_key}',
-            'Content-Type': 'application/json',
-            'User-Agent': 'ClassificatoreAI/1.0'
-        }
+        # Headers HTTP per OpenAI o Azure OpenAI
+        if self.use_azure:
+            self.headers = {
+                'api-key': self.api_key,  # Azure usa 'api-key' header
+                'Content-Type': 'application/json',
+                'User-Agent': 'ClassificatoreAI-Azure/1.0'
+            }
+        else:
+            self.headers = {
+                'Authorization': f'Bearer {self.api_key}',  # OpenAI standard usa Authorization
+                'Content-Type': 'application/json',
+                'User-Agent': 'ClassificatoreAI/1.0'
+            }
         
-        print(f"🤖 [OpenAIService] Servizio inizializzato - Max parallel: {max_parallel_calls}")
+        provider = "Azure OpenAI" if self.use_azure else "OpenAI"
+        print(f"🤖 [OpenAIService] Servizio inizializzato per {provider} - Max parallel: {max_parallel_calls}")
     
     
     def _check_rate_limit(self) -> bool:
@@ -278,7 +320,7 @@ class OpenAIService:
         payload: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Effettua chiamata HTTP asincrona all'API OpenAI con retry
+        Effettua chiamata HTTP asincrona all'API OpenAI/Azure con retry
         
         Args:
             session: Sessione HTTP asincrona
@@ -286,11 +328,40 @@ class OpenAIService:
             payload: Dati da inviare
             
         Returns:
-            Risposta API OpenAI
+            Risposta API OpenAI/Azure
             
-        Data ultima modifica: 2025-01-31
+        Data ultima modifica: 2025-11-08 - Aggiunto supporto Azure OpenAI
         """
-        url = f"{self.base_url}/{endpoint}"
+        # Costruisci URL specifico per Azure OpenAI o OpenAI standard
+        if self.use_azure:
+            # Azure OpenAI richiede deployment name nell'URL
+            model = payload.get('model', 'gpt-4o')
+            
+            # Mappa model name a deployment name
+            if model in ['gpt-4o', 'gpt-4o-mini']:
+                deployment_name = self.gpt4o_deployment
+            elif model in ['gpt-5', 'gpt-5-mini']:
+                deployment_name = self.gpt5_deployment
+            else:
+                deployment_name = model  # Usa il nome del modello come deployment
+            
+            # URL Azure: https://{endpoint}/openai/deployments/{deployment}/chat/completions?api-version=2024-11-20
+            url = f"{self.azure_endpoint}/openai/deployments/{deployment_name}/{endpoint}"
+            
+            # Aggiungi api-version per Azure
+            if '?' in url:
+                url += f"&api-version={self.azure_api_version}"
+            else:
+                url += f"?api-version={self.azure_api_version}"
+                
+            # Rimuovi 'model' dal payload per Azure (è già nell'URL)
+            payload = dict(payload)  # Copia per non modificare l'originale
+            payload.pop('model', None)
+            
+        else:
+            # OpenAI standard
+            url = f"{self.base_url}/{endpoint}"
+        
         start_time = time.time()
         
         try:
@@ -364,7 +435,7 @@ class OpenAIService:
         Effettua chiamata chat completion OpenAI con controllo parallelismo e supporto tools
         
         Args:
-            model: Nome modello OpenAI (es. 'gpt-4o')
+            model: Nome modello OpenAI (es. 'gpt-4o', 'gpt-5')
             messages: Lista messaggi conversazione
             temperature: Creatività generazione (0.0-2.0)
             max_tokens: Token massimi risposta
@@ -378,7 +449,7 @@ class OpenAIService:
         Returns:
             Risposta API OpenAI con testo generato e eventuali tool calls
             
-        Data ultima modifica: 2025-09-07 - Aggiunto supporto OpenAI tools/function calling
+        Data ultima modifica: 2025-11-08 - Fix compatibilità GPT-5 con max_completion_tokens
         """
         # Genera chiave cache
         cache_key = self._generate_cache_key(model, messages, 
@@ -399,16 +470,34 @@ class OpenAIService:
         
         # Acquisci semaforo per controllo concorrenza
         async with self.semaphore:
+            # 🔥 COMPATIBILITÀ GPT-5: Usa max_completion_tokens invece di max_tokens
+            # GPT-5 e nuovi modelli usano max_completion_tokens
+            # GPT-4/GPT-4o usano max_tokens
+            is_gpt5_family = model.lower().startswith('gpt-5') or model.lower().startswith('o1') or model.lower().startswith('o3')
+            
+            # Costruisci payload base
             payload = {
                 'model': model,
                 'messages': messages,
-                'temperature': temperature,
-                'max_tokens': max_tokens,
-                'top_p': top_p,
-                'frequency_penalty': frequency_penalty,
-                'presence_penalty': presence_penalty,
                 **kwargs
             }
+            
+            # Aggiungi max_tokens o max_completion_tokens in base al modello
+            if is_gpt5_family:
+                # GPT-5: Usa max_completion_tokens e OMETTI parametri non supportati
+                payload['max_completion_tokens'] = max_tokens
+                
+                # GPT-5 supporta SOLO temperature=1.0 (default)
+                # NON supporta: temperature custom, frequency_penalty, presence_penalty, top_p
+                # Ometti questi parametri per GPT-5
+                print(f"🚀 [OpenAIService] GPT-5 family - max_completion_tokens={max_tokens}, usando parametri default (temp=1.0)")
+            else:
+                # GPT-4/GPT-4o: Usa parametri standard
+                payload['max_tokens'] = max_tokens
+                payload['temperature'] = temperature
+                payload['top_p'] = top_p
+                payload['frequency_penalty'] = frequency_penalty
+                payload['presence_penalty'] = presence_penalty
             
             # 🔥 COMPATIBILITÀ GPT-4o: Verifica se response_format è specificato
             # GPT-4o usa 'response_format' NON 'text' (come GPT-5)
@@ -524,7 +613,13 @@ class OpenAIService:
 
             # Mappa max_tokens -> max_output_tokens se presente
             if 'max_tokens' in kwargs and kwargs['max_tokens'] is not None:
+                # GPT-5 usa max_output_tokens, GPT-4/GPT-4o usano max_tokens
+                # Per compatibilità con Responses API, usiamo max_output_tokens
                 payload['max_output_tokens'] = kwargs.pop('max_tokens')
+                # ⚠️ IMPORTANTE: Non lasciare max_tokens nel payload per GPT-5
+            elif 'max_completion_tokens' in kwargs and kwargs['max_completion_tokens'] is not None:
+                # Alcune versioni GPT-5 usano max_completion_tokens
+                payload['max_output_tokens'] = kwargs.pop('max_completion_tokens')
 
             # Aggiungi tools e tool_choice se forniti
             tools = kwargs.pop('tools', None)

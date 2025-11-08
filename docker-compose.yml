@@ -42,6 +42,9 @@ services:
       NUMBA_DISABLE_JIT: "0"
       NUMBA_CACHE_DIR: /tmp/numba_cache
       PRELOAD_MODELS: "false"
+      # Matplotlib configuration per ambiente containerizzato
+      MPLCONFIGDIR: /app/.cache/matplotlib
+      MPLBACKEND: Agg
     volumes:
       - semantic-cache:/app/semantic_cache
       - /data/training:/data/training

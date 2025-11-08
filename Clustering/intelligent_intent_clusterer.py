@@ -239,11 +239,29 @@ class IntelligentIntentClusterer:
             # L'ensemble classifier potrebbe non supportare batch, quindi usiamo loop ottimizzato
             for i, text in enumerate(texts):
                 try:
+                    # 🎯 OTTIMIZZAZIONE: Usa ML features pre-calcolate se disponibili
+                    ml_features_precalc = None
+                    if (hasattr(self, '_ml_features_cache') and self._ml_features_cache and 
+                        hasattr(self, '_current_representative_session_ids') and 
+                        self._current_representative_session_ids and 
+                        i < len(self._current_representative_session_ids)):
+                        # Usa il session_id del rappresentante corrente
+                        session_id = self._current_representative_session_ids[i]
+                        if session_id is not None:
+                            ml_features_precalc = self._ml_features_cache.get(session_id)
+                            if ml_features_precalc is not None:
+                                print(f"   ✅ Usando ML features cache per session {session_id} (rappresentante {i+1})")
+                            else:
+                                print(f"   🔍 Session {session_id} non trovato in cache ML features")
+                        else:
+                            print(f"   ⚠️ Session ID non disponibile per rappresentante {i+1}")
+                    
                     # Usa ensemble ML+LLM per classificazione completa
                     ensemble_result = self.ensemble_classifier.predict_with_ensemble(
                         text,
                         return_details=True,
-                        embedder=shared_embedder
+                        embedder=shared_embedder,
+                        ml_features_precalculated=ml_features_precalc
                     )
                     
                     intent_info = {
@@ -471,7 +489,9 @@ class IntelligentIntentClusterer:
         
         return cluster_info
     
-    def cluster_intelligently(self, texts: List[str], embeddings: np.ndarray) -> Tuple[np.ndarray, Dict[int, Dict[str, Any]]]:
+    def cluster_intelligently(self, texts: List[str], embeddings: np.ndarray, 
+                              ml_features_cache: Optional[Dict[str, np.ndarray]] = None,
+                              session_ids: Optional[List[str]] = None) -> Tuple[np.ndarray, Dict[int, Dict[str, Any]]]:
         """
         Clustering intelligente OTTIMIZZATO: HDBSCAN prima, LLM sui rappresentanti dopo
         
@@ -500,7 +520,15 @@ class IntelligentIntentClusterer:
         
         print(f"🧠 Avvio clustering intelligente OTTIMIZZATO di {len(texts)} conversazioni...")
         
-        # 🆕 Setup debug logging per suggested_labels
+        # � OTTIMIZZAZIONE: Salva ML features cache come attributo della classe
+        self._ml_features_cache = ml_features_cache or {}
+        self._session_ids = session_ids or []
+        if self._ml_features_cache and self._session_ids:
+            print(f"🚀 [CLUSTERING INTELLIGENTE] ML Features Cache disponibile: {len(self._ml_features_cache)} elementi per {len(self._session_ids)} sessioni")
+        else:
+            print(f"⚠️ [CLUSTERING INTELLIGENTE] ML Features Cache o session_ids mancanti - procederà con calcolo tradizionale")
+        
+        # �🆕 Setup debug logging per suggested_labels
         debug_logger = logging.getLogger('suggested_labels_debug')
         debug_logger.setLevel(logging.DEBUG)
         
@@ -579,6 +607,73 @@ class IntelligentIntentClusterer:
             cluster_labels = clusterer.fit_predict(embeddings)
             n_clusters = len(set(cluster_labels)) - (1 if -1 in cluster_labels else 0)
             n_outliers = sum(1 for label in cluster_labels if label == -1)
+            
+            # 🚨 FIX CRITICO: SALVA SEMPRE IL MODELLO HDBSCAN DOPO LA FASE GEOMETRICA
+            # Questo è fondamentale per la classificazione incrementale successiva!
+            if self.tenant and self.tenant.tenant_id:
+                try:
+                    print(f"💾 [INTELLIGENT_CLUSTERER] Salvataggio modello HDBSCAN per classificazione incrementale...")
+                    
+                    # Genera path per il modello HDBSCAN
+                    import os
+                    from datetime import datetime
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    tenant_name_clean = self.tenant.tenant_slug.replace('-', '_')
+                    model_filename = f"{tenant_name_clean}_hdbscan_model_{timestamp}.pkl"
+                    model_path = os.path.join("models", model_filename)
+                    
+                    # Assicura che la directory models esista
+                    os.makedirs("models", exist_ok=True)
+                    
+                    # Salva il modello con i parametri corretti
+                    success = clusterer.save_model_for_incremental_prediction(model_path, self.tenant.tenant_id)
+                    
+                    if success:
+                        print(f"✅ [INTELLIGENT_CLUSTERER] Modello HDBSCAN salvato con successo: {model_path}")
+                        print(f"🎯 [INTELLIGENT_CLUSTERER] Tenant: {self.tenant.tenant_name} ({self.tenant.tenant_id})")
+                    else:
+                        print(f"❌ [INTELLIGENT_CLUSTERER] Errore nel salvataggio del modello HDBSCAN")
+                    
+                    # 🔍 TRACING per debug
+                    trace_all(
+                        'cluster_intelligently', 
+                        'HDBSCAN_MODEL_SAVED',
+                        called_from="cluster_intelligently",
+                        tenant_id=self.tenant.tenant_id,
+                        n_clusters=n_clusters,
+                        n_outliers=n_outliers,
+                        model_saved_successfully=success,
+                        model_path=model_path if success else None,
+                        embeddings_count=len(embeddings)
+                    )
+                    
+                except Exception as e:
+                    print(f"❌ [INTELLIGENT_CLUSTERER] ERRORE salvataggio modello HDBSCAN: {e}")
+                    self.logger.error(f"Errore salvataggio modello HDBSCAN: {e}")
+                    
+                    # 🔍 TRACING per debug errore
+                    trace_all(
+                        'cluster_intelligently', 
+                        'HDBSCAN_MODEL_SAVE_ERROR',
+                        called_from="cluster_intelligently",
+                        tenant_id=self.tenant.tenant_id,
+                        error_message=str(e),
+                        model_saved_successfully=False,
+                        embeddings_count=len(embeddings)
+                    )
+            else:
+                print(f"⚠️ [INTELLIGENT_CLUSTERER] Nessun tenant disponibile, salto salvataggio modello HDBSCAN")
+                
+                # 🔍 TRACING per debug
+                trace_all(
+                    'cluster_intelligently', 
+                    'HDBSCAN_MODEL_SAVE_SKIPPED',
+                    called_from="cluster_intelligently",
+                    reason="NO_TENANT",
+                    tenant_available=self.tenant is not None,
+                    tenant_id_available=self.tenant.tenant_id if self.tenant else None,
+                    model_saved_successfully=False
+                )
         
         print(f"   📈 Cluster HDBSCAN trovati: {n_clusters}")
         print(f"   🔍 Outliers: {n_outliers}")
@@ -609,6 +704,7 @@ class IntelligentIntentClusterer:
         )
         cluster_info = {}
         representative_texts = []
+        representative_session_ids = []  # 🆕 Memorizza session_ids dei rappresentanti
         cluster_to_rep_idx = {}
         
         # Per ogni cluster, seleziona rappresentanti diversificati (centro + periferia + diversità)
@@ -628,6 +724,11 @@ class IntelligentIntentClusterer:
                     rep_start_idx = len(representative_texts)
                     for rep_idx in selected_reps:
                         representative_texts.append(texts[rep_idx])
+                        # 🆕 Aggiungi anche il session_id corrispondente se disponibile
+                        if hasattr(self, '_session_ids') and self._session_ids and rep_idx < len(self._session_ids):
+                            representative_session_ids.append(self._session_ids[rep_idx])
+                        else:
+                            representative_session_ids.append(None)
                     
                     # Memorizza range di rappresentanti per questo cluster
                     cluster_to_rep_idx[cluster_id] = {
@@ -665,6 +766,8 @@ class IntelligentIntentClusterer:
         )
         
         if representative_texts:
+            # 🎯 OTTIMIZZAZIONE: Passa anche i session_ids dei rappresentanti per utilizzare la cache ML
+            self._current_representative_session_ids = representative_session_ids
             llm_results = self.extract_intents_with_llm(representative_texts)
             
             # 🆕 DEBUG: Log dettagliato per ogni rappresentante

@@ -1131,8 +1131,14 @@ class HDBSCANClusterer:
                 print("❌ Nessun modello da salvare")
                 return False
             
+            print(f"🔍 [DEBUG HDBSCAN] Iniziando salvataggio modello...")
+            print(f"   📁 Model path: {model_path}")
+            print(f"   🤖 Clusterer type: {type(self.clusterer)}")
+            print(f"   🏷️ Tenant ID: {tenant_id}")
+            
             # Crea directory se non esistente
             os.makedirs(os.path.dirname(model_path), exist_ok=True)
+            print(f"   ✅ Directory creata/verificata: {os.path.dirname(model_path)}")
             
             # Dati del modello da salvare
             model_data = {
@@ -1164,9 +1170,13 @@ class HDBSCANClusterer:
                 'gpu_used': getattr(self, 'gpu_used', False)
             }
             
+            print(f"   🗂️ Dati modello preparati, dimensione stimata: {len(str(model_data))} caratteri")
+            
             # Salva con pickle
+            print(f"   💾 Iniziando serializzazione pickle...")
             with open(model_path, 'wb') as f:
                 pickle.dump(model_data, f)
+            print(f"   ✅ Serializzazione completata")
             
             print(f"✅ Modello HDBSCAN salvato: {model_path}")
             print(f"   🏷️ Tenant: {tenant_id}")
@@ -1177,6 +1187,12 @@ class HDBSCANClusterer:
             
         except Exception as e:
             print(f"❌ Errore salvataggio modello: {str(e)}")
+            print(f"   🔍 Tipo errore: {type(e).__name__}")
+            print(f"   📁 Path modello: {model_path}")
+            print(f"   🤖 Clusterer type: {type(self.clusterer)}")
+            print(f"   🔧 Clusterer is None: {self.clusterer is None}")
+            import traceback
+            print(f"   📊 Stack trace: {traceback.format_exc()}")
             return False
     
     def load_model_for_incremental_prediction(self, model_path: str) -> bool:

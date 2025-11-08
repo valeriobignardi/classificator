@@ -67,6 +67,7 @@ RUN mkdir -p \
     /app/.cache/cuml \
     /app/.cache/numba \
     /app/.cache/cupy \
+    /app/.cache/matplotlib \
     /data/training && \
     chown -R appuser:appuser /app /data || true
 
@@ -89,7 +90,9 @@ ENV FLASK_APP=server.py \
     TRANSFORMERS_CACHE=/app/.cache/huggingface \
     TORCH_HOME=/app/.cache/torch \
     NUMBA_CACHE_DIR=/app/.cache/numba \
-    CUPY_CACHE_DIR=/app/.cache/cupy
+    CUPY_CACHE_DIR=/app/.cache/cupy \
+    MPLCONFIGDIR=/app/.cache/matplotlib \
+    MPLBACKEND=Agg
 
 # Script di avvio con controlli pre-esecuzione
 COPY --chown=appuser:appuser docker-entrypoint.sh /app/

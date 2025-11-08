@@ -1624,7 +1624,9 @@ class EndToEndPipeline:
                 llm_classifier=self.ensemble_classifier.llm_classifier if self.ensemble_classifier else None,
                 ensemble_classifier=self.ensemble_classifier  # 🆕 Passa ensemble completo
             )
-            cluster_labels, cluster_info = intelligent_clusterer.cluster_intelligently(testi, embeddings)
+            # 🎯 OTTIMIZZAZIONE: Passa ML features cache e session_ids al clustering intelligente se disponibili
+            ml_cache = getattr(self, '_ml_features_cache', {}) if hasattr(self, '_ml_features_cache') else {}
+            cluster_labels, cluster_info = intelligent_clusterer.cluster_intelligently(testi, embeddings, ml_cache, session_ids)
             cluster_labels = np.array(cluster_labels)
             
         # RIMOSSO: Intent-based clusterer con pattern rigidi (eliminato per approccio ML+LLM puro)
@@ -1736,12 +1738,29 @@ class EndToEndPipeline:
         
         # 🆕 SALVA MODELLO PER PREDIZIONI FUTURE
         model_path = f"models/hdbscan_{self.tenant_id}.pkl"
-        if hasattr(self.clusterer, 'save_model_for_incremental_prediction'):
+        print(f"🔍 [DEBUG SALVATAGGIO] Tentativo salvataggio modello HDBSCAN...")
+        print(f"   📁 Model path: {model_path}")
+        print(f"   🤖 Clusterer type: {type(self.clusterer)}")
+        print(f"   🔧 Clusterer has method: {hasattr(self.clusterer, 'save_model_for_incremental_prediction')}")
+        print(f"   🧠 Clusterer.clusterer type: {type(getattr(self.clusterer, 'clusterer', None))}")
+        print(f"   🔧 Clusterer.clusterer is None: {getattr(self.clusterer, 'clusterer', None) is None}")
+        
+        # ✅ CORREZIONE BUG: Verifica che il clusterer HDBSCAN interno sia stato effettivamente utilizzato
+        clusterer_internal = getattr(self.clusterer, 'clusterer', None)
+        
+        if hasattr(self.clusterer, 'save_model_for_incremental_prediction') and clusterer_internal is not None:
+            print(f"   ✅ Clusterer interno valido - procedo con salvataggio")
             saved = self.clusterer.save_model_for_incremental_prediction(model_path, self.tenant_id)
             if saved:
                 print(f"💾 Modello HDBSCAN salvato per predizioni incrementali: {model_path}")
             else:
-                print(f"⚠️ Impossibile salvare modello HDBSCAN")
+                print(f"⚠️ Errore durante salvataggio modello HDBSCAN")
+        else:
+            if not hasattr(self.clusterer, 'save_model_for_incremental_prediction'):
+                print(f"❌ Clusterer non ha il metodo save_model_for_incremental_prediction")
+            elif clusterer_internal is None:
+                print(f"ℹ️ Clustering non basato su HDBSCAN puro - skip salvataggio modello")
+                print(f"   💡 Probabilmente utilizzato IntelligentIntentClusterer - normale per training supervisionado")
         
         # 🚀 NUOVO RETURN: Lista di oggetti DocumentoProcessing invece di tuple
         print(f"\n🚀 [FASE 4: RETURN] Restituendo {len(documenti)} oggetti DocumentoProcessing unificati")

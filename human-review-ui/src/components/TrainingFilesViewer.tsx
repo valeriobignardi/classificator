@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Box, Typography, Select, MenuItem, FormControl, InputLabel, Paper, CircularProgress, Button, Stack, Alert } from '@mui/material';
+import { Box, Typography, Select, MenuItem, FormControl, InputLabel, Paper, CircularProgress, Button, Stack, Alert, Switch, FormControlLabel } from '@mui/material';
 import { useTenant } from '../contexts/TenantContext';
 import { apiService } from '../services/apiService';
 import { TrainingFileInfo } from '../types/TrainingFile';
@@ -11,11 +11,13 @@ const TrainingFilesViewer: React.FC = () => {
   const [files, setFiles] = useState<TrainingFileInfo[]>([]);
   const [selectedFile, setSelectedFile] = useState<string>('');
   const [content, setContent] = useState<string>('');
+  const [rawContent, setRawContent] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [limit, setLimit] = useState<number>(DEFAULT_LIMIT);
   const [truncated, setTruncated] = useState<boolean>(false);
   const [totalLines, setTotalLines] = useState<number>(0);
+  const [formatEnabled, setFormatEnabled] = useState<boolean>(true);
 
   const tenantId = selectedTenant?.tenant_id;
 
@@ -43,13 +45,54 @@ const TrainingFilesViewer: React.FC = () => {
     loadFiles();
   }, [tenantId]);
 
+  const formatTrainingFileContent = (rawContent: string): string => {
+    if (!rawContent) return rawContent;
+    
+    try {
+      // Divide il contenuto in righe (ogni riga è un JSON)
+      const lines = rawContent.split('\n').filter(line => line.trim());
+      const formattedLines: string[] = [];
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        try {
+          // Prova a parsare ogni riga come JSON
+          const jsonObj = JSON.parse(line);
+          
+          // Formatta il JSON con indentazione
+          let formattedJson = JSON.stringify(jsonObj, null, 2);
+          
+          // Converte i \n nei campi di testo in vere nuove righe
+          formattedJson = formattedJson.replace(/\\n/g, '\n');
+          
+          // Aggiungi header per ogni record
+          const recordHeader = `📝 Record ${i + 1}/${lines.length}`;
+          formattedLines.push(`${recordHeader}\n${formattedJson}`);
+        } catch {
+          // Se non è JSON valido, mantieni la riga originale con header
+          formattedLines.push(`📄 Riga ${i + 1}/${lines.length} (testo grezzo)\n${line}`);
+        }
+      }
+      
+      // Unisce le righe con separatore visivo
+      return formattedLines.join('\n\n' + '='.repeat(80) + '\n\n');
+    } catch {
+      // Se c'è un errore generale, ritorna il contenuto originale
+      return rawContent;
+    }
+  };
+
   const loadContent = async (fileName: string, customLimit?: number) => {
     if (!tenantId || !fileName) return;
     setLoading(true);
     setError(null);
     try {
       const res = await apiService.getTrainingFileContent(tenantId, fileName, customLimit ?? limit);
-      setContent(res.content || '');
+      const rawContentStr = res.content || '';
+      const formattedContent = formatTrainingFileContent(rawContentStr);
+      
+      setRawContent(rawContentStr);
+      setContent(formattedContent);
       setTruncated(res.truncated);
       setTotalLines(res.total_lines || 0);
       // Aggiorna limit effettivo (potrebbe essere diverso se passato)
@@ -105,6 +148,17 @@ const TrainingFilesViewer: React.FC = () => {
           </Select>
         </FormControl>
 
+        <FormControlLabel
+          control={
+            <Switch 
+              checked={formatEnabled} 
+              onChange={(e) => setFormatEnabled(e.target.checked)}
+              size="small"
+            />
+          }
+          label="Formatta JSON"
+        />
+
         {files.length > 1 && (
           <Typography variant="body2" color="text.secondary">
             Trovati {files.length} file. Scegline uno per visualizzarlo.
@@ -118,8 +172,26 @@ const TrainingFilesViewer: React.FC = () => {
           <Typography variant="body2" color="#aab2d5">Nessun file selezionato.</Typography>
         )}
         {!loading && selectedFile && (
-          <Box component="pre" sx={{ m: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace', maxHeight: 520, overflow: 'auto' }}>
-            {content || '(File vuoto)'}
+          <Box 
+            component="pre" 
+            sx={{ 
+              m: 0, 
+              whiteSpace: 'pre-wrap', 
+              wordBreak: 'break-word', 
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace', 
+              maxHeight: 520, 
+              overflow: 'auto',
+              fontSize: '0.85rem',
+              lineHeight: 1.4,
+              '& .json-separator': {
+                color: '#64748b',
+                borderTop: '1px solid #334155',
+                margin: '12px 0',
+                paddingTop: '12px'
+              }
+            }}
+          >
+            {(formatEnabled ? content : rawContent) || '(File vuoto)'}
           </Box>
         )}
       </Paper>

@@ -27,6 +27,7 @@ import mysql.connector
 from mysql.connector import Error
 from typing import Dict, List, Any
 from datetime import datetime
+from config_loader import load_config
 
 # Configurazione logging
 logging.basicConfig(
@@ -45,8 +46,7 @@ def load_config() -> Dict[str, Any]:
     config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
     
     try:
-        with open(config_path, 'r', encoding='utf-8') as file:
-            config = yaml.safe_load(file)
+        config = load_config()
         return config.get('tag_database', {})
     except Exception as e:
         logger.error(f"❌ Errore caricamento configurazione: {e}")

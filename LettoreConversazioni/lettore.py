@@ -2,6 +2,7 @@ import sys
 import os
 import yaml
 from typing import Optional
+from config_loader import load_config
 
 # Aggiunge il percorso della directory MySql al path per importare il connettore
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'MySql'))
@@ -44,8 +45,7 @@ class LettoreConversazioni:
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
         
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                self.config = yaml.safe_load(f)
+            self.config = load_config()
         except Exception as e:
             print(f"⚠️ Errore caricamento config.yaml: {e}")
             self.config = {}
@@ -237,6 +237,7 @@ si        """
         """
         import pandas as pd
         from datetime import datetime
+        from config_loader import load_config
         
         if data_fine is None:
             data_fine = datetime.now()

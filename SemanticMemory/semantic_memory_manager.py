@@ -36,6 +36,10 @@ from mongo_classification_reader import MongoClassificationReader
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
 from tenant import Tenant
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+from config_loader import load_config
+
+
 class SemanticMemoryManager:
     """
     Gestisce la memoria semantica delle classificazioni esistenti per
@@ -127,7 +131,7 @@ class SemanticMemoryManager:
         """Carica la configurazione dal file YAML"""
         try:
             with open(config_path, 'r') as f:
-                return yaml.safe_load(f)
+                return load_config()
         except Exception as e:
             print(f"⚠️ Errore caricamento config: {e}. Uso valori default.")
             return {}

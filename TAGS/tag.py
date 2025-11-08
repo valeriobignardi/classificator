@@ -11,6 +11,10 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from TagDatabase.tag_database_connector import TagDatabaseConnector
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+from config_loader import load_config
+
+
 # Import Tenant class per gestione centralizzata tenant
 try:
     from Utils.tenant import Tenant
@@ -46,7 +50,7 @@ class IntelligentTagSuggestionManager:
         """Carica i parametri di configurazione dal file config.yaml"""
         try:
             with open(config_path, 'r') as file:
-                return yaml.safe_load(file)
+                return load_config()
         except FileNotFoundError:
             raise Exception(f"File di configurazione non trovato: {config_path}")
         except yaml.YAMLError as e:

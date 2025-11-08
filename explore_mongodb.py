@@ -19,12 +19,12 @@ import pymongo
 from pymongo import MongoClient
 from typing import Dict, List, Any
 import json
+from config_loader import load_config
 
 def load_config() -> Dict[str, Any]:
     """Carica configurazione da config.yaml"""
     config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-    with open(config_path, 'r', encoding='utf-8') as file:
-        return yaml.safe_load(file)
+    return load_config()
 
 def explore_mongodb():
     """Esplora MongoDB per trovare dove sono i dati"""

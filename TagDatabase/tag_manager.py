@@ -1,8 +1,11 @@
 import sys
 import os
-import yaml
 import mysql.connector
 from mysql.connector import Error
+
+# Import config_loader
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from config_loader import load_config
 
 class TagDatabaseManager:
     """
@@ -14,23 +17,14 @@ class TagDatabaseManager:
         Inizializza il gestore del database dei tag
         
         Args:
-            config_path (str): Percorso al file di configurazione
+            config_path (str): Percorso al file di configurazione (deprecato, usa config_loader)
         """
-        if config_path is None:
-            config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
-        
-        self.config = self._load_config(config_path)
+        self.config = load_config()
         self.connection = None
         
     def _load_config(self, config_path):
-        """Carica i parametri di configurazione dal file config.yaml"""
-        try:
-            with open(config_path, 'r') as file:
-                return yaml.safe_load(file)
-        except FileNotFoundError:
-            raise Exception(f"File di configurazione non trovato: {config_path}")
-        except yaml.YAMLError as e:
-            raise Exception(f"Errore nel parsing del file YAML: {e}")
+        """DEPRECATO: Usa config_loader invece"""
+        return load_config()
     
     def connetti(self):
         """Stabilisce la connessione al database MySQL locale"""

@@ -12,6 +12,13 @@ import json
 from datetime import datetime
 from typing import Any
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config_loader import load_config
+
+
 
 def trace_all(function_name: str, action: str = "ENTER", called_from: str = None, **kwargs: Any) -> None:
     """
@@ -38,8 +45,7 @@ def trace_all(function_name: str, action: str = "ENTER", called_from: str = None
         if not os.path.exists(config_path):
             return  # Tracing disabilitato se config non esiste
             
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
+        config = load_config()
             
         tracing_config = config.get('tracing', {})
         if not tracing_config.get('enabled', False):

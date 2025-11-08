@@ -28,6 +28,10 @@ from tenant import Tenant
 from Utils.numpy_serialization import convert_numpy_types
 import json
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+from config_loader import load_config
+
+
 # Import EmbeddingManager per gestione dinamica embedder
 try:
     from EmbeddingEngine.embedding_manager import embedding_manager
@@ -148,8 +152,7 @@ class QualityGateEngine:
                 import yaml
                 import os
                 config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
-                with open(config_path, 'r', encoding='utf-8') as file:
-                    config = yaml.safe_load(file)
+                config = load_config()
             except Exception as e:
                 print(f"⚠️ Impossibile caricare config.yaml: {e}. Uso valori di default.")
                 config = {}

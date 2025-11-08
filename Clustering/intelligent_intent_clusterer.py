@@ -19,6 +19,10 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
 from tenant import Tenant
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+from config_loader import load_config
+
+
 # Import trace_all per debugging
 try:
     from Utils.tracing import trace_all
@@ -94,16 +98,14 @@ class IntelligentIntentClusterer:
                 
                 if os.path.exists(tenant_config_file):
                     print(f"🗂️  [DEBUG] Caricamento config tenant-specific: {tenant_config_file}")
-                    with open(tenant_config_file, 'r', encoding='utf-8') as file:
-                        tenant_config = yaml.safe_load(file)
-                        tenant_clustering_config = tenant_config.get('clustering_parameters', {})
-                        print(f"🗂️  [DEBUG] Config tenant caricato: {list(tenant_clustering_config.keys())}")
+                    tenant_config = load_config()
+                    tenant_clustering_config = tenant_config.get('clustering_parameters', {})
+                    print(f"🗂️  [DEBUG] Config tenant caricato: {list(tenant_clustering_config.keys())}")
                 else:
                     print(f"🗂️  [DEBUG] Config tenant non trovato: {tenant_config_file}")
             
             # Carica config globale
-            with open(self.config_path, 'r', encoding='utf-8') as file:
-                config = yaml.safe_load(file)
+            config = load_config()
 
             intelligent_config = config.get('intelligent_clustering', {})
             self.enabled = intelligent_config.get('enabled', True)

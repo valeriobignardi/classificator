@@ -8,6 +8,7 @@ from datetime import datetime
 # Utilities and connectors from the project
 from Utils.tenant import Tenant
 from TagDatabase.tag_database_connector import TagDatabaseConnector
+from config_loader import load_config
 
 
 class RemoteTagSyncService:
@@ -26,8 +27,7 @@ class RemoteTagSyncService:
         if config_path is None:
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
         self.config_path = config_path
-        with open(self.config_path, 'r', encoding='utf-8') as f:
-            self.config = yaml.safe_load(f)
+        self.config = load_config()
 
         if 'database' not in self.config:
             raise RuntimeError("Configurazione 'database' mancante in config.yaml")

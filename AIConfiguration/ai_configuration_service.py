@@ -31,6 +31,10 @@ import requests
 # Import del servizio database (per sostituire config.yaml)
 from database_ai_config_service import DatabaseAIConfigService
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+from config_loader import load_config
+
+
 # NOTA: embedding_factory viene importato dinamicamente per evitare circular import
 
 
@@ -118,8 +122,7 @@ class AIConfigurationService:
             Dizionario configurazione
         """
         try:
-            with open(self.config_path, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f)
+            config = load_config()
             return config
         except Exception as e:
             self.logger.error(f"Errore caricamento config: {e}")

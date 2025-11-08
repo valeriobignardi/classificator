@@ -30,6 +30,7 @@ from pymongo import MongoClient
 from datetime import datetime
 from collections import defaultdict
 import json
+from config_loader import load_config
 
 # Aggiungi path progetto
 sys.path.append('/home/ubuntu/classificatore')
@@ -81,8 +82,7 @@ class HumanitasMongoAnalyzer:
         """
         try:
             config_path = '/home/ubuntu/classificatore/config.yaml'
-            with open(config_path, 'r') as f:
-                config = yaml.safe_load(f)
+            config = load_config()
                 return config.get('mongodb', {})
         except Exception as e:
             print(f"❌ Errore caricamento config: {e}")

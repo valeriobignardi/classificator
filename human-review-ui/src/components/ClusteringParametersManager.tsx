@@ -641,7 +641,7 @@ const ClusteringParametersManager: React.FC = () => {
             min={param.min}
             max={param.max}
             step={param.step || (param.max < 1 ? 0.01 : 1)}
-            onChange={(_, value) => updateParameter(paramName, value as number)}
+            onChange={(_, value) => updateParameter(paramName, Array.isArray(value) ? value[0] : value)}
             valueLabelDisplay="auto"
             color={hasError ? "error" : "primary"}
           />
@@ -966,7 +966,7 @@ const ClusteringParametersManager: React.FC = () => {
                           </Typography>
                           <Slider
                             value={parameters?.umap_n_neighbors?.value as number || 15}
-                            onChange={(_, value) => updateParameter('umap_n_neighbors', value)}
+                            onChange={(_, value) => updateParameter('umap_n_neighbors', Array.isArray(value) ? value[0] : value)}
                             min={5}
                             max={100}
                             step={5}
@@ -1002,7 +1002,7 @@ const ClusteringParametersManager: React.FC = () => {
                           </Typography>
                           <Slider
                             value={parameters?.umap_min_dist?.value as number || 0.1}
-                            onChange={(_, value) => updateParameter('umap_min_dist', value)}
+                            onChange={(_, value) => updateParameter('umap_min_dist', Array.isArray(value) ? value[0] : value)}
                             min={0.0}
                             max={1.0}
                             step={0.05}
@@ -1072,7 +1072,7 @@ const ClusteringParametersManager: React.FC = () => {
                           </Typography>
                           <Slider
                             value={parameters?.umap_n_components?.value as number || 50}
-                            onChange={(_, value) => updateParameter('umap_n_components', value)}
+                            onChange={(_, value) => updateParameter('umap_n_components', Array.isArray(value) ? value[0] : value)}
                             min={2}
                             max={100}
                             step={5}

@@ -68,6 +68,10 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Cluste
 from end_to_end_pipeline import EndToEndPipeline
 from hdbscan_clusterer import HDBSCANClusterer
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+from config_loader import load_config
+
+
 
 class ClusteringTestService:
     """
@@ -332,7 +336,7 @@ class ClusteringTestService:
                 if os.path.exists(potential_uuid_file):
                     print(f"✅ [DEBUG] Trovato file config UUID: {potential_uuid_file}")
                     with open(potential_uuid_file, 'r', encoding='utf-8') as file:
-                        tenant_config = yaml.safe_load(file)
+                        tenant_config = load_config()
                         config_params = tenant_config.get('clustering_parameters', {})
                         print(f"📋 [DEBUG] Parametri caricati da UUID: {list(config_params.keys())}")
                         print(f"�️  [DEBUG] UMAP nel config UUID: use_umap = {config_params.get('use_umap', 'NON_TROVATO')}")
@@ -347,7 +351,7 @@ class ClusteringTestService:
             if os.path.exists(tenant_slug_file):
                 print(f"✅ [DEBUG] Trovato file config slug: {tenant_slug_file}")
                 with open(tenant_slug_file, 'r', encoding='utf-8') as file:
-                    tenant_config = yaml.safe_load(file)
+                    tenant_config = load_config()
                     config_params = tenant_config.get('clustering_parameters', {})
                     print(f"📋 [DEBUG] Parametri caricati da slug: {list(config_params.keys())}")
                     print(f"🗂️  [DEBUG] UMAP nel config slug: use_umap = {config_params.get('use_umap', 'NON_TROVATO')}")
@@ -355,11 +359,10 @@ class ClusteringTestService:
             
             # Fallback: configurazione globale
             print(f"📁 [DEBUG] Fallback a config globale per tenant {tenant_id}")
-            with open(self.config_path, 'r', encoding='utf-8') as file:
-                config = yaml.safe_load(file)
-                global_params = config.get('clustering', {})
-                print(f"📋 [DEBUG] Parametri globali: {list(global_params.keys())}")
-                return global_params
+            config = load_config()
+            global_params = config.get('clustering', {})
+            print(f"📋 [DEBUG] Parametri globali: {list(global_params.keys())}")
+            return global_params
                 
         except Exception as e:
             print(f"⚠️ Errore caricamento config clustering: {e}")

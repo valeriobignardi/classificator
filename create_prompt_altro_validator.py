@@ -13,6 +13,7 @@ import yaml
 import mysql.connector
 from mysql.connector import Error
 from datetime import datetime
+from config_loader import load_config
 
 def load_config():
     """
@@ -23,8 +24,7 @@ def load_config():
     """
     config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
     try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
+    return load_config()
     except Exception as e:
         raise Exception(f"Errore caricamento config: {e}")
 

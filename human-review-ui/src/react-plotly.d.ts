@@ -15,6 +15,9 @@ declare module 'react-plotly.js' {
     onUpdate?: (figure: Readonly<{data: Plotly.PlotData[], layout: Partial<Plotly.Layout>}>, graphDiv: HTMLElement) => void;
     onPurge?: (figure: Readonly<{data: Plotly.PlotData[], layout: Partial<Plotly.Layout>}>, graphDiv: HTMLElement) => void;
     onError?: (err: Readonly<{data: Plotly.PlotData[], layout: Partial<Plotly.Layout>}>) => void;
+    // Eventi aggiuntivi supportati da Plotly, utili per interazioni con la legenda
+    onLegendClick?: (event: any) => boolean | void;
+    onLegendDoubleClick?: (event: any) => boolean | void;
     divId?: string;
     className?: string;
     style?: React.CSSProperties;

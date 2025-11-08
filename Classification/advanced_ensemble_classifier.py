@@ -34,6 +34,13 @@ import joblib
 # Import della funzione centralizzata per conversione NumPy
 from Utils.numpy_serialization import convert_numpy_types
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config_loader import load_config
+
+
 # Import per debugging ML
 
 # Import della funzione di tracing centralizzata
@@ -1649,8 +1656,7 @@ class AdvancedEnsembleClassifier:
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
             
             if os.path.exists(config_path):
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    config = yaml.safe_load(f)
+                config = load_config()
                     
                 # Estrai configurazione disaccordi
                 disagreement_config = config.get('ensemble_disagreement', {})

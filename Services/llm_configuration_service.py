@@ -35,6 +35,10 @@ from datetime import datetime
 import threading
 from Classification.intelligent_classifier import IntelligentClassifier
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+from config_loader import load_config
+
+
 # Import DatabaseAIConfigService per persistenza database
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 try:
@@ -119,7 +123,7 @@ class LLMConfigurationService:
                 # Ricarica solo se file modificato
                 if file_timestamp > self.cache_timestamp:
                     with open(self.config_path, 'r', encoding='utf-8') as file:
-                        self.config_cache = yaml.safe_load(file)
+                        self.config_cache = load_config()
                     
                     self.cache_timestamp = file_timestamp
                     print(f"🔄 [LLMConfigService] Configurazione ricaricata")

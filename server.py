@@ -22,6 +22,9 @@ import uuid
 import time
 from collections import defaultdict
 
+# Config loader centralizzato (carica .env e sostituisce variabili ambiente)
+from config_loader import load_config
+
 # Import della classe Tenant
 sys.path.append(os.path.join(os.path.dirname(__file__), 'Utils'))
 from tenant import Tenant
@@ -70,18 +73,14 @@ def init_soglie_table():
     Scopo: Memorizzare le soglie Review Queue + parametri HDBSCAN/UMAP per ogni tenant
     Tracciabilità: ID progressivo per storico modifiche
     
-    Ultima modifica: 03/09/2025 - Valerio Bignardi
+    Ultima modifica: 08/11/2025 - Valerio Bignardi
     """
     try:
         import mysql.connector
         from mysql.connector import Error
-        import yaml
         
-        # Carica configurazione database
-        config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
-        
+        # Carica configurazione database con config_loader (gestisce .env automaticamente)
+        config = load_config()
         db_config = config['tag_database']
         
         # Connessione al database
@@ -506,6 +505,10 @@ class AutoClassificationScheduler:
         self.max_tenants_per_cycle: Optional[int] = None
         self.last_results_by_tenant: Dict[str, Dict[str, Any]] = {}
         self.total_cycles = 0
+        # Cache configurazioni per-tenant (se disponibili su DB)
+        self._per_tenant_enabled = True
+        self._last_configs_refresh_at: Optional[float] = None
+        self._configs_cache: Dict[str, Dict[str, Any]] = {}
         self.load_config()
 
     def load_config(self):
@@ -513,7 +516,7 @@ class AutoClassificationScheduler:
         try:
             cfg_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
             with open(cfg_path, 'r', encoding='utf-8') as f:
-                cfg = yaml.safe_load(f) or {}
+                cfg = load_config() or {}
             sched = (cfg or {}).get('scheduler', {}) or {}
             with self._state_lock:
                 self.enabled = bool(sched.get('enabled', False))
@@ -581,37 +584,130 @@ class AutoClassificationScheduler:
                 'duration_seconds': round(time.time() - start_ts, 3)
             }
 
+    def _refresh_configs_from_db(self):
+        """Aggiorna cache della configurazione per-tenant dal DB scheduler_configs."""
+        try:
+            from Database.scheduler_config_db import SchedulerConfigDB
+        except Exception as e:
+            print(f"⚠️ [SCHEDULER] Per-tenant config non disponibile: {e}")
+            with self._state_lock:
+                self._per_tenant_enabled = False
+            return
+
+        try:
+            db = SchedulerConfigDB()
+            rows = db.list_configs()
+            db.close()
+            cache: Dict[str, Dict[str, Any]] = {}
+            for r in rows:
+                tenant_id = r.get('tenant_id') or ''
+                if not tenant_id:
+                    continue
+                cache[tenant_id] = {
+                    'tenant_id': tenant_id,
+                    'tenant_slug': r.get('tenant_slug') or tenant_id,
+                    'enabled': bool(r.get('enabled')),
+                    'frequency_unit': (r.get('frequency_unit') or 'hours').lower(),
+                    'frequency_value': int(r.get('frequency_value') or 24),
+                    'start_at': r.get('start_at'),
+                    'next_run_at': r.get('next_run_at'),
+                    'last_run_at': r.get('last_run_at'),
+                }
+            with self._state_lock:
+                self._configs_cache = cache
+                self._last_configs_refresh_at = time.time()
+                self._per_tenant_enabled = True
+        except Exception as e:
+            print(f"⚠️ [SCHEDULER] Errore refresh configurazioni: {e}")
+            with self._state_lock:
+                self._per_tenant_enabled = False
+
     def _run_loop(self):
         print("🟢 [SCHEDULER] Loop avviato")
         while not self._stop_event.is_set():
             cycle_started_at = time.time()
             with self._state_lock:
                 self._last_cycle_started_at = cycle_started_at
-            tenants = self._get_active_tenants()
-            if tenants:
-                print(f"⏱️ [SCHEDULER] Avvio ciclo su {len(tenants)} tenant")
-            else:
-                print("⏱️ [SCHEDULER] Nessun tenant da processare")
 
+            # Aggiorna configurazioni per-tenant (se disponibili)
+            self._refresh_configs_from_db()
             processed = 0
-            for tenant in tenants:
-                if self._stop_event.is_set():
-                    break
-                summary = self._classify_for_tenant(tenant)
-                with self._state_lock:
-                    self.last_results_by_tenant[tenant] = summary
-                processed += 1
-                with self._state_lock:
-                    if self.max_tenants_per_cycle and processed >= self.max_tenants_per_cycle:
-                        print(f"⏸️ [SCHEDULER] Raggiunto limite per ciclo ({self.max_tenants_per_cycle})")
+            now_dt = datetime.now()
+
+            if self._per_tenant_enabled and self._configs_cache:
+                due_items: List[Tuple[str, Dict[str, Any]]] = []
+                for cfg in self._configs_cache.values():
+                    if not cfg.get('enabled'):
+                        continue
+                    next_run = cfg.get('next_run_at')
+                    start_at = cfg.get('start_at')
+
+                    is_due = False
+                    try:
+                        if next_run:
+                            next_run_dt = next_run if not isinstance(next_run, str) else datetime.fromisoformat(next_run)
+                            is_due = now_dt >= next_run_dt
+                        elif start_at:
+                            start_dt = start_at if not isinstance(start_at, str) else datetime.fromisoformat(start_at)
+                            is_due = now_dt >= start_dt
+                        else:
+                            is_due = True
+                    except Exception:
+                        is_due = True
+
+                    if is_due:
+                        due_items.append((cfg['tenant_id'], cfg))
+
+                if due_items:
+                    print(f"⏱️ [SCHEDULER] Esecuzione pianificata per {len(due_items)} tenant")
+                else:
+                    print("⏱️ [SCHEDULER] Nessun tenant pianificato in questo ciclo")
+
+                for tenant_id, cfg in due_items:
+                    if self._stop_event.is_set():
                         break
+                    identifier = cfg.get('tenant_slug') or tenant_id
+                    summary = self._classify_for_tenant(identifier)
+                    with self._state_lock:
+                        key = cfg.get('tenant_slug') or tenant_id
+                        self.last_results_by_tenant[key] = summary
+                    try:
+                        from Database.scheduler_config_db import SchedulerConfigDB
+                        db = SchedulerConfigDB()
+                        db.mark_run_completed(tenant_id, cfg.get('frequency_unit') or 'hours', int(cfg.get('frequency_value') or 24))
+                        db.close()
+                    except Exception as e:
+                        print(f"⚠️ [SCHEDULER] Errore aggiornando next_run per {tenant_id}: {e}")
+                    processed += 1
+                    with self._state_lock:
+                        if self.max_tenants_per_cycle and processed >= self.max_tenants_per_cycle:
+                            print(f"⏸️ [SCHEDULER] Raggiunto limite per ciclo ({self.max_tenants_per_cycle})")
+                            break
+            else:
+                # Fallback: usa lista tenants globale
+                tenants = self._get_active_tenants()
+                if tenants:
+                    print(f"⏱️ [SCHEDULER] Avvio ciclo su {len(tenants)} tenant (fallback)")
+                else:
+                    print("⏱️ [SCHEDULER] Nessun tenant da processare (fallback)")
+                for tenant in tenants:
+                    if self._stop_event.is_set():
+                        break
+                    summary = self._classify_for_tenant(tenant)
+                    with self._state_lock:
+                        self.last_results_by_tenant[tenant] = summary
+                    processed += 1
+                    with self._state_lock:
+                        if self.max_tenants_per_cycle and processed >= self.max_tenants_per_cycle:
+                            print(f"⏸️ [SCHEDULER] Raggiunto limite per ciclo ({self.max_tenants_per_cycle})")
+                            break
 
             with self._state_lock:
                 self.total_cycles += 1
 
-            # Attesa fino al prossimo ciclo
+            # Attesa fino al prossimo ciclo (tick)
             wait_seconds = self.interval_seconds
-            for _ in range(wait_seconds):
+            for _ in range(int(wait_seconds)):
                 if self._stop_event.is_set():
                     break
                 time.sleep(1)
@@ -655,6 +751,7 @@ class AutoClassificationScheduler:
                 'last_cycle_started_at': self._last_cycle_started_at,
                 'total_cycles': self.total_cycles,
                 'last_results_by_tenant': self.last_results_by_tenant,
+                'per_tenant_enabled': self._per_tenant_enabled,
             }
 
 class ClassificationService:
@@ -1638,6 +1735,71 @@ def scheduler_run_now(client_name: str):
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+# ================================
+# API CONFIGURAZIONE SCHEDULER PER-TENANT
+# ================================
+@app.route('/api/scheduler/config/<tenant_identifier>', methods=['GET'])
+def get_scheduler_config(tenant_identifier: str):
+    try:
+        tenant = resolve_tenant_from_identifier(tenant_identifier)
+        from Database.scheduler_config_db import SchedulerConfigDB
+        db = SchedulerConfigDB()
+        cfg = db.get_config(tenant.tenant_id, tenant.tenant_slug)
+        db.close()
+        return jsonify({'success': True, 'config': sanitize_for_json(cfg)}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/scheduler/config/<tenant_identifier>', methods=['POST'])
+def set_scheduler_config(tenant_identifier: str):
+    try:
+        tenant = resolve_tenant_from_identifier(tenant_identifier)
+        data = request.get_json(silent=True) or {}
+        enabled = bool(data.get('enabled', False))
+        frequency_unit = (data.get('frequency_unit') or 'hours').lower()
+        frequency_value = int(data.get('frequency_value') or 24)
+        start_at = data.get('start_at')  # ISO string or None
+
+        # Validazione semplice
+        if frequency_unit not in ['minutes', 'hours', 'days', 'weeks']:
+            return jsonify({'success': False, 'error': 'frequency_unit non valido'}), 400
+        if frequency_value <= 0:
+            return jsonify({'success': False, 'error': 'frequency_value deve essere > 0'}), 400
+
+        from Database.scheduler_config_db import SchedulerConfigDB
+        db = SchedulerConfigDB()
+        saved = db.upsert_config(
+            tenant_id=tenant.tenant_id,
+            tenant_slug=tenant.tenant_slug,
+            enabled=enabled,
+            frequency_unit=frequency_unit,
+            frequency_value=frequency_value,
+            start_at_iso=start_at
+        )
+        db.close()
+        # Se abilitato, assicura che lo scheduler sia in esecuzione
+        try:
+            if enabled:
+                auto_scheduler.start()
+        except Exception:
+            pass
+        return jsonify({'success': True, 'config': sanitize_for_json(saved)}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/scheduler/config', methods=['GET'])
+def list_scheduler_configs():
+    try:
+        from Database.scheduler_config_db import SchedulerConfigDB
+        db = SchedulerConfigDB()
+        rows = db.list_configs()
+        db.close()
+        return jsonify({'success': True, 'configs': sanitize_for_json(rows)}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check del servizio"""
@@ -2016,8 +2178,7 @@ def supervised_training(client_name: str):
             
             # Carica configurazione database
             config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f)
+            config = load_config()
             
             db_config = config['tag_database']
             
@@ -3446,12 +3607,9 @@ def get_label_statistics(tenant_name: str):
         
         # 🔄 NUOVA LOGICA: Connessione diretta a MongoDB
         from pymongo import MongoClient
-        import yaml
         
-        # Carica configurazione MongoDB
-        with open('config.yaml', 'r') as f:
-            config = yaml.safe_load(f)
-        
+        # Carica configurazione MongoDB con config_loader
+        config = load_config()
         mongo_url = config.get('mongodb', {}).get('url', 'mongodb://localhost:27017')
         mongo_db_name = config.get('mongodb', {}).get('database', 'classificazioni')
         
@@ -3654,8 +3812,7 @@ def get_ui_config():
         import yaml
         
         config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-        with open(config_path, 'r') as file:
-            config = yaml.safe_load(file)
+        config = load_config()
         
         ui_config = config.get('ui_config', {})
         pipeline_config = config.get('pipeline', {})
@@ -6292,8 +6449,7 @@ def get_review_queue_thresholds_from_db(tenant_id):
     try:
         # Leggi configurazione database da config.yaml
         config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-        with open(config_path, 'r', encoding='utf-8') as file:
-            config = yaml.safe_load(file)
+        config = load_config()
         
         db_config = config['tag_database']
         
@@ -6420,8 +6576,7 @@ def get_clustering_parameters(tenant_id):
                 # 📁 STEP 3: Nessun parametro nel database → fallback a config.yaml
                 print(f"⚠️ [CLUSTERING API] Nessun parametro in DB per tenant {tenant_id} → uso config.yaml")
                 config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-                with open(config_path, 'r', encoding='utf-8') as file:
-                    config = yaml.safe_load(file)
+                config = load_config()
                 
                 clustering_config = config.get('clustering', {})
                 config_status = "default"
@@ -7020,9 +7175,8 @@ def update_clustering_parameters(tenant_id):
         # Backup configurazione precedente se esiste
         if os.path.exists(tenant_config_file):
             try:
-                with open(tenant_config_file, 'r', encoding='utf-8') as f:
-                    old_config = yaml.safe_load(f)
-                    tenant_clustering_config['previous_config_backup'] = old_config.get('clustering_parameters', {})
+                old_config = load_config()
+                tenant_clustering_config['previous_config_backup'] = old_config.get('clustering_parameters', {})
             except:
                 pass
         
@@ -7034,8 +7188,7 @@ def update_clustering_parameters(tenant_id):
             
             # Carica configurazione database
             config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-            with open(config_path, 'r', encoding='utf-8') as file:
-                config = yaml.safe_load(file)
+            config = load_config()
             
             db_config = config.get('tag_database', {})
             
@@ -7224,8 +7377,7 @@ def reset_clustering_parameters(tenant_id):
         
         # Carica parametri default da config.yaml
         config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-        with open(config_path, 'r', encoding='utf-8') as file:
-            config = yaml.safe_load(file)
+        config = load_config()
         
         default_params = config.get('clustering', {})
         
@@ -7592,21 +7744,57 @@ def get_clustering_statistics(tenant_id):
         print(f"✅ [API] Trovate {len(classifications)} classificazioni")
         
         # 4. Estrai dati per analisi
+        from collections import defaultdict
+
         session_texts = []
         cluster_labels = []
         final_predictions = []
         session_ids = []
+        cluster_display_candidates = defaultdict(list)
         
         for classification in classifications:
-            if 'testo_completo' in classification and 'cluster_label' in classification:
-                session_texts.append(classification['testo_completo'])
-                cluster_labels.append(classification.get('cluster_label', -1))
-                final_predictions.append({
-                    'prediction': classification.get('predicted_label', 'unknown'),
-                    'confidence': classification.get('confidence', 0.0),
-                    'method': classification.get('classification_method', 'unknown')
-                })
-                session_ids.append(classification.get('session_id', f'session_{len(session_ids)}'))
+            testo = classification.get('testo_completo')
+            if not testo:
+                continue
+
+            cluster_id_value = classification.get('cluster_label', -1)
+            if isinstance(cluster_id_value, str):
+                cluster_id_value_str = cluster_id_value.strip()
+                if cluster_id_value_str.lower().startswith('outlier'):
+                    cluster_id_numeric = -1
+                else:
+                    try:
+                        cluster_id_numeric = int(cluster_id_value_str)
+                    except ValueError:
+                        import zlib
+                        cluster_id_numeric = int(zlib.crc32(cluster_id_value_str.encode('utf-8')))
+            else:
+                try:
+                    cluster_id_numeric = int(cluster_id_value)
+                except (TypeError, ValueError):
+                    cluster_id_numeric = -1
+
+            session_id = classification.get('session_id', f'session_{len(session_ids)}')
+            final_label = classification.get('predicted_label', 'unknown') or 'unknown'
+            confidence_value = classification.get('confidence', 0.0)
+            method_value = classification.get('classification_method', 'unknown') or 'unknown'
+
+            session_texts.append(testo)
+            cluster_labels.append(cluster_id_numeric)
+            final_predictions.append({
+                'prediction': final_label,
+                'confidence': confidence_value,
+                'method': method_value,
+                'cluster_id': cluster_id_numeric,
+                'session_id': session_id
+            })
+            session_ids.append(session_id)
+
+            friendly_alias = classification.get('cluster_label_display') or classification.get('cluster_label_raw')
+            if friendly_alias:
+                cluster_display_candidates[cluster_id_numeric].append(str(friendly_alias))
+            if final_label:
+                cluster_display_candidates[cluster_id_numeric].append(str(final_label))
         
         if len(session_texts) < 10:
             return jsonify({
@@ -7654,7 +7842,21 @@ def get_clustering_statistics(tenant_id):
                     'size': len(cluster_predictions),
                     'label_distribution': {label: cluster_predictions.count(label) for label in set(cluster_predictions)}
                 }
-        
+
+        cluster_display_labels = {}
+        for cluster_id in unique_clusters:
+            if cluster_id == -1:
+                cluster_display_labels[cluster_id] = 'Outliers'
+                continue
+
+            purity_info = cluster_purity.get(cluster_id)
+            if purity_info and purity_info.get('most_common_label'):
+                cluster_display_labels[cluster_id] = purity_info['most_common_label']
+            elif cluster_display_candidates.get(cluster_id):
+                cluster_display_labels[cluster_id] = cluster_display_candidates[cluster_id][0]
+            else:
+                cluster_display_labels[cluster_id] = f'Cluster {cluster_id}'
+
         result_data = {
             'success': True,
             'tenant_id': tenant.tenant_id,
@@ -7679,7 +7881,8 @@ def get_clustering_statistics(tenant_id):
             'cluster_vs_labels': {
                 'cluster_purity': cluster_purity,
                 'avg_purity': round(np.mean([cp['purity'] for cp in cluster_purity.values()]), 3) if cluster_purity else 0.0
-            }
+            },
+            'cluster_display_labels': cluster_display_labels
         }
         
         # 7. Aggiungi dati visualizzazione se richiesti
@@ -7716,15 +7919,35 @@ def get_clustering_statistics(tenant_id):
                     embeddings, sample_cluster_labels, sample_texts, sample_session_ids
                 )
                 
-                # Aggiungi info etichette finali ai punti
-                for i, point in enumerate(visualization_data.get('points', [])):
-                    if i < len(sample_predictions):
+                # Aggiungi info etichette finali ai punti e aggiorna label cluster
+                prediction_lookup = {pred['session_id']: pred for pred in final_predictions}
+
+                for point in visualization_data.get('points', []):
+                    cid = int(point.get('cluster_id', -1))
+                    display_label = cluster_display_labels.get(cid, point.get('cluster_label'))
+                    point['cluster_label'] = display_label
+
+                    pred_info = prediction_lookup.get(point.get('session_id'))
+                    if pred_info:
                         point.update({
-                            'final_prediction': sample_predictions[i]['prediction'],
-                            'prediction_confidence': sample_predictions[i]['confidence'],
-                            'classification_method': sample_predictions[i]['method']
+                            'final_prediction': pred_info['prediction'],
+                            'prediction_confidence': pred_info['confidence'],
+                            'classification_method': pred_info['method']
                         })
-                
+
+                # Aggiorna info cluster con le etichette finali predominanti
+                if 'cluster_info' in visualization_data:
+                    for cid, info in visualization_data['cluster_info'].items():
+                        info['label'] = cluster_display_labels.get(cid, info.get('label'))
+
+                total_points = visualization_data.get('total_points', len(visualization_data.get('points', [])))
+                visualization_data['statistics'] = {
+                    'total_points': total_points,
+                    'n_clusters': n_clusters,
+                    'n_outliers': n_outliers,
+                    'dimensions': visualization_data.get('dimensions', {}).get('original', 0)
+                }
+
                 result_data['visualization_data'] = visualization_data
                 print("✅ [API] Dati visualizzazione generati con successo")
                 
@@ -8270,8 +8493,7 @@ def get_review_queue_thresholds(tenant_id):
         
         # Carica configurazione database
         config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
+        config = load_config()
         
         db_config = config['tag_database']
         
@@ -8410,8 +8632,7 @@ def get_review_queue_thresholds(tenant_id):
         # Fallback completo a config.yaml in caso di errore database
         try:
             config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f)
+            config = load_config()
             
             clustering_base_config = config.get('clustering', {})
             bertopic_config = config.get('bertopic', {})
@@ -8575,8 +8796,7 @@ def update_review_queue_thresholds(tenant_id):
         
         # Carica configurazione database
         config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
+        config = load_config()
         
         db_config = config['tag_database']
         

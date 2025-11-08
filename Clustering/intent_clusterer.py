@@ -9,6 +9,10 @@ import os
 from typing import Dict, List, Tuple, Set
 from collections import defaultdict, Counter
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+from config_loader import load_config
+
+
 class IntentBasedClusterer:
     """
     Clusterer che prima identifica intent specifici, poi raggruppa semanticamente.
@@ -31,8 +35,7 @@ class IntentBasedClusterer:
     def load_intent_patterns(self):
         """Carica i pattern di intent dal file di configurazione"""
         try:
-            with open(self.config_path, 'r', encoding='utf-8') as file:
-                config = yaml.safe_load(file)
+            config = load_config()
             
             intent_config = config.get('intent_clustering', {})
             self.enabled = intent_config.get('enabled', True)

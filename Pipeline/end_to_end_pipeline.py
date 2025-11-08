@@ -66,6 +66,10 @@ from mongo_classification_reader import MongoClassificationReader
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
 from tenant_config_helper import TenantConfigHelper
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+from config_loader import load_config
+
+
 # Import BERTopic provider
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'TopicModeling'))
 try:
@@ -122,8 +126,7 @@ def get_supervised_training_params_from_db(tenant_id: str) -> Dict[str, Any]:
     try:
         # Leggi configurazione database da config.yaml
         config_path = os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
-        with open(config_path, 'r', encoding='utf-8') as file:
-            config = yaml.safe_load(file)
+        config = load_config()
         
         db_config = config['tag_database']
         
@@ -262,8 +265,7 @@ class EndToEndPipeline:
         # Salva il percorso del config come attributo dell'istanza
         self.config_path = config_path
         
-        with open(config_path, 'r', encoding='utf-8') as file:
-            config = yaml.safe_load(file)
+        config = load_config()
         
         # Leggi parametri da configurazione con fallback ai valori passati
         pipeline_config = config.get('pipeline', {})
@@ -276,20 +278,19 @@ class EndToEndPipeline:
             
             if os.path.exists(tenant_config_file):
                 try:
-                    with open(tenant_config_file, 'r', encoding='utf-8') as f:
-                        tenant_config = yaml.safe_load(f)
-                        tenant_clustering_params = tenant_config.get('clustering_parameters', {})
+                    tenant_config = load_config()
+                    tenant_clustering_params = tenant_config.get('clustering_parameters', {})
+                    
+                    if tenant_clustering_params:
+                        print(f"🎯 [PIPELINE CLUSTERING CONFIG] Caricati parametri personalizzati per tenant {self.tenant_id}:")
+                        for param, value in tenant_clustering_params.items():
+                            old_value = clustering_config.get(param, 'non_definito')
+                            clustering_config[param] = value
+                            print(f"   {param}: {old_value} -> {value}")
+                    else:
+                        print(f"📋 [PIPELINE CLUSTERING CONFIG] File config personalizzata vuoto per tenant {self.tenant_id}")
+                        print(f"🔄 [PIPELINE CLUSTERING CONFIG] Usando configurazione default")
                         
-                        if tenant_clustering_params:
-                            print(f"🎯 [PIPELINE CLUSTERING CONFIG] Caricati parametri personalizzati per tenant {self.tenant_id}:")
-                            for param, value in tenant_clustering_params.items():
-                                old_value = clustering_config.get(param, 'non_definito')
-                                clustering_config[param] = value
-                                print(f"   {param}: {old_value} -> {value}")
-                        else:
-                            print(f"📋 [PIPELINE CLUSTERING CONFIG] File config personalizzata vuoto per tenant {self.tenant_id}")
-                            print(f"🔄 [PIPELINE CLUSTERING CONFIG] Usando configurazione default")
-                            
                 except Exception as e:
                     print(f"⚠️ [PIPELINE CLUSTERING CONFIG] Errore caricamento config personalizzata tenant {self.tenant_id}: {e}")
                     print("🔄 [PIPELINE CLUSTERING CONFIG] Fallback alla configurazione default da config.yaml")
@@ -618,8 +619,7 @@ class EndToEndPipeline:
         
         # Controlla configurazione training supervisionato
         try:
-            with open(self.config_path, 'r', encoding='utf-8') as file:
-                config = yaml.safe_load(file)
+            config = load_config()
             
             supervised_config = config.get('supervised_training', {})
             extraction_config = supervised_config.get('extraction', {})
@@ -1564,8 +1564,7 @@ class EndToEndPipeline:
             print(f"⚠️ [BERTOPIC CACHE] Fallback cache embeddings fallito: {fallback_cache_e}")
         
         # Carica configurazione clustering
-        with open(self.clusterer.config_path, 'r', encoding='utf-8') as file:
-            config = yaml.safe_load(file)
+        config = load_config()
         
         # Verifica quale approccio usare (priorità assoluta al sistema intelligente)
         intelligent_config = config.get('intelligent_clustering', {})
@@ -4050,8 +4049,7 @@ class EndToEndPipeline:
                 print(f"📊 [ESEGUI TRAINING INTERATTIVO] max_total_sessions: {human_limit}")
             else:
                 # Fallback a config.yaml
-                with open(self.config_path, 'r', encoding='utf-8') as file:
-                    config = yaml.safe_load(file)
+                config = load_config()
                 
                 supervised_config = config.get('supervised_training', {}) # Sezione supervisione avanzata get config 
                 human_review_config = supervised_config.get('human_review', {}) # Sezione review umana get config 
@@ -4461,8 +4459,7 @@ class EndToEndPipeline:
                     debug_file.write(f"\n📄 FALLBACK A config.yaml:\n")
                     debug_file.write(f"   - config_path: {getattr(self, 'config_path', 'NO_CONFIG_PATH')}\n")
                 
-                with open(self.config_path, 'r', encoding='utf-8') as file:
-                    config = yaml.safe_load(file)
+                config = load_config()
                 
                 supervised_config = config.get('supervised_training', {})
                 human_review_config = supervised_config.get('human_review', {})
@@ -4845,8 +4842,7 @@ class EndToEndPipeline:
                 print(f"📊 [DB] selection_strategy: {selection_strategy}")
             else:
                 # Fallback a config.yaml (logica originale)
-                with open(self.config_path, 'r', encoding='utf-8') as file:
-                    config = yaml.safe_load(file)
+                config = load_config()
                 
                 supervised_config = config.get('supervised_training', {})
                 human_review_config = supervised_config.get('human_review', {})

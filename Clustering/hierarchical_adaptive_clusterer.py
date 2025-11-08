@@ -18,6 +18,10 @@ from dataclasses import dataclass
 
 # Imports dei moduli esistenti
 import sys
+
+# Import config_loader per caricare config.yaml con variabili ambiente
+from config_loader import load_config
+
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'EmbeddingEngine'))
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'LLMClassifier'))
 
@@ -51,8 +55,7 @@ def trace_all(function_name: str, action: str = "ENTER", called_from: str = None
         if not os.path.exists(config_path):
             return  # Tracing disabilitato se config non esiste
             
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
+        config = load_config()
             
         tracing_config = config.get('tracing', {})
         if not tracing_config.get('enabled', False):
@@ -290,8 +293,7 @@ class HierarchicalAdaptiveClusterer:
         trace_all("load_config", "ENTER", config_path=self.config_path)
         
         try:
-            with open(self.config_path, 'r', encoding='utf-8') as file:
-                config = yaml.safe_load(file)
+            config = load_config()
             
             hierarchical_config = config.get('hierarchical_clustering', {})
             

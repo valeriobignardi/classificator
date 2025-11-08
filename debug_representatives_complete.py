@@ -32,6 +32,7 @@ from datetime import datetime
 from collections import defaultdict
 import json
 import mysql.connector
+from config_loader import load_config
 
 # Aggiungi path progetto
 sys.path.append('/home/ubuntu/classificatore')
@@ -81,8 +82,7 @@ class RepresentativesDebugger:
         """
         try:
             config_path = '/home/ubuntu/classificatore/config.yaml'
-            with open(config_path, 'r') as f:
-                return yaml.safe_load(f)
+    return load_config()
         except Exception as e:
             print(f"❌ Errore caricamento config: {e}")
             return {}

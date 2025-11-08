@@ -361,8 +361,7 @@ def analyze_wopta_mongodb_collection():
         try:
             # Carica configurazione database TAG
             config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-            with open(config_path, 'r') as file:
-                config = yaml.safe_load(file)
+            config = load_config()
             
             import mysql.connector
             tag_db_config = config.get('tag_database', {})
@@ -435,6 +434,7 @@ def analyze_wopta_mongodb_collection():
     except Exception as e:
         print(f"❌ Errore durante l'analisi: {e}")
         import traceback
+from config_loader import load_config
         traceback.print_exc()
     finally:
         if 'client' in locals():

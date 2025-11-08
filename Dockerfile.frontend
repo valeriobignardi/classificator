@@ -19,7 +19,7 @@ WORKDIR /app
 COPY human-review-ui/package*.json ./
 
 # Installa dipendenze Node.js
-RUN npm ci --silent && \
+RUN npm install --legacy-peer-deps --silent && \
     npm cache clean --force
 
 # Copia il codice sorgente dell'applicazione

@@ -34,8 +34,7 @@ def load_config() -> Dict[str, Any]:
     Data ultima modifica: 2025-01-31
     """
     config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-    with open(config_path, 'r', encoding='utf-8') as file:
-        return yaml.safe_load(file)
+    return load_config()
 
 def connect_mongodb(config: Dict[str, Any]) -> MongoClient:
     """
@@ -99,6 +98,7 @@ def analyze_specific_case(db, case_id: str) -> Dict[str, Any]:
         
         # Cerca il caso usando _id direttamente
         from bson import ObjectId
+from config_loader import load_config
         try:
             # Prova prima come ObjectId
             main_documents = list(main_collection.find({"_id": ObjectId(case_id)}))

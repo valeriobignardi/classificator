@@ -11,7 +11,6 @@ Descrizione: Classe per gestione prompt con variabili dinamiche
 =====================================================================
 """
 
-import yaml
 import mysql.connector
 from mysql.connector import Error
 import json
@@ -20,6 +19,11 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 import os
 import logging
+import sys
+
+# Import config_loader per caricare config.yaml con variabili ambiente
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config_loader import load_config
 
 # Importazione classe Tenant per eliminare conversioni ridondanti
 try:
@@ -75,12 +79,8 @@ class PromptManager:
         return logger
     
     def _load_config(self) -> Dict:
-        """Carica configurazione"""
-        try:
-            with open(self.config_path, 'r', encoding='utf-8') as f:
-                return yaml.safe_load(f)
-        except Exception as e:
-            raise Exception(f"Errore caricamento config: {e}")
+        """Carica configurazione con config_loader"""
+        return load_config()
     
     def connect(self) -> bool:
         """

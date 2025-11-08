@@ -30,6 +30,9 @@ except ImportError:
 sys.path.append(os.path.join(os.path.dirname(__file__), 'Utils'))
 from tenant import Tenant
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+from config_loader import load_config
+
 
 class MongoClassificationReader:
     """
@@ -98,8 +101,7 @@ class MongoClassificationReader:
             
             # Carica configurazione TAG database
             config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-            with open(config_path, 'r') as file:
-                config = yaml.safe_load(file)
+            config = load_config()
             
             tag_db_config = config.get('tag_database', {})
             if not tag_db_config:
@@ -165,8 +167,7 @@ class MongoClassificationReader:
             
             # Carica configurazione TAG database
             config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-            with open(config_path, 'r') as file:
-                config = yaml.safe_load(file)
+            config = load_config()
             
             tag_db_config = config.get('tag_database', {})
             if not tag_db_config:
@@ -213,8 +214,7 @@ class MongoClassificationReader:
             
             # Carica configurazione TAG database
             config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-            with open(config_path, 'r') as file:
-                config = yaml.safe_load(file)
+            config = load_config()
             
             tag_db_config = config.get('tag_database', {})
             if not tag_db_config:
@@ -1102,20 +1102,15 @@ class MongoClassificationReader:
         Output:
             - Lista di oggetti Tenant completi con tutti i dati necessari
             
-        Ultimo aggiornamento: 2025-08-29 - CORREZIONE LOGICA TENANT
+        Ultimo aggiornamento: 2025-11-08 - FIX config_loader
         """
         try:
             # Importa le librerie necessarie
-            import yaml
             import mysql.connector
             from mysql.connector import Error
-            import os
             
-            # Carica configurazione TAG database
-            config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-            with open(config_path, 'r') as file:
-                config = yaml.safe_load(file)
-            
+            # Carica configurazione TAG database con config_loader
+            config = load_config()
             tag_db_config = config.get('tag_database', {})
             
             # Connessione diretta al database TAG
@@ -1977,6 +1972,10 @@ class MongoClassificationReader:
         Data ultima modifica: 2025-08-26
         """
         try:
+            if not self.ensure_connection():
+                print("❌ Impossibile connettersi a MongoDB per recupero classificazioni cluster")
+                return []
+
             # Trova tenant_id dal tenant_slug
             tenant_info = self.get_tenant_info_from_name(tenant_slug)
             if not tenant_info:
@@ -1985,26 +1984,26 @@ class MongoClassificationReader:
             
             tenant_id = tenant_info['tenant_id']
             collection_name = self.get_collection_name()
+            collection = self.db[collection_name]
             
             print(f"🔍 Ricerca classificazioni in {collection_name}")
             print(f"   📅 Periodo: {start_date} -> {end_date}")
             
-            # Query MongoDB
+            # Query MongoDB - filtra solo documenti con classificazione disponibile
             query = {
-                'timestamp': {
-                    '$gte': start_date,
-                    '$lte': end_date
-                }
+                'classification': {'$exists': True, '$ne': None}
             }
             
             # Projection per includere campi necessari per statistiche
             projection = {
                 'session_id': 1,
                 'testo_completo': 1,
+                'classification': 1,
                 'predicted_label': 1,
                 'confidence': 1,
                 'classification_method': 1,
-                'cluster_label': 1,  # Campo clustering se disponibile
+                'cluster_label': 1,  # Campo legacy se disponibile
+                'metadata.cluster_id': 1,
                 'cluster_confidence': 1,
                 'embedding': 1,  # Per eventuali ri-clustering
                 'timestamp': 1,
@@ -2013,7 +2012,11 @@ class MongoClassificationReader:
             }
             
             # Esegui query con ordinamento per timestamp (più recenti prima)
-            cursor = self.collection.find(query, projection).sort('timestamp', -1)
+            cursor = collection.find(query, projection).sort([
+                ('classified_at', -1),
+                ('timestamp', -1),
+                ('created_at', -1)
+            ])
             
             if limit:
                 cursor = cursor.limit(limit)
@@ -2023,15 +2026,60 @@ class MongoClassificationReader:
             # Post-processing per garantire compatibilità
             processed_classifications = []
             for cls in classifications:
+                # Filtra per range temporale supportando sia datetime che ISO string
+                timestamp_value = cls.get('timestamp') or cls.get('classified_at') or cls.get('created_at')
+                ts_datetime = None
+                if timestamp_value is not None:
+                    if isinstance(timestamp_value, datetime):
+                        ts_datetime = timestamp_value
+                    elif isinstance(timestamp_value, str):
+                        try:
+                            ts_datetime = datetime.fromisoformat(timestamp_value)
+                        except ValueError:
+                            ts_datetime = None
+                
+                if ts_datetime is not None:
+                    if ts_datetime < start_date or ts_datetime > end_date:
+                        continue
+
+                # Recupera cluster_id da differenti fonti (legacy e nuova struttura metadata)
+                cluster_id_raw = cls.get('cluster_label', None)
+                if cluster_id_raw is None:
+                    cluster_id_raw = cls.get('metadata', {}).get('cluster_id')
+
+                cluster_id = -1  # Default: outlier
+                cluster_label_friendly = None
+                if cluster_id_raw is not None:
+                    if isinstance(cluster_id_raw, (int, float)):
+                        cluster_id = int(cluster_id_raw)
+                    elif isinstance(cluster_id_raw, str):
+                        cluster_id_raw_str = cluster_id_raw.strip()
+                        if cluster_id_raw_str.lower().startswith('outlier'):
+                            cluster_id = -1
+                        else:
+                            try:
+                                cluster_id = int(cluster_id_raw_str)
+                            except ValueError:
+                                import zlib
+                                # Usa hash deterministico (crc32) per ottenere ID numerico
+                                cluster_id = int(zlib.crc32(cluster_id_raw_str.encode('utf-8')))
+                            cluster_label_friendly = cluster_id_raw_str
+
+                # Etichetta finale preferisce campo 'classification' (decisione finale)
+                final_label = cls.get('classification') or cls.get('predicted_label', 'unknown')
+                classification_method = cls.get('classification_method', 'unknown')
+
                 processed_cls = {
                     'session_id': cls.get('session_id', str(cls.get('_id'))),
                     'testo_completo': cls.get('testo_completo', ''),
-                    'predicted_label': cls.get('predicted_label', 'unknown'),
+                    'predicted_label': final_label or 'unknown',
                     'confidence': float(cls.get('confidence', 0.0)),
-                    'classification_method': cls.get('classification_method', 'unknown'),
-                    'cluster_label': cls.get('cluster_label', -1),  # -1 = outlier se non disponibile
+                    'classification_method': classification_method,
+                    'cluster_label': cluster_id,
+                    'cluster_label_raw': cluster_id_raw,
+                    'cluster_label_display': cluster_label_friendly,
                     'cluster_confidence': cls.get('cluster_confidence', 0.0),
-                    'timestamp': cls.get('timestamp'),
+                    'timestamp': ts_datetime.isoformat() if ts_datetime else cls.get('timestamp'),
                     'tenant_slug': tenant_slug,
                     'tenant_id': tenant_id
                 }
@@ -2074,8 +2122,7 @@ class MongoClassificationReader:
             
             # Carica configurazione
             config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-            with open(config_path, 'r') as file:
-                config = yaml.safe_load(file)
+            config = load_config()
             
             remote_db_config = config.get('database', {})  # Database remoto (solo lettura)
             local_db_config = config.get('tag_database', {})  # Database locale TAG (scrittura)

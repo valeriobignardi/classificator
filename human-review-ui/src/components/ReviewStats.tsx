@@ -33,6 +33,7 @@ import {
   ChartOptions
 } from 'chart.js';
 import { apiService } from '../services/apiService';
+import ClusterVisualizationComponent from './ClusterVisualizationComponent';
 import { Tenant } from '../types/Tenant';
 
 // Registra i componenti di Chart.js
@@ -66,6 +67,11 @@ const ReviewStats: React.FC<ReviewStatsProps> = ({ tenant, refreshTrigger }) => 
   const [generalStats, setGeneralStats] = useState<GeneralStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // 🆕 Stato per visualizzazione cluster nella sezione Statistiche
+  const [clusterVisLoading, setClusterVisLoading] = useState(false);
+  const [clusterVisError, setClusterVisError] = useState<string | null>(null);
+  const [clusterVisualizationData, setClusterVisualizationData] = useState<any | null>(null);
 
   // Carica tenants disponibili
   const loadAvailableTenants = useCallback(async () => {
@@ -131,6 +137,33 @@ const ReviewStats: React.FC<ReviewStatsProps> = ({ tenant, refreshTrigger }) => 
     }
   }, [selectedTenant, tenant]);
 
+  // 🆕 Carica dati visualizzazione cluster 2D/3D per la sezione Statistiche
+  const loadClusterVisualization = useCallback(async () => {
+    if (!selectedTenant) return;
+
+    setClusterVisLoading(true);
+    setClusterVisError(null);
+
+    try {
+      // Usa sempre il tenant_id (UUID) per l'API
+      let tenantIdToUse = selectedTenant;
+      if (tenant && tenant.tenant_slug === selectedTenant) {
+        tenantIdToUse = tenant.tenant_id;
+      }
+
+      const response = await apiService.getClusteringStatistics(tenantIdToUse);
+      if (response.success && response.visualization_data) {
+        setClusterVisualizationData(response.visualization_data);
+      } else {
+        setClusterVisError(response.error || 'Errore caricamento visualizzazioni cluster');
+      }
+    } catch (err: any) {
+      setClusterVisError(err.message || 'Errore caricamento visualizzazioni cluster');
+    } finally {
+      setClusterVisLoading(false);
+    }
+  }, [selectedTenant, tenant]);
+
   // FIX: Aggiorna selectedTenant quando cambia il prop tenant (usa tenant_slug)  
   useEffect(() => {
     if (tenant?.tenant_slug) {
@@ -145,8 +178,9 @@ const ReviewStats: React.FC<ReviewStatsProps> = ({ tenant, refreshTrigger }) => 
   useEffect(() => {
     if (selectedTenant) {
       loadLabelStatistics();
+      loadClusterVisualization();
     }
-  }, [loadLabelStatistics, refreshTrigger, selectedTenant]);
+  }, [loadLabelStatistics, loadClusterVisualization, refreshTrigger, selectedTenant]);
 
   // Genera colori distinti per il grafico a torta (senza duplicati evidenti)
   const generateColors = (count: number) => {
@@ -216,6 +250,31 @@ const ReviewStats: React.FC<ReviewStatsProps> = ({ tenant, refreshTrigger }) => 
       <Typography variant="h4" gutterBottom>
         📊 Statistiche Etichette
       </Typography>
+
+      {/* 🆕 Visualizzazione Cluster 2D/3D (come richiesto) */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
+            <Box display="flex" alignItems="center" gap={1}>
+              <AnalyticsIcon color="primary" />
+              <Typography variant="h6">Visualizzazione Cluster 2D / 3D</Typography>
+            </Box>
+            <Chip label={tenant?.tenant_name || 'Tenant'} size="small" />
+          </Box>
+
+          {clusterVisError && (
+            <Alert severity="error" sx={{ mb: 2 }}>{clusterVisError}</Alert>
+          )}
+
+          <ClusterVisualizationComponent
+            mode="statistics"
+            visualizationData={clusterVisualizationData || undefined}
+            onRefresh={loadClusterVisualization}
+            loading={clusterVisLoading}
+            height={600}
+          />
+        </CardContent>
+      </Card>
 
       {/* Selezione Tenant */}
       <Card sx={{ mb: 3 }}>

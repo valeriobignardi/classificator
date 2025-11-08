@@ -17,6 +17,7 @@ from datetime import datetime
 from collections import defaultdict
 import numpy as np
 import logging
+from config_loader import load_config
 
 # Aggiunta percorsi per moduli
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Pipeline'))
@@ -112,15 +113,14 @@ class ClusteringTestService:
             if os.path.exists(tenant_config_file):
                 print(f"📁 Carico config tenant-specifica: {tenant_config_file}")
                 with open(tenant_config_file, 'r', encoding='utf-8') as file:
-                    tenant_config = yaml.safe_load(file)
+                    tenant_config = load_config()
                     return tenant_config.get('clustering_parameters', {})
             
             # Fallback: configurazione globale
             print(f"📁 Uso config globale per tenant {tenant_id}")
-            with open(self.config_path, 'r', encoding='utf-8') as file:
-                config = yaml.safe_load(file)
-                return config.get('clustering', {})
-                
+            config = load_config()
+            return config.get('clustering', {})
+            
         except Exception as e:
             print(f"⚠️ Errore caricamento config clustering: {e}")
             # Parametri di default se tutto fallisce
@@ -329,6 +329,7 @@ class ClusteringTestService:
         """
         try:
             from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
+            from config_loader import load_config
             
             # Filtra outliers per metriche (non tutte supportano -1)
             mask = labels != -1

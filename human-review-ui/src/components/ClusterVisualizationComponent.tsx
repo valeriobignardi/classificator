@@ -10,7 +10,7 @@
  * - Modalità dual: "Parameters" (solo clustering) e "Statistics" (con classificazioni finali)
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Box,
   Typography,
@@ -160,6 +160,7 @@ const ClusterVisualizationComponent: React.FC<ClusterVisualizationProps> = ({
     return Object.entries(clusterGroups).map(([clusterId, points]) => {
       const clusterIdNum = parseInt(clusterId);
       const isOutlier = clusterIdNum === -1;
+      const clusterLabel = points[0]?.cluster_label || `Cluster ${clusterId}`;
       
       // Determina coordinate in base al tipo visualizzazione
       let coordinates: any = {};
@@ -169,7 +170,10 @@ const ClusterVisualizationComponent: React.FC<ClusterVisualizationProps> = ({
           coordinates = {
             x: points.map(p => p.x),
             y: points.map(p => p.y),
-            mode: 'markers',
+            // Mostra etichette opzionali in 2D
+            mode: showLabels ? 'markers+text' : 'markers',
+            text: showLabels ? points.map(() => clusterLabel) : undefined,
+            textposition: showLabels ? 'top center' : undefined,
             type: 'scatter'
           };
           break;
@@ -178,7 +182,10 @@ const ClusterVisualizationComponent: React.FC<ClusterVisualizationProps> = ({
           coordinates = {
             x: points.map(p => p.x),
             y: points.map(p => p.y),
-            mode: 'markers',
+            // Mostra etichette opzionali in 2D
+            mode: showLabels ? 'markers+text' : 'markers',
+            text: showLabels ? points.map(() => clusterLabel) : undefined,
+            textposition: showLabels ? 'top center' : undefined,
             type: 'scatter'
           };
           break;
@@ -188,7 +195,9 @@ const ClusterVisualizationComponent: React.FC<ClusterVisualizationProps> = ({
             x: points.map(p => p.x),
             y: points.map(p => p.y),
             z: points.map(p => p.z || 0),
-            mode: 'markers',
+            // In 3D, Plotly supporta text ma non textposition
+            mode: showLabels ? 'markers+text' : 'markers',
+            text: showLabels ? points.map(() => clusterLabel) : undefined,
             type: 'scatter3d'
           };
           break;
@@ -211,9 +220,10 @@ const ClusterVisualizationComponent: React.FC<ClusterVisualizationProps> = ({
 
       return {
         ...coordinates,
-        name: isOutlier ? `Outliers (${points.length})` : `${points[0]?.cluster_label || 'Cluster ' + clusterId} (${points.length})`,
-        text: hoverText,
-        hovertemplate: '%{text}<extra></extra>',
+        name: isOutlier ? `Outliers (${points.length})` : `${clusterLabel} (${points.length})`,
+        // Usa customdata per i tooltip così 'text' resta libero per le etichette visuali
+        customdata: hoverText,
+        hovertemplate: '%{customdata}<extra></extra>',
         marker: {
           size: pointSize,
           color: visualizationData?.cluster_colors[clusterIdNum] || '#999999',
@@ -275,6 +285,44 @@ const ClusterVisualizationComponent: React.FC<ClusterVisualizationProps> = ({
         }
       };
     }
+  };
+
+  // Memo dei dati Plotly per usarli anche negli handler eventi legenda
+  const plotlyData = useMemo(() => getPlotlyData(), [visualizationData, selectedClusters, showOutliers, showLabels, visualizationType, pointSize]);
+
+  // Calcola lista completa dei cluster disponibili
+  const allClusterIds = useMemo(() => {
+    if (!visualizationData?.points) return [] as number[];
+    return Array.from(new Set(visualizationData.points.map(p => p.cluster_id)));
+  }, [visualizationData]);
+
+  // Handler: click sulla legenda per isolare un cluster
+  const handleLegendClick = (e: any) => {
+    try {
+      const curveNumber = e?.curveNumber;
+      if (curveNumber === undefined || !plotlyData[curveNumber]) return false;
+      const legendGroup = plotlyData[curveNumber]?.legendgroup;
+      const clusterId = parseInt(String(legendGroup));
+      if (Number.isNaN(clusterId)) return false;
+
+      setSelectedClusters(prev => {
+        // Se già isolato, ripristina tutti
+        if (prev.length === 1 && prev[0] === clusterId) {
+          return allClusterIds;
+        }
+        return [clusterId];
+      });
+      // Previeni il toggle di default di Plotly
+      return false;
+    } catch {
+      return false;
+    }
+  };
+
+  // Handler: doppio click sulla legenda per ripristinare tutti i cluster
+  const handleLegendDoubleClick = (_e: any) => {
+    setSelectedClusters(allClusterIds);
+    return false;
   };
 
   /**
@@ -479,7 +527,7 @@ const ClusterVisualizationComponent: React.FC<ClusterVisualizationProps> = ({
       <Card>
         <CardContent>
           <Plot
-            data={getPlotlyData()}
+            data={plotlyData}
             layout={getPlotlyLayout()}
             config={{
               responsive: true,
@@ -494,6 +542,8 @@ const ClusterVisualizationComponent: React.FC<ClusterVisualizationProps> = ({
                 scale: 1
               }
             }}
+            onLegendClick={handleLegendClick}
+            onLegendDoubleClick={handleLegendDoubleClick}
             style={{ width: '100%' }}
           />
         </CardContent>

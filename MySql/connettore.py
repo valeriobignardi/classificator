@@ -1,24 +1,13 @@
-import yaml
 import mysql.connector
 from mysql.connector import Error
 import os
+from config_loader import load_config
 
 #questa classe ha il compito di connettersi al database MySql e offrire le funzioni per leggere e scrivere
 class MySqlConnettore:
     def __init__(self):
-        self.config = self._load_config()
+        self.config = load_config()
         self.connection = None
-    
-    def _load_config(self):
-        """Carica i parametri di configurazione dal file config.yaml"""
-        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
-        try:
-            with open(config_path, 'r') as file:
-                return yaml.safe_load(file)
-        except FileNotFoundError:
-            raise Exception(f"File di configurazione non trovato: {config_path}")
-        except yaml.YAMLError as e:
-            raise Exception(f"Errore nel parsing del file YAML: {e}")
     
     def connetti(self):
         """Stabilisce la connessione al database MySQL"""

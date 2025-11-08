@@ -16,6 +16,10 @@ from pymongo.database import Database
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 import yaml
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+from config_loader import load_config
+
+
 # Aggiungi il path del progetto
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
@@ -70,8 +74,7 @@ class MongoDBConnector:
             config_path = os.path.join(project_root, 'config.yaml')
         
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f)
+            config = load_config()
             return config
         except Exception as e:
             self.logger.warning(f"Impossibile caricare config da {config_path}: {e}")

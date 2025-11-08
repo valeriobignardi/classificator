@@ -17,6 +17,7 @@ from mysql.connector import Error
 import json
 from datetime import datetime
 import os
+from config_loader import load_config
 
 class PromptMigrator:
     """
@@ -35,8 +36,7 @@ class PromptMigrator:
     def _load_config(self):
         """Carica configurazione"""
         config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
-        with open(config_path, 'r') as f:
-            return yaml.safe_load(f)
+        return load_config()
     
     def connect(self):
         """Connessione al database TAG locale"""

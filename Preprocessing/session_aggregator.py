@@ -18,6 +18,10 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'
 from tenant_config_helper import get_only_user_for_tenant
 from tenant import Tenant
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+from config_loader import load_config
+
+
 class SessionAggregator:
     """
     Classe per aggregare i messaggi delle conversazioni per sessione
@@ -80,8 +84,7 @@ class SessionAggregator:
             # 🔄 LOGICA LEGACY: Carica dalla configurazione globale per retrocompatibilità
             try:
                 config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    config = yaml.safe_load(f)
+                config = load_config()
                     
                 # NOTA: conversation_reading è stato rimosso da config.yaml
                 # Usando False come default

@@ -31,21 +31,51 @@ services:
       FLASK_DEBUG: "0"
       # Directory per file di training (JSONL) – deve essere /data/training
       TRAINING_DATA_DIR: /data/training
-      MONGODB_URL: mongodb://localhost:27017/classificazioni
-      MYSQL_HOST: localhost
-      MYSQL_PORT: 3306
-      MYSQL_USER: ${MYSQL_USER:-taggenerator}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-zsRxiYmcVG9XX7Q3TvAT}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-TAG}
-      OLLAMA_URL: http://localhost:11434
+      
+      # MySQL - Common Database (config.yaml database section)
+      COMMON_DB_HOST: ${COMMON_DB_HOST:-159.69.223.201}
+      COMMON_DB_PORT: ${COMMON_DB_PORT:-3306}
+      COMMON_DB_DATABASE: ${COMMON_DB_DATABASE:-common}
+      COMMON_DB_USER: ${COMMON_DB_USER:-taggenerator}
+      COMMON_DB_PASSWORD: ${COMMON_DB_PASSWORD:-zsRxiYmcVG9XX7Q3TvAT}
+      
+      # MySQL - Tag Database (config.yaml tag_database section)
+      TAG_DB_HOST: ${TAG_DB_HOST:-localhost}
+      TAG_DB_PORT: ${TAG_DB_PORT:-3306}
+      TAG_DB_DATABASE: ${TAG_DB_DATABASE:-TAG}
+      TAG_DB_USER: ${TAG_DB_USER:-root}
+      TAG_DB_PASSWORD: ${TAG_DB_PASSWORD:-Valerio220693!}
+      
+      # MongoDB (config.yaml mongodb section)
+      MONGODB_URL: ${MONGODB_URL:-mongodb://localhost:27017}
+      MONGODB_DB_NAME: ${MONGODB_DB_NAME:-classificazioni}
+      
+      # Ollama (config.yaml llm.ollama section)
+      OLLAMA_URL: ${OLLAMA_URL:-http://localhost:11434}
+      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-300}
+      
+      # OpenAI API (config.yaml llm.openai section)
+      OPENAI_API_BASE: ${OPENAI_API_BASE:-https://api.openai.com/v1}
+      OPENAI_TIMEOUT: ${OPENAI_TIMEOUT:-60}
+      OPENAI_MAX_PARALLEL_CALLS: ${OPENAI_MAX_PARALLEL_CALLS:-200}
+      OPENAI_RATE_LIMIT_STRATEGY: ${OPENAI_RATE_LIMIT_STRATEGY:-adaptive}
+      OPENAI_RETRY_COUNT: ${OPENAI_RETRY_COUNT:-3}
+      OPENAI_RETRY_DELAY: ${OPENAI_RETRY_DELAY:-1.0}
+      
       # Azure OpenAI Configuration
       AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
       AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT}
-      AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-2024-11-20}
+      AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-2024-10-21}
       AZURE_OPENAI_GPT4O_DEPLOYMENT: ${AZURE_OPENAI_GPT4O_DEPLOYMENT:-gpt-4o}
       AZURE_OPENAI_GPT5_DEPLOYMENT: ${AZURE_OPENAI_GPT5_DEPLOYMENT:-gpt-5}
+      
       # Backward compatibility
       OPENAI_API_KEY: ${OPENAI_API_KEY}
+      MYSQL_HOST: ${TAG_DB_HOST:-localhost}
+      MYSQL_PORT: ${TAG_DB_PORT:-3306}
+      MYSQL_USER: ${TAG_DB_USER:-root}
+      MYSQL_PASSWORD: ${TAG_DB_PASSWORD:-Valerio220693!}
+      MYSQL_DATABASE: ${TAG_DB_DATABASE:-TAG}
       NUMBA_DISABLE_JIT: "0"
       NUMBA_CACHE_DIR: /tmp/numba_cache
       PRELOAD_MODELS: "false"

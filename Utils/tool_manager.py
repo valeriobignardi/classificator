@@ -25,6 +25,13 @@ import mysql.connector
 from mysql.connector import Error
 import uuid
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config_loader import load_config
+
+
 if TYPE_CHECKING:
     from Database.tenant_resolver import Tenant
 
@@ -47,7 +54,7 @@ class ToolManager:
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
         
         with open(config_path, 'r', encoding='utf-8') as file:
-            self.config = yaml.safe_load(file)
+            self.config = load_config()
         
         # Configurazione database
         self.db_config = self.config.get('tag_database', {})

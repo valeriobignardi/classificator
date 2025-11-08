@@ -25,8 +25,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 def load_config():
     """Carica configurazione dal file config.yaml"""
     config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+    return load_config()
 
 def analyze_humanitas_collection():
     """
@@ -272,6 +271,7 @@ def main():
     except Exception as e:
         print(f"❌ ERRORE DURANTE L'ANALISI: {e}")
         import traceback
+from config_loader import load_config
         traceback.print_exc()
         return False
 

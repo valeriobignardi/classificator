@@ -49,8 +49,7 @@ def trace_all(component: str = None, action: str = "ENTER", function: str = None
         if not os.path.exists(config_path):
             return  # Tracing disabilitato se config non esiste
             
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
+        config = load_config()
             
         tracing_config = config.get('tracing', {})
         if not tracing_config.get('enabled', False):
@@ -204,6 +203,10 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Prepro
 
 # RIMOSSO: from labse_embedder import LaBSEEmbedder - Ora usa solo Docker service
 from session_aggregator import SessionAggregator
+
+# Import config_loader per caricare config.yaml con variabili ambiente
+from config_loader import load_config
+
 
 class HDBSCANClusterer:
     """
@@ -400,7 +403,7 @@ class HDBSCANClusterer:
         """
         try:
             with open(config_path, 'r', encoding='utf-8') as file:
-                return yaml.safe_load(file)
+                return load_config()
         except Exception as e:
             print(f"⚠️ Errore nel caricamento config da {config_path}: {e}")
             print("📝 Uso parametri predefiniti")
@@ -435,27 +438,26 @@ class HDBSCANClusterer:
             tenant_config_file = os.path.join(tenant_config_dir, f'{self.tenant_id}_clustering.yaml')
             
             if os.path.exists(tenant_config_file):
-                with open(tenant_config_file, 'r', encoding='utf-8') as f:
-                    tenant_config = yaml.safe_load(f)
-                    tenant_clustering_params = tenant_config.get('clustering_parameters', {})
+                tenant_config = load_config()
+                tenant_clustering_params = tenant_config.get('clustering_parameters', {})
+                
+                if tenant_clustering_params:
+                    print(f"🎯 [TENANT CONFIG] Parametri personalizzati trovati per tenant {self.tenant_id}")
+                    print(f"   📊 Parametri personalizzati: {list(tenant_clustering_params.keys())}")
                     
-                    if tenant_clustering_params:
-                        print(f"🎯 [TENANT CONFIG] Parametri personalizzati trovati per tenant {self.tenant_id}")
-                        print(f"   📊 Parametri personalizzati: {list(tenant_clustering_params.keys())}")
-                        
-                        # Merge: tenant_params sovrascrivono base_params
-                        merged_config = base_clustering_config.copy()
-                        merged_config.update(tenant_clustering_params)
-                        
-                        # Log delle sovrascritture
-                        for param, value in tenant_clustering_params.items():
-                            base_value = base_clustering_config.get(param, 'non_definito')
-                            print(f"   🔄 {param}: {base_value} → {value}")
-                        
-                        return merged_config
-                    else:
-                        print(f"📋 [TENANT CONFIG] File config tenant {self.tenant_id} vuoto, uso config.yaml")
-                        return base_clustering_config
+                    # Merge: tenant_params sovrascrivono base_params
+                    merged_config = base_clustering_config.copy()
+                    merged_config.update(tenant_clustering_params)
+                    
+                    # Log delle sovrascritture
+                    for param, value in tenant_clustering_params.items():
+                        base_value = base_clustering_config.get(param, 'non_definito')
+                        print(f"   🔄 {param}: {base_value} → {value}")
+                    
+                    return merged_config
+                else:
+                    print(f"📋 [TENANT CONFIG] File config tenant {self.tenant_id} vuoto, uso config.yaml")
+                    return base_clustering_config
             else:
                 print(f"📋 [TENANT CONFIG] Nessun file config per tenant {self.tenant_id}, uso config.yaml")
                 return base_clustering_config

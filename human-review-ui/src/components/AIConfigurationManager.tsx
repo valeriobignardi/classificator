@@ -58,6 +58,7 @@ import {
 import { useTenant } from '../contexts/TenantContext';
 import { apiService } from '../services/apiService';
 import LLMConfigurationPage from './LLMConfigurationPage';
+import TenantSchedulerPanel from './TenantSchedulerPanel';
 
 interface EmbeddingEngine {
   name: string;
@@ -731,6 +732,14 @@ const AIConfigurationManager: React.FC<{ open: boolean }> = ({ open }) => {
               </Card>
             </Box>
           </Stack>
+
+          {/* Sezione Scheduler per-tenant */}
+          <Box sx={{ mt: 3 }}>
+            <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>
+              🗓️ Gestione Scheduler
+            </Typography>
+            <TenantSchedulerPanel />
+          </Box>
         </Box>
       )}
 

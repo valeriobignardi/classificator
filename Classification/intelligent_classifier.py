@@ -52,6 +52,13 @@ import os
 # Aggiungi path per ToolManager
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Utils'))
 from tool_manager import ToolManager
+
+# Import config_loader per caricare config.yaml con variabili ambiente
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config_loader import load_config
+
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'FineTuning'))
 
 # Import PromptManager per gestione prompt da database
@@ -337,7 +344,7 @@ class IntelligentClassifier:
         # Carica configurazione PRIMA di tutto
         self.config_path = config_path or os.path.join(os.path.dirname(__file__), '..', 'config.yaml')
         with open(self.config_path, 'r', encoding='utf-8') as file:
-            self.config = yaml.safe_load(file)
+            self.config = load_config()
         
         # Estrai configurazione LLM
         llm_config = self.config.get('llm', {})
@@ -4074,14 +4081,13 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         try:
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
             if os.path.exists(config_path):
-                with open(config_path, 'r') as f:
-                    yaml_config = yaml.safe_load(f)
-                    if yaml_config:
-                        yaml_config['source'] = 'config.yaml'
-                        if self.enable_logging:
-                            batch_size = yaml_config.get('pipeline', {}).get('classification_batch_size', 'non configurato')
-                            print(f"✅ [BATCH CONFIG] Caricato da config.yaml: batch_size={batch_size}")
-                        return yaml_config
+                yaml_config = load_config()
+                if yaml_config:
+                    yaml_config['source'] = 'config.yaml'
+                    if self.enable_logging:
+                        batch_size = yaml_config.get('pipeline', {}).get('classification_batch_size', 'non configurato')
+                        print(f"✅ [BATCH CONFIG] Caricato da config.yaml: batch_size={batch_size}")
+                    return yaml_config
         except Exception as e:
             if self.enable_logging:
                 print(f"⚠️ [BATCH CONFIG] Errore caricamento config.yaml: {e}")
@@ -6310,8 +6316,7 @@ ETICHETTE FREQUENTI (ultimi 30gg): {' | '.join(top_labels)}
         
         try:
             if os.path.exists(config_path):
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    yaml_config = yaml.safe_load(f) or {}
+                yaml_config = load_config() or {}
         except Exception as e:
             if hasattr(self, 'logger'):
                 self.logger.warning(f"Errore caricamento config.yaml da {config_path}: {e}")

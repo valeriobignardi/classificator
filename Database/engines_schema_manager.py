@@ -13,6 +13,7 @@ import mysql.connector
 from mysql.connector import Error
 import os
 from datetime import datetime
+from config_loader import load_config
 
 
 class EnginesSchemaManager:
@@ -46,9 +47,8 @@ class EnginesSchemaManager:
         """
         config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
         try:
-            with open(config_path, 'r') as file:
-                config = yaml.safe_load(file)
-                return config['tag_database']
+            config = load_config()
+            return config['tag_database']
         except (FileNotFoundError, yaml.YAMLError, KeyError) as e:
             raise Exception(f"Errore caricamento configurazione: {e}")
     
@@ -162,8 +162,7 @@ class EnginesSchemaManager:
         try:
             # Carica configurazione completa
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
-            with open(config_path, 'r') as file:
-                full_config = yaml.safe_load(file)
+            full_config = load_config()
             
             tenant_configs = full_config.get('tenant_configs', {})
             

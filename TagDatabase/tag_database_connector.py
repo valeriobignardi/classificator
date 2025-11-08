@@ -1,12 +1,13 @@
-import yaml
 import mysql.connector
 from mysql.connector import Error
 import os
 import sys
 
-# Aggiungi path per importare Tenant
+# Aggiungi path per importare Tenant e config_loader
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Utils'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from tenant import Tenant
+from config_loader import load_config
 
 class TagDatabaseConnector:
     """Connettore specifico per il database TAG locale con supporto multi-tenant"""
@@ -55,22 +56,9 @@ class TagDatabaseConnector:
         return instance
     
     def _load_config(self):
-        """Carica i parametri di configurazione dal file config.yaml"""
-        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
-        try:
-            with open(config_path, 'r') as file:
-                config = yaml.safe_load(file)
-                return config['tag_database']
-        except FileNotFoundError:
-            # Fallback al config.yaml originale
-            config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
-            with open(config_path, 'r') as file:
-                config = yaml.safe_load(file)
-                return config['tag_database']
-        except yaml.YAMLError as e:
-            raise Exception(f"Errore nel parsing del file YAML: {e}")
-        except KeyError:
-            raise Exception("Configurazione 'tag_database' non trovata nel file config.yaml")
+        """Carica i parametri di configurazione dal file config.yaml con config_loader"""
+        config = load_config()
+        return config['tag_database']
     
     def connetti(self):
         """Stabilisce la connessione al database TAG locale"""

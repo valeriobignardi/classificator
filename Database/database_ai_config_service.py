@@ -16,6 +16,7 @@ import json
 import sys
 from typing import Dict, Optional, Any
 from datetime import datetime
+from config_loader import load_config
 
 # Import Tenant class per gestione centralizzata tenant
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -60,9 +61,8 @@ class DatabaseAIConfigService:
         """
         config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
         try:
-            with open(config_path, 'r') as file:
-                config = yaml.safe_load(file)
-                return config['tag_database']
+            config = load_config()
+            return config['tag_database']
         except (FileNotFoundError, yaml.YAMLError, KeyError) as e:
             raise Exception(f"Errore caricamento configurazione database: {e}")
     
@@ -512,6 +512,7 @@ class DatabaseAIConfigService:
         try:
             # Importa factory per info engines (lazy import)
             from EmbeddingEngine.embedding_engine_factory import EmbeddingEngineFactory
+            from config_loader import load_config
             factory = EmbeddingEngineFactory()
             # NOTA: metodo semplificato dato che get_available_engines non esiste
             engines = []

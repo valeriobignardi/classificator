@@ -41,6 +41,10 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'QualityGate'))
 from tag_database_connector import TagDatabaseConnector
 from quality_gate_engine import QualityGateEngine
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+from config_loader import load_config
+
+
 
 @dataclass
 class FineTuningConfig:
@@ -108,7 +112,7 @@ class MistralFineTuningManager:
         
         # Carica configurazione PRIMA di tutto
         with open(self.config_path, 'r', encoding='utf-8') as file:
-            self.config = yaml.safe_load(file)
+            self.config = load_config()
         
         # Estrai configurazione LLM
         llm_config = self.config.get('llm', {})
@@ -204,7 +208,7 @@ class MistralFineTuningManager:
         """Carica configurazione da file YAML"""
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
-                return yaml.safe_load(f) or {}
+                return load_config() or {}
         except Exception as e:
             self.logger.warning(f"Errore caricamento config: {e}")
             return {}

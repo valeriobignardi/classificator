@@ -32,6 +32,7 @@ class NumpyJSONEncoder(json.JSONEncoder):
             return obj.tolist()
         return super().default(obj)
 import logging
+from config_loader import load_config
 
 class ClusteringResultsDB:
     """
@@ -58,8 +59,7 @@ class ClusteringResultsDB:
     def _load_config(self):
         """Carica configurazione database dal config.yaml"""
         try:
-            with open(self.config_path, 'r') as file:
-                config = yaml.safe_load(file)
+            config = load_config()
             
             self.db_config = config.get('tag_database', {})
             self.logger.info(f"Configurazione database caricata da: {self.config_path}")

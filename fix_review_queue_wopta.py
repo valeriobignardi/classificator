@@ -29,8 +29,7 @@ def load_config():
     config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
     
     try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
+        config = load_config()
         return config
     except Exception as e:
         print(f"❌ Errore caricamento config: {e}")
@@ -354,6 +353,7 @@ def main():
     except Exception as e:
         print(f"❌ Errore durante correzione: {e}")
         import traceback
+from config_loader import load_config
         traceback.print_exc()
     
     finally:

@@ -25,8 +25,7 @@ def load_config():
     """
     try:
         config_path = '/home/ubuntu/classificatore/config.yaml'
-        with open(config_path, 'r') as f:
-            return yaml.safe_load(f)
+    return load_config()
     except Exception as e:
         print(f"❌ Errore caricamento configurazione: {e}")
         sys.exit(1)
@@ -475,6 +474,7 @@ def main():
     except Exception as e:
         print(f'❌ Errore generale: {e}')
         import traceback
+from config_loader import load_config
         traceback.print_exc()
     
     finally:

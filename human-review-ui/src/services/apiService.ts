@@ -174,6 +174,30 @@ class ApiService {
     );
   }
 
+  // SCHEDULER CONFIG PER-TENANT
+  async getSchedulerConfig(tenantId: string): Promise<{ config: any }> {
+    return this.handleRequest(
+      axios.get(`${API_BASE_URL}/scheduler/config/${tenantId}`)
+    );
+  }
+
+  async setSchedulerConfig(tenantId: string, config: {
+    enabled: boolean;
+    frequency_unit: 'minutes' | 'hours' | 'days' | 'weeks';
+    frequency_value: number;
+    start_at?: string | null; // ISO or YYYY-MM-DDTHH:MM
+  }): Promise<{ config: any }> {
+    return this.handleRequest(
+      axios.post(`${API_BASE_URL}/scheduler/config/${tenantId}`, config)
+    );
+  }
+
+  async runSchedulerNow(tenantId: string): Promise<{ result: any }> {
+    return this.handleRequest(
+      axios.post(`${API_BASE_URL}/scheduler/run-now/${tenantId}`)
+    );
+  }
+
   // TRAINING FILES
   async listTrainingFiles(tenant_id: string): Promise<TrainingFileListResponse> {
     return this.handleRequest(

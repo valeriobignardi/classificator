@@ -21,8 +21,7 @@ def get_database_config():
     Carica la configurazione del database MySQL dal config.yaml
     """
     config_path = '/home/ubuntu/classificatore/config.yaml'
-    with open(config_path, 'r', encoding='utf-8') as file:
-        config = yaml.safe_load(file)
+    config = load_config()
     
     return config['database']
 
@@ -179,6 +178,7 @@ def verify_fix():
     
     try:
         from Utils.tenant_config_helper import get_all_clustering_parameters_for_tenant
+from config_loader import load_config
         
         tenant_id = "015007d9-d413-11ef-86a5-96000228e7fe"
         params = get_all_clustering_parameters_for_tenant(tenant_id)

@@ -15,6 +15,13 @@ import tiktoken
 from typing import Union, List, Tuple, Dict, Any
 import logging
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config_loader import load_config
+
+
 
 class TokenizationManager:
     """
@@ -64,8 +71,7 @@ class TokenizationManager:
         Ultima modifica: 2025-08-26
         """
         try:
-            with open(self.config_path, 'r', encoding='utf-8') as file:
-                config = yaml.safe_load(file)
+            config = load_config()
             
             # NUOVA STRUTTURA: Priorità a embedding.tokenization
             embedding_config = config.get('embedding', {})
@@ -343,8 +349,7 @@ class TokenizationManager:
         Ultima modifica: 2025-08-31
         """
         try:
-            with open(self.config_path, 'r', encoding='utf-8') as file:
-                config = yaml.safe_load(file)
+            config = load_config()
             
             # Configurazione LLM globale
             llm_config = config.get('llm', {})

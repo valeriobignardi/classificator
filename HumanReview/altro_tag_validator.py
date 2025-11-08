@@ -37,6 +37,10 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from schema_manager import ClassificationSchemaManager
 from mongo_classification_reader import MongoClassificationReader
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+from config_loader import load_config
+
+
 # Import per embedding dinamico
 try:
     from EmbeddingEngine.simple_embedding_manager import simple_embedding_manager
@@ -143,7 +147,7 @@ class AltroTagValidator:
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.yaml')
             
             with open(config_path, 'r', encoding='utf-8') as f:
-                return yaml.safe_load(f)
+                return load_config()
                 
         except Exception as e:
             self.logger.error(f"❌ Errore caricamento config: {e}")

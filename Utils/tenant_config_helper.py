@@ -21,6 +21,13 @@ import yaml
 from typing import Any, Dict, Optional, Union
 from datetime import datetime
 
+# Import config_loader per caricare config.yaml con variabili ambiente
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config_loader import load_config
+
+
 
 class TenantConfigHelper:
     """
@@ -52,8 +59,7 @@ class TenantConfigHelper:
                 os.path.dirname(__file__), '..', 'config.yaml'
             )
             
-            with open(config_path, 'r', encoding='utf-8') as file:
-                config = yaml.safe_load(file)
+            config = load_config()
                 
             print(f"✅ [CONFIG] Configurazione base caricata da {config_path}")
             return config
@@ -84,8 +90,7 @@ class TenantConfigHelper:
             )
             
             if os.path.exists(tenant_config_file):
-                with open(tenant_config_file, 'r', encoding='utf-8') as f:
-                    tenant_config = yaml.safe_load(f)
+                tenant_config = load_config()
                     
                 clustering_params = tenant_config.get('clustering_parameters', {})
                 

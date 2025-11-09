@@ -70,3 +70,4 @@ config.yaml
 *.tmp
 *.temp
 CONTROL3.txt
+test_gpt5_api.py

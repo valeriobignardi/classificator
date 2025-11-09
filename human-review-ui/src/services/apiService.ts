@@ -669,10 +669,23 @@ class ApiService {
       const response = await axios.post(url, payload, {
         timeout: 0, // Nessun timeout - può durare quanto necessario
       });
-      console.log('✅ [DEBUG] Test clustering completato:', response.status);
-      console.log('✅ [DEBUG] Risultati clustering:', response.data);
+      console.log('✅ [DEBUG] Test clustering - risposta iniziale:', response.status);
+      console.log('✅ [DEBUG] Payload risposta:', response.data);
+
+      const data = response.data;
+
+      // Backend asincrono: restituisce job_id da pollare
+      if (data && data.job_id) {
+        const jobId = data.job_id;
+        console.log(`⏱️ [DEBUG] Test clustering in corso - Job ID: ${jobId}`);
+        const jobResult = await this.pollClusteringJob(tenantId, jobId);
+        console.log('✅ [DEBUG] Test clustering completato (polling):', jobResult);
+        return jobResult;
+      }
       
-      return response.data;
+      // Backend sincrono (compatibilità retro)
+      console.log('✅ [DEBUG] Test clustering completato (sincrono):', data);
+      return data;
     } catch (error) {
       console.error('❌ [DEBUG] Errore test clustering:', error);
       
@@ -699,6 +712,58 @@ class ApiService {
       }
       throw error;
     }
+  }
+
+  private async pollClusteringJob(tenantId: string, jobId: string, intervalMs: number = 5000, timeoutMs: number = 20 * 60 * 1000): Promise<any> {
+    const pollUrl = `${API_BASE_URL}/clustering/${tenantId}/job/${jobId}`;
+    const startTime = Date.now();
+    console.log(`📡 [DEBUG] Polling stato job clustering (${jobId})`);
+
+    while (true) {
+      if (Date.now() - startTime > timeoutMs) {
+        throw new Error('Timeout test clustering: il job richiede troppo tempo');
+      }
+
+      try {
+        const response = await axios.get(pollUrl, { timeout: intervalMs });
+        const jobData = response.data;
+        console.log('📡 [DEBUG] Stato job clustering:', jobData);
+
+        if (!jobData.success) {
+          throw new Error(jobData.error || 'Job clustering non riuscito');
+        }
+
+        if (jobData.status === 'completed' && jobData.result) {
+          return jobData.result;
+        }
+
+        if (jobData.status === 'failed') {
+          const errorMessage = jobData.error || jobData.result?.error || 'Test clustering fallito';
+          return {
+            success: false,
+            error: errorMessage,
+            tenant_id: tenantId,
+            execution_time: jobData.elapsed_time_seconds || 0,
+            statistics: undefined,
+            detailed_clusters: [],
+            quality_metrics: undefined,
+            outlier_analysis: undefined
+          };
+        }
+
+        await this.delay(intervalMs);
+      } catch (err) {
+        if (axios.isAxiosError(err) && err.response?.status === 404) {
+          throw new Error('Job clustering non trovato o scaduto');
+        }
+        console.warn('⚠️ [DEBUG] Polling job clustering ha incontrato un errore, ritento...', err);
+        await this.delay(intervalMs);
+      }
+    }
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   /**

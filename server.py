@@ -24,6 +24,7 @@ from collections import defaultdict
 
 # Config loader centralizzato (carica .env e sostituisce variabili ambiente)
 from config_loader import load_config
+from config_loader import get_mongodb_config
 
 # Import della classe Tenant
 sys.path.append(os.path.join(os.path.dirname(__file__), 'Utils'))
@@ -1812,11 +1813,38 @@ def health_check():
         db.disconnetti()
     except Exception as e:
         db_status = f'error: {str(e)}'
+    # Test (opzionale) connessione MongoDB
+    mongo_status = 'disabled'
+    mongo_connected = False
+    try:
+        mongo_cfg = get_mongodb_config() or {}
+        mongo_url = mongo_cfg.get('url')
+        url_is_placeholder = isinstance(mongo_url, str) and ('${' in mongo_url or '}' in mongo_url)
+        if mongo_url and not url_is_placeholder:
+            from pymongo import MongoClient
+            client = MongoClient(mongo_url, serverSelectionTimeoutMS=1000, connectTimeoutMS=1000)
+            try:
+                client.admin.command('ping')
+                mongo_status = 'connected'
+                mongo_connected = True
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+        else:
+            mongo_status = 'disabled'
+            mongo_connected = False
+    except Exception as e:
+        mongo_status = f'error: {str(e)}'
+        mongo_connected = False
     
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
         'database': db_status,
+        'mongodb': mongo_status,
+        'mongodb_connected': mongo_connected,
         'active_pipelines': len(classification_service.pipelines)
     })
 

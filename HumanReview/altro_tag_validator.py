@@ -34,8 +34,8 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Databa
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'Utils'))
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from schema_manager import ClassificationSchemaManager
 from mongo_classification_reader import MongoClassificationReader
+from TagDatabase.tag_database_connector import TagDatabaseConnector
 
 # Import config_loader per caricare config.yaml con variabili ambiente
 from config_loader import load_config
@@ -108,7 +108,7 @@ class AltroTagValidator:
         self.logger.info(f"🔧 AltroTagValidator inizializzato - soglia: {self.similarity_threshold}")
         
         # Inizializza i componenti necessari
-        self.schema_manager = ClassificationSchemaManager()
+        self.tag_db_connector = TagDatabaseConnector(tenant)
         
         # Crea MongoClassificationReader usando oggetto Tenant già disponibile
         try:
@@ -381,7 +381,7 @@ class AltroTagValidator:
                 return self._tags_cache, getattr(self, '_tags_mapping_cache', {})
             
             # Recupera tag dal database
-            tag_objects = self.schema_manager.get_all_tags()
+            tag_objects = self.tag_db_connector.get_all_tags()
             
             # Estrae i nomi dei tag
             existing_tags = [tag['tag_name'] for tag in tag_objects if tag and tag.get('tag_name')]
@@ -649,8 +649,8 @@ class AltroTagValidator:
                 self.logger.info(f"ℹ️ Tag '{new_tag}' già esistente come '{original_tag}' (confronto case-insensitive)")
                 return True
             
-            # Aggiunge nuovo tag usando schema_manager (con il case originale suggerito dal LLM)
-            success = self.schema_manager.add_tag_if_not_exists(
+            # Aggiunge nuovo tag usando database locale (mantiene case originale suggerito dal LLM)
+            success = self.tag_db_connector.add_tag_if_not_exists(
                 tag_name=new_tag,  # 🔧 Mantiene case originale suggerito dal LLM
                 tag_description=f"Tag creato automaticamente da conversazione {conversation_id}",
                 tag_color="#9C27B0"  # Colore viola per tag auto-generati

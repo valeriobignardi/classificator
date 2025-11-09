@@ -1,3 +1,4 @@
+import json
 import mysql.connector
 from mysql.connector import Error
 import os
@@ -24,6 +25,7 @@ class TagDatabaseConnector:
         self.tenant = tenant
         self.tenant_id = tenant.tenant_id  
         self.tenant_name = tenant.tenant_name
+        self.tenant_slug = getattr(tenant, 'tenant_slug', None)
             
         self.config = self._load_config()
         self.connection = None
@@ -51,6 +53,7 @@ class TagDatabaseConnector:
         instance.tenant = fake_tenant
         instance.tenant_id = fake_tenant.tenant_id
         instance.tenant_name = fake_tenant.tenant_name
+        instance.tenant_slug = fake_tenant.tenant_slug
         instance.config = instance._load_config()
         instance.connection = None
         return instance
@@ -493,6 +496,122 @@ class TagDatabaseConnector:
                 for row in result
             ]
         return []
+    
+    def _normalize_classification_method(self, method_used, is_human_reviewed: bool) -> str:
+        if is_human_reviewed:
+            return 'MANUAL'
+        if not method_used:
+            return 'AUTOMATIC'
+        normalized = str(method_used).strip().lower()
+        mapping = {
+            'manual': 'MANUAL',
+            'human': 'MANUAL',
+            'hybrid': 'HYBRID',
+            'ensemble': 'HYBRID',
+            'ml_ensemble': 'HYBRID',
+            'llm': 'AUTOMATIC',
+            'ml': 'AUTOMATIC',
+            'automatic': 'AUTOMATIC'
+        }
+        return mapping.get(normalized, 'AUTOMATIC')
+    
+    def _resolve_classified_by(self, method_used, is_human_reviewed: bool) -> str:
+        if is_human_reviewed:
+            return 'HUMAN_REVIEW'
+        if not method_used:
+            return 'AI_SYSTEM'
+        normalized = str(method_used).strip().upper().replace(' ', '_')
+        return f"PIPELINE_{normalized}"
+    
+    def _serialize_notes(self, method_used, prediction_metadata, is_human_reviewed: bool) -> str:
+        payload = {}
+        if method_used:
+            payload['method_used'] = method_used
+        if prediction_metadata:
+            payload['metadata'] = prediction_metadata
+        if is_human_reviewed:
+            payload['human_reviewed'] = True
+        if not payload:
+            return None
+        try:
+            return json.dumps(payload, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            fallback = {
+                'method_used': str(method_used) if method_used else None,
+                'human_reviewed': is_human_reviewed
+            }
+            return json.dumps(fallback, ensure_ascii=False, default=str)
+    
+    def salva_classificazione(self,
+                              session_id: str,
+                              tag_name: str,
+                              confidence: float = None,
+                              method_used: str = None,
+                              is_human_reviewed: bool = False,
+                              prediction_metadata: dict = None,
+                              tenant_slug: str = None) -> bool:
+        """
+        Salva o aggiorna la classificazione di una sessione sul database MySQL.
+        """
+        effective_tenant_slug = tenant_slug or self.tenant_slug
+        if not effective_tenant_slug:
+            print("❌ impossibile salvare: tenant_slug mancante")
+            return False
+        
+        tenant_name = self.tenant_name
+        tenant_id = self.tenant_id
+        
+        if not tenant_id or not tenant_name:
+            tenant_info = self.get_tenant_by_slug(effective_tenant_slug)
+            if not tenant_info:
+                print(f"❌ Tenant '{effective_tenant_slug}' non trovato per il salvataggio della classificazione")
+                return False
+            tenant_id = tenant_info['tenant_id']
+            tenant_name = tenant_info['tenant_name']
+        
+        try:
+            confidence_value = float(confidence) if confidence is not None else None
+        except (TypeError, ValueError):
+            confidence_value = None
+        
+        classification_method = self._normalize_classification_method(method_used, is_human_reviewed)
+        classified_by = self._resolve_classified_by(method_used, is_human_reviewed)
+        notes_json = self._serialize_notes(method_used, prediction_metadata, is_human_reviewed)
+        
+        comando = """
+        INSERT INTO session_classifications 
+        (session_id, tag_name, tenant_name, tenant_id, confidence_score, classification_method, classified_by, notes)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            tag_name = VALUES(tag_name),
+            confidence_score = VALUES(confidence_score),
+            classification_method = VALUES(classification_method),
+            classified_by = VALUES(classified_by),
+            notes = VALUES(notes),
+            updated_at = CURRENT_TIMESTAMP
+        """
+        
+        try:
+            result = self.esegui_comando(
+                comando,
+                (
+                    session_id,
+                    tag_name,
+                    tenant_name,
+                    tenant_id,
+                    confidence_value,
+                    classification_method,
+                    classified_by,
+                    notes_json
+                )
+            )
+            if result is None:
+                print(f"❌ Errore nell'inserimento della classificazione per sessione {session_id}")
+                return False
+            return True
+        except Error as e:
+            print(f"❌ Errore MySQL durante il salvataggio della classificazione: {e}")
+            return False
     
     def classifica_sessione(self, session_id, tag_name, tenant_slug, confidence_score=None, method='MANUAL', classified_by=None, notes=None):
         """Classifica una sessione"""

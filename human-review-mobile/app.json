@@ -1,0 +1,11 @@
+{
+  "expo": {
+    "name": "Human Review Mobile",
+    "slug": "human-review-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "ios": { "supportsTablet": false },
+    "android": {},
+    "web": { "bundler": "metro" }
+  }
+}

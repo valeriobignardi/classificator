@@ -32,6 +32,7 @@ from tenant import Tenant
 
 # Import config_loader per caricare config.yaml con variabili ambiente
 from config_loader import load_config
+from config_loader import get_mongodb_config
 
 
 class MongoClassificationReader:
@@ -52,8 +53,8 @@ class MongoClassificationReader:
     Ultimo aggiornamento: 2025-08-21
     """
     
-    def __init__(self, tenant: Tenant, 
-                 mongodb_url: str = "mongodb://localhost:27017", 
+    def __init__(self, tenant: Tenant,
+                 mongodb_url: str = "mongodb://localhost:27017",
                  database_name: str = "classificazioni"):
         """
         Inizializza il reader MongoDB con OGGETTO TENANT OBBLIGATORIO
@@ -68,8 +69,39 @@ class MongoClassificationReader:
             raise TypeError(f"Il parametro 'tenant' deve essere un oggetto Tenant con attributi tenant_id, tenant_name, tenant_slug. Ricevuto: {type(tenant)} - {tenant}")
             
         self.tenant = tenant
-        self.mongodb_url = mongodb_url
-        self.database_name = database_name
+
+        # Carica configurazione MongoDB e applica in modo sicuro
+        mongo_cfg = {}
+        try:
+            mongo_cfg = get_mongodb_config() or {}
+        except Exception:
+            mongo_cfg = {}
+
+        # Flag abilitazione: se manca URL o è placeholder, disabilita in modo esplicito
+        configured_url = mongo_cfg.get('url')
+        url_is_placeholder = isinstance(configured_url, str) and ('${' in configured_url or '}' in configured_url)
+
+        self.mongo_enabled = True
+        if configured_url and not url_is_placeholder:
+            # Se il chiamante ha passato l'URL di default, sovrascrivi con quello da config
+            if mongodb_url == "mongodb://localhost:27017":
+                self.mongodb_url = configured_url
+            else:
+                self.mongodb_url = mongodb_url
+        else:
+            # Nessun URL valido configurato → disabilita Mongo per evitare spam errori
+            self.mongo_enabled = False
+            self.mongodb_url = mongodb_url
+
+        # Database name: preferisci config se presente
+        configured_db = mongo_cfg.get('database')
+        if configured_db and not (isinstance(configured_db, str) and ('${' in configured_db)):
+            self.database_name = configured_db
+        else:
+            self.database_name = database_name
+
+        # Per evitare log ripetuti quando Mongo è disabilitato
+        self._disabled_notice_emitted = False
         
         # Collection name basata su tenant object
         self.collection_name = self.get_collection_name()
@@ -80,7 +112,7 @@ class MongoClassificationReader:
         
         print(f"✅ MongoClassificationReader inizializzato per tenant: {tenant.tenant_name}")
         print(f"   📊 Collection: {self.collection_name}")
-        print(f"   🏢 Database: {database_name}")
+        print(f"   🏢 Database: {self.database_name}")
     
     def get_tenant_id_from_name(self, tenant_name: str) -> Optional[str]:
         """
@@ -282,6 +314,12 @@ class MongoClassificationReader:
         Ultimo aggiornamento: 2025-08-23
         """
         try:
+            if not self.mongo_enabled:
+                # Avvisa una sola volta per sessione
+                if not self._disabled_notice_emitted:
+                    print("ℹ️ MongoDB disabilitato o URL non configurato: skip connessione/salvataggio")
+                    self._disabled_notice_emitted = True
+                return False
             if not self.client:
                 # Configurazione pool connessioni per evitare esaurimento
                 self.client = MongoClient(
@@ -522,6 +560,7 @@ class MongoClassificationReader:
         """
         try:
             if not self.ensure_connection():
+                # Mongo non disponibile/disabilitato → nessuna etichetta
                 return []
                 
             # Usa la collection del tenant
@@ -629,7 +668,7 @@ class MongoClassificationReader:
         """
         try:
             if not self.ensure_connection():
-                return []
+                return False
                 
             # Usa la collection del tenant
             collection = self.db[self.collection_name]
@@ -696,7 +735,7 @@ class MongoClassificationReader:
         """
         try:
             if not self.ensure_connection():
-                return []
+                return False
                 
             # Usa la collection appropriata per il tenant
             collection = self.db[self.get_collection_name()]
@@ -1379,7 +1418,7 @@ class MongoClassificationReader:
         
         try:
             if not self.ensure_connection():
-                return []
+                return False
             
             # Usa la collection appropriata per il tenant (ora usa l'oggetto tenant interno)
             collection = self.db[self.get_collection_name()]

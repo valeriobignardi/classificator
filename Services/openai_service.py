@@ -345,18 +345,21 @@ class OpenAIService:
             else:
                 deployment_name = model  # Usa il nome del modello come deployment
             
-            # URL Azure: https://{endpoint}/openai/deployments/{deployment}/chat/completions?api-version=2024-11-20
+            # ✅ Chat Completions API per tutti i modelli (GPT-4o e GPT-5)
             url = f"{self.azure_endpoint}/openai/deployments/{deployment_name}/{endpoint}"
+            # Rimuovi 'model' dal payload per Azure (è già nell'URL)
+            payload = dict(payload)  # Copia per non modificare l'originale
+            payload.pop('model', None)
+            
+            print(f"🔧 [DEBUG] Chat Completions URL: {url} | deployment_name={deployment_name}")
             
             # Aggiungi api-version per Azure
             if '?' in url:
                 url += f"&api-version={self.azure_api_version}"
             else:
                 url += f"?api-version={self.azure_api_version}"
-                
-            # Rimuovi 'model' dal payload per Azure (è già nell'URL)
-            payload = dict(payload)  # Copia per non modificare l'originale
-            payload.pop('model', None)
+            
+            print(f"🌐 [DEBUG] Final URL: {url}")
             
         else:
             # OpenAI standard
@@ -374,6 +377,10 @@ class OpenAIService:
                 
                 if response.status == 200:
                     result = await response.json()
+                    
+                    # 🔍 DEBUG: Log risposta raw per GPT-5
+                    if 'gpt-5' in url.lower():
+                        print(f"🔍 [DEBUG] GPT-5 RAW RESPONSE:\n{json.dumps(result, indent=2, ensure_ascii=False)}")
                     
                     # Aggiorna statistiche successo
                     call_duration = time.time() - start_time
@@ -476,28 +483,29 @@ class OpenAIService:
             is_gpt5_family = model.lower().startswith('gpt-5') or model.lower().startswith('o1') or model.lower().startswith('o3')
             
             # Costruisci payload base
-            payload = {
-                'model': model,
-                'messages': messages,
-                **kwargs
-            }
-            
-            # Aggiungi max_tokens o max_completion_tokens in base al modello
             if is_gpt5_family:
-                # GPT-5: Usa max_completion_tokens e OMETTI parametri non supportati
-                payload['max_completion_tokens'] = max_tokens
-                
-                # GPT-5 supporta SOLO temperature=1.0 (default)
-                # NON supporta: temperature custom, frequency_penalty, presence_penalty, top_p
-                # Ometti questi parametri per GPT-5
-                print(f"🚀 [OpenAIService] GPT-5 family - max_completion_tokens={max_tokens}, usando parametri default (temp=1.0)")
+                # GPT-5: Usa Chat Completions API con max_completion_tokens
+                payload = {
+                    'model': model,
+                    'messages': messages,  # ✅ GPT-5 usa 'messages' come GPT-4o
+                    'max_completion_tokens': max_tokens,  # ✅ ma max_completion_tokens invece di max_tokens
+                    **kwargs
+                }
+                # GPT-5 supporta temperature=1.0 di default
+                # Altri parametri potrebbero non essere supportati
+                print(f"🚀 [OpenAIService] GPT-5 family - max_completion_tokens={max_tokens}")
             else:
-                # GPT-4/GPT-4o: Usa parametri standard
-                payload['max_tokens'] = max_tokens
-                payload['temperature'] = temperature
-                payload['top_p'] = top_p
-                payload['frequency_penalty'] = frequency_penalty
-                payload['presence_penalty'] = presence_penalty
+                # GPT-4/GPT-4o: Usa Chat Completions API format standard
+                payload = {
+                    'model': model,
+                    'messages': messages,
+                    'max_tokens': max_tokens,
+                    'temperature': temperature,
+                    'top_p': top_p,
+                    'frequency_penalty': frequency_penalty,
+                    'presence_penalty': presence_penalty,
+                    **kwargs
+                }
             
             # 🔥 COMPATIBILITÀ GPT-4o: Verifica se response_format è specificato
             # GPT-4o usa 'response_format' NON 'text' (come GPT-5)
@@ -519,9 +527,13 @@ class OpenAIService:
                 connector=connector, 
                 timeout=timeout
             ) as session:
+                # ✅ GPT-5 usa Chat Completions API standard (NON Responses API)
+                # La differenza è solo nei parametri del payload (max_completion_tokens vs max_tokens)
+                endpoint = 'chat/completions'
+                
                 response = await self._make_api_call(
                     session, 
-                    'chat/completions', 
+                    endpoint, 
                     payload
                 )
                 

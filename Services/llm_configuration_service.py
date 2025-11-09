@@ -863,47 +863,25 @@ class LLMConfigurationService:
             temperature = generation.get('temperature', 0.1)
             
             # Esegui test in base al modello
-            if model_name.lower() == 'gpt-5':
-                # GPT-5 usa Responses API
-                import asyncio
-                
-                async def test_gpt5():
-                    return await openai_service.responses_completion(
-                        model=model_name,
-                        input_data=messages,
-                        text={'format': {'type': 'text'}},
-                        max_tokens=max_tokens
-                    )
-                
-                # Esegui chiamata asincrona
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                response = loop.run_until_complete(test_gpt5())
-                loop.close()
-                
-                # Estrai testo dalla risposta GPT-5
-                response_text = response.get('output_text', '') if isinstance(response, dict) else str(response)
-                
-            else:
-                # GPT-4o e altri usano Chat Completions API
-                import asyncio
-                
-                async def test_chat():
-                    return await openai_service.chat_completion(
-                        model=model_name,
-                        messages=messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens
-                    )
-                
-                # Esegui chiamata asincrona
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                response = loop.run_until_complete(test_chat())
-                loop.close()
-                
-                # Estrai testo dalla risposta
-                response_text = response.get('output_text', '') if isinstance(response, dict) else str(response)
+            # ✅ Tutti i modelli OpenAI usano chat_completion (anche GPT-5)
+            import asyncio
+            
+            async def test_openai():
+                return await openai_service.chat_completion(
+                    model=model_name,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens
+                )
+            
+            # Esegui chiamata asincrona
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            response = loop.run_until_complete(test_openai())
+            loop.close()
+            
+            # Estrai testo dalla risposta
+            response_text = self._extract_llm_response_text(response)
             
             test_duration = time.time() - start_time
             

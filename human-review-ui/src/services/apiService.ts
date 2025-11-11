@@ -58,11 +58,13 @@ class ApiService {
     );
   }
 
-  async resolveClusterMajority(tenant_id: string, cluster_id: string, options?: { notes?: string }): Promise<{
+  async resolveClusterMajority(tenant_id: string, cluster_id: string, options?: { notes?: string; selected_label?: string; label_override?: string }): Promise<{
     success: boolean;
     tenant_id: string;
     cluster_id: string;
     majority_label: string;
+    applied_label: string;
+    requested_label?: string | null;
     resolved_count: number;
     total_candidates: number;
     errors: Array<{ case_id: string; error: string }>;

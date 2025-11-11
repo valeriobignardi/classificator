@@ -3188,6 +3188,10 @@ def api_resolve_cluster_majority(tenant_id: str, cluster_id: str):
 
         data = request.get_json(silent=True) or {}
         notes = data.get('notes', f'batch_majority_cluster_{cluster_id}')
+        requested_label_raw = (data.get('label_override') or data.get('selected_label') or data.get('custom_label') or '').strip()
+        applied_label = requested_label_raw.upper() if requested_label_raw else majority_label
+        if not applied_label:
+            return jsonify({'success': False, 'error': 'Etichetta selezionata non valida'}), 400
 
         resolved = 0
         errors = []
@@ -3198,7 +3202,7 @@ def api_resolve_cluster_majority(tenant_id: str, cluster_id: str):
             try:
                 res = quality_gate.resolve_review_case(
                     case_id=case_id,
-                    human_decision=majority_label,
+                    human_decision=applied_label,
                     human_confidence=0.9,
                     notes=notes
                 )
@@ -3214,6 +3218,8 @@ def api_resolve_cluster_majority(tenant_id: str, cluster_id: str):
             'tenant_id': tenant_id,
             'cluster_id': cluster_id,
             'majority_label': majority_label,
+            'applied_label': applied_label,
+            'requested_label': requested_label_raw if requested_label_raw else None,
             'resolved_count': resolved,
             'total_candidates': len(cluster_sessions),
             'errors': errors

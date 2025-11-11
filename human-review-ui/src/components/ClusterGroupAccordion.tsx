@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Box, Typography, Accordion, AccordionSummary, AccordionDetails, Chip, Card, CardContent, Button, Tooltip } from '@mui/material';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Box, Typography, Accordion, AccordionSummary, AccordionDetails, Chip, Card, CardContent, Button, Tooltip, TextField } from '@mui/material';
 import { ExpandMore as ExpandMoreIcon, Star as StarIcon, Link as LinkIcon, People as PeopleIcon } from '@mui/icons-material';
 import { ReviewCase } from '../types/ReviewCase';
 
@@ -9,7 +9,7 @@ export interface ClusterGroupProps {
   propagated?: ReviewCase[];                // opzionale: propagate note/pending
   extraRepresentatives?: ReviewCase[];      // altri rappresentanti (caricati da "tutte le sessioni")
   onLoadMoreReps?: (clusterId: string) => Promise<void> | void; // lazy loader
-  onConfirmMajority?: (clusterId: string) => Promise<void> | void; // azione batch
+  onConfirmMajority?: (clusterId: string, selectedLabel: string) => Promise<void> | void; // azione batch
 }
 
 const getMajorityLabel = (items: ReviewCase[]): { label: string; ratio: number } => {
@@ -38,6 +38,38 @@ export const ClusterGroupAccordion: React.FC<ClusterGroupProps> = ({
 
   const repAll = [...representatives, ...extraRepresentatives];
   const majority = getMajorityLabel(repAll);
+  const [selectedLabel, setSelectedLabel] = useState<string>(() =>
+    majority.label && majority.label !== 'N/A' ? majority.label : ''
+  );
+  useEffect(() => {
+    const defaultLabel = majority.label && majority.label !== 'N/A' ? majority.label : '';
+    setSelectedLabel((current) => {
+      if (!current.trim()) {
+        return defaultLabel;
+      }
+      if (defaultLabel && current.trim().toUpperCase() === defaultLabel.toUpperCase()) {
+        return defaultLabel;
+      }
+      return current;
+    });
+  }, [clusterId, majority.label]);
+  const normalizedSelectedLabel = selectedLabel.trim().toUpperCase();
+  const availableLabels = useMemo(() => {
+    const unique = new Set<string>();
+    repAll.forEach((rc) => {
+      const lbl = (rc.classification || rc.ml_prediction || rc.llm_prediction || '').trim();
+      if (lbl) {
+        unique.add(lbl.toUpperCase());
+      }
+    });
+    return Array.from(unique);
+  }, [repAll]);
+  const handleSelectLabel = (label: string) => {
+    setSelectedLabel(label);
+  };
+  const handleCustomLabelChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setSelectedLabel(event.target.value);
+  };
 
   const handleChange = (_: any, isExpanded: boolean) => {
     setExpanded(isExpanded);
@@ -73,21 +105,65 @@ export const ClusterGroupAccordion: React.FC<ClusterGroupProps> = ({
             <Typography variant="body2" color="text.secondary">Nessun rappresentante disponibile.</Typography>
           ) : (
             <Box display="flex" gap={2} flexWrap="wrap">
-              {repAll.map((rc) => (
-                <Card key={rc.case_id || rc.session_id} sx={{ flex: '1 1 320px', border: '2px solid #1976d2' }}>
-                  <CardContent>
-                    <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                      <Typography variant="subtitle2" color="primary" fontWeight="bold">
-                        {rc.classification || rc.ml_prediction || rc.llm_prediction || 'N/A'}
+              {repAll.map((rc) => {
+                const conversation = rc.conversation_text || '';
+                const previewLimit = 160;
+                const preview = conversation.slice(0, previewLimit);
+                const hasMore = conversation.length > previewLimit;
+                const label = (rc.classification || rc.ml_prediction || rc.llm_prediction || 'N/A').trim();
+                const labelUpper = label.toUpperCase();
+                const isSelected = normalizedSelectedLabel === labelUpper && normalizedSelectedLabel.length > 0;
+
+                return (
+                  <Tooltip
+                    key={rc.case_id || rc.session_id}
+                    title={
+                      <Typography variant="body2" sx={{ whiteSpace: 'pre-line', maxWidth: 480 }}>
+                        {conversation || 'Conversazione non disponibile'}
                       </Typography>
-                      <Chip label={`Conf ${(rc.ml_confidence || rc.llm_confidence || 0) * 100 | 0}%`} size="small" />
+                    }
+                    placement="top-start"
+                    arrow
+                    enterDelay={400}
+                  >
+                    <Box sx={{ flex: '1 1 320px' }}>
+                      <Card
+                        sx={{
+                          border: isSelected ? '2px solid #2e7d32' : '2px solid #1976d2',
+                          boxShadow: isSelected ? '0 0 0 1px rgba(46, 125, 50, 0.3)' : undefined,
+                          transition: 'border-color 0.2s ease'
+                        }}
+                      >
+                        <CardContent>
+                          <Box display="flex" justifyContent="space-between" alignItems="center" mb={1} gap={1}>
+                            <Typography variant="subtitle2" color="primary" fontWeight="bold" sx={{ wordBreak: 'break-word' }}>
+                              {label || 'N/A'}
+                            </Typography>
+                            <Chip
+                              label={`Conf ${Math.round(((rc.ml_confidence ?? rc.llm_confidence ?? 0) as number) * 100)}%`}
+                              size="small"
+                            />
+                          </Box>
+                          <Typography variant="body2" color="text.secondary">
+                            {preview}
+                            {hasMore ? '…' : ''}
+                          </Typography>
+                          <Box mt={2} display="flex" justifyContent="flex-end">
+                            <Button
+                              size="small"
+                              variant={isSelected ? 'contained' : 'outlined'}
+                              color={isSelected ? 'success' : 'primary'}
+                              onClick={() => handleSelectLabel(labelUpper)}
+                            >
+                              Usa etichetta
+                            </Button>
+                          </Box>
+                        </CardContent>
+                      </Card>
                     </Box>
-                    <Typography variant="body2" color="text.secondary">
-                      {(rc.conversation_text || '').slice(0, 160)}{(rc.conversation_text || '').length > 160 ? '…' : ''}
-                    </Typography>
-                  </CardContent>
-                </Card>
-              ))}
+                  </Tooltip>
+                );
+              })}
             </Box>
           )}
           {onLoadMoreReps && (
@@ -99,15 +175,60 @@ export const ClusterGroupAccordion: React.FC<ClusterGroupProps> = ({
               </Tooltip>
             </Box>
           )}
-          {onConfirmMajority && repAll.length > 0 && (
-            <Box mt={1}>
-              <Tooltip title={`Applica etichetta di maggioranza (${majority.label}) ai rappresentanti pending di questo cluster`}>
-                <span>
-                  <Button color="success" variant="contained" size="small" onClick={() => onConfirmMajority(clusterId)}>
-                    ✅ Conferma maggioranza ({majority.label})
-                  </Button>
-                </span>
-              </Tooltip>
+          {repAll.length > 0 && (
+            <Box mt={3} display="flex" flexDirection="column" gap={1}>
+              <Typography variant="subtitle2">Etichetta da applicare</Typography>
+              {availableLabels.length > 0 && (
+                <Box display="flex" gap={1} flexWrap="wrap">
+                  {availableLabels.map((lbl) => {
+                    const isCurrent = normalizedSelectedLabel === lbl;
+                    return (
+                      <Button
+                        key={lbl}
+                        size="small"
+                        variant={isCurrent ? 'contained' : 'outlined'}
+                        color={isCurrent ? 'success' : 'primary'}
+                        onClick={() => handleSelectLabel(lbl)}
+                      >
+                        {lbl}
+                      </Button>
+                    );
+                  })}
+                </Box>
+              )}
+              <TextField
+                label="Imposta nuova etichetta"
+                size="small"
+                value={selectedLabel}
+                onChange={handleCustomLabelChange}
+                placeholder="Digita una nuova etichetta"
+                helperText="Scrivi un'etichetta personalizzata o seleziona un'opzione sopra"
+              />
+              {onConfirmMajority && (
+                <Box>
+                  <Tooltip
+                    title={
+                      normalizedSelectedLabel
+                        ? `Applica l'etichetta ${normalizedSelectedLabel} ai rappresentanti pending`
+                        : 'Inserisci o seleziona un\'etichetta valida'
+                    }
+                    arrow
+                  >
+                    <span>
+                      <Button
+                        color="success"
+                        variant="contained"
+                        size="small"
+                        onClick={() => onConfirmMajority(clusterId, selectedLabel.trim())}
+                        disabled={!normalizedSelectedLabel}
+                      >
+                        ✅ Applica etichetta
+                        {normalizedSelectedLabel ? ` (${normalizedSelectedLabel})` : ''}
+                      </Button>
+                    </span>
+                  </Tooltip>
+                </Box>
+              )}
             </Box>
           )}
         </Box>
@@ -116,21 +237,47 @@ export const ClusterGroupAccordion: React.FC<ClusterGroupProps> = ({
           <Box sx={{ p: 2 }}>
             <Typography variant="subtitle2" gutterBottom>🔗 Sessioni Ereditate</Typography>
             <Box display="flex" gap={2} flexWrap="wrap">
-              {propagated.map((pc) => (
-                <Card key={pc.case_id || pc.session_id} sx={{ flex: '1 1 320px', border: '1px dashed #ff9800', backgroundColor: '#fff8e1' }}>
-                  <CardContent>
-                    <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
-                      <Typography variant="subtitle2" color="secondary" fontWeight="bold">
-                        {pc.classification || pc.ml_prediction || pc.llm_prediction || 'N/A'}
+              {propagated.map((pc) => {
+                const conversation = pc.conversation_text || '';
+                const previewLimit = 160;
+                const preview = conversation.slice(0, previewLimit);
+                const hasMore = conversation.length > previewLimit;
+                return (
+                  <Tooltip
+                    key={pc.case_id || pc.session_id}
+                    title={
+                      <Typography variant="body2" sx={{ whiteSpace: 'pre-line', maxWidth: 480 }}>
+                        {conversation || 'Conversazione non disponibile'}
                       </Typography>
-                      <Chip label={`Conf ${(pc.ml_confidence || pc.llm_confidence || 0) * 100 | 0}%`} size="small" color="secondary" variant="outlined" />
+                    }
+                    placement="top-start"
+                    arrow
+                    enterDelay={400}
+                  >
+                    <Box sx={{ flex: '1 1 320px' }}>
+                      <Card sx={{ border: '1px dashed #ff9800', backgroundColor: '#fff8e1' }}>
+                        <CardContent>
+                          <Box display="flex" justifyContent="space-between" alignItems="center" mb={1} gap={1}>
+                            <Typography variant="subtitle2" color="secondary" fontWeight="bold" sx={{ wordBreak: 'break-word' }}>
+                              {pc.classification || pc.ml_prediction || pc.llm_prediction || 'N/A'}
+                            </Typography>
+                            <Chip
+                              label={`Conf ${Math.round(((pc.ml_confidence ?? pc.llm_confidence ?? 0) as number) * 100)}%`}
+                              size="small"
+                              color="secondary"
+                              variant="outlined"
+                            />
+                          </Box>
+                          <Typography variant="body2" color="text.secondary">
+                            {preview}
+                            {hasMore ? '…' : ''}
+                          </Typography>
+                        </CardContent>
+                      </Card>
                     </Box>
-                    <Typography variant="body2" color="text.secondary">
-                      {(pc.conversation_text || '').slice(0, 160)}{(pc.conversation_text || '').length > 160 ? '…' : ''}
-                    </Typography>
-                  </CardContent>
-                </Card>
-              ))}
+                  </Tooltip>
+                );
+              })}
             </Box>
           </Box>
         )}

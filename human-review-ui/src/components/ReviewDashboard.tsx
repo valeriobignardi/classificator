@@ -59,9 +59,8 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
   // 🆕 Nuovo stato per cluster view
   const [clusters, setClusters] = useState<ClusterCase[]>([]);
   const [extraRepsByCluster, setExtraRepsByCluster] = useState<Record<string, ReviewCase[]>>({});
-  const [showClusterView, setShowClusterView] = useState(false); // Default: mostra vista tradizionale
   // 🆕 NUOVA LOGICA FILTRI: Di base vedi tutto, flag per nascondere categorie specifiche
-  const [hideOutliers, setHideOutliers] = useState(false);        // Flag per nascondere outliers
+  const [hideOutliers, setHideOutliers] = useState(true);        // Flag per nascondere outliers (default ON)
   const [hideRepresentatives, setHideRepresentatives] = useState(false); // Flag per nascondere rappresentanti
   
   const [dashboardLoading, setDashboardLoading] = useState(false);
@@ -86,6 +85,11 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
 
   // Stato per gestire le tab
   const [activeTab, setActiveTab] = useState(0);
+  const CLUSTER_TAB = 0;
+  const REVIEW_TAB = 1;
+  const SESSIONS_TAB = 2;
+  const isClusterTab = activeTab === CLUSTER_TAB;
+  const isReviewTab = activeTab === REVIEW_TAB;
 
   // 🚨 Logica per controllare se i prompt esistono
   const hasPrompts = promptStatus?.canOperate === true;
@@ -129,10 +133,73 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
     loadUIConfig();
   }, []);
 
-  const loadCases = useCallback(async (limit?: number) => {
-    // Debounce: evita troppe chiamate consecutive
+  const loadClusterCases = useCallback(async () => {
     const now = Date.now();
-    if (now - lastLoadTime.current < 1000) { // Massimo 1 chiamata al secondo
+    if (now - lastLoadTime.current < 1000) {
+      return;
+    }
+    lastLoadTime.current = now;
+
+    setDashboardLoading(true);
+    setError(null);
+
+    try {
+      const includeOutliers = !hideOutliers;
+      const includePropagated = true;
+      const includeRepresentatives = !hideRepresentatives;
+
+      const response = await apiService.getReviewCases(
+        tenant.tenant_id,
+        currentLimit,
+        includePropagated,
+        includeOutliers,
+        includeRepresentatives
+      );
+
+      const grouped: Record<string, ClusterCase & { representatives_list: ReviewCase[] }> = {} as any;
+      (response.cases || []).forEach((c: ReviewCase) => {
+        const cid = (c.cluster_id || 'unknown').toString();
+        if (!grouped[cid]) {
+          grouped[cid] = {
+            cluster_id: cid,
+            representative: undefined as any,
+            propagated_sessions: [],
+            total_sessions: 0,
+            cluster_size: 0,
+            representatives_list: []
+          } as any;
+        }
+        if (c.is_representative === false) {
+          grouped[cid].propagated_sessions.push(c);
+        } else {
+          grouped[cid].representatives_list.push(c);
+          if (!grouped[cid].representative) grouped[cid].representative = c;
+        }
+      });
+
+      const clusterArr: ClusterCase[] = Object.values(grouped)
+        .filter((cluster) => cluster.cluster_id !== '-1')
+        .map((g) => ({
+          cluster_id: g.cluster_id,
+          representative: g.representative || g.representatives_list[0] || g.propagated_sessions[0],
+          propagated_sessions: g.propagated_sessions,
+          total_sessions: (g.representatives_list?.length || 0) + (g.propagated_sessions?.length || 0),
+          cluster_size: (g.representatives_list?.length || 0) + (g.propagated_sessions?.length || 0)
+        }));
+
+      setClusters(clusterArr);
+      setCases([]);
+    } catch (err) {
+      setError('Errore nel caricamento dei cluster');
+      console.error('Error loading cluster cases:', err);
+    } finally {
+      setDashboardLoading(false);
+    }
+  }, [tenant.tenant_id, currentLimit, hideOutliers, hideRepresentatives]);
+
+  const loadReviewCases = useCallback(async (limit?: number) => {
+    const now = Date.now();
+    if (now - lastLoadTime.current < 1000) {
       return;
     }
     lastLoadTime.current = now;
@@ -142,55 +209,26 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
 
     try {
       const effectiveLimit = limit || currentLimit;
-      
-      // 🔧 LOGICA CORRETTA: I propagati non arrivano mai automaticamente in Review Queue
-      // Arrivano SOLO se aggiunti manualmente da "Tutte le Sessioni"
-      // Quindi includePropagated è sempre true (se ci sono, l'utente li ha messi)
       const includeOutliers = !hideOutliers;
-      const includePropagated = true; // Sempre true - i propagati ci sono solo se aggiunti manualmente
+      const includePropagated = true;
       const includeRepresentatives = !hideRepresentatives;
-      
-      if (showClusterView) {
-        // Vista cluster: costruisci gruppo cluster a partire dai cases pending
-        const response = await apiService.getReviewCases(tenant.tenant_id, effectiveLimit, includePropagated, includeOutliers, includeRepresentatives);
-        const grouped: Record<string, ClusterCase & { representatives_list: ReviewCase[] }> = {} as any;
-        (response.cases || []).forEach((c: ReviewCase) => {
-          const cid = (c.cluster_id || 'unknown').toString();
-          if (!grouped[cid]) grouped[cid] = { cluster_id: cid, representative: undefined as any, propagated_sessions: [], total_sessions: 0, cluster_size: 0, representatives_list: [] } as any;
-          if (c.is_representative === false) {
-            grouped[cid].propagated_sessions.push(c);
-          } else {
-            grouped[cid].representatives_list.push(c);
-            if (!grouped[cid].representative) grouped[cid].representative = c;
-          }
-        });
-        const clusterArr: ClusterCase[] = Object.values(grouped).map(g => ({
-          cluster_id: g.cluster_id,
-          representative: g.representative || g.representatives_list[0] || g.propagated_sessions[0],
-          propagated_sessions: g.propagated_sessions,
-          total_sessions: (g.representatives_list?.length || 0) + (g.propagated_sessions?.length || 0),
-          cluster_size: (g.representatives_list?.length || 0) + (g.propagated_sessions?.length || 0)
-        }));
-        setClusters(clusterArr);
-        setCases([]);
-      } else {
-        // Vista lista: usa l'endpoint review cases con logica di filtraggio modificata
-        const response = await apiService.getReviewCases(tenant.tenant_id, effectiveLimit, includePropagated, includeOutliers, includeRepresentatives);
-        setCases(response.cases);
-        setClusters([]); // Reset clusters quando in traditional view
-      }
+
+      const response = await apiService.getReviewCases(
+        tenant.tenant_id,
+        effectiveLimit,
+        includePropagated,
+        includeOutliers,
+        includeRepresentatives
+      );
+      setCases(response.cases);
+      setClusters([]);
     } catch (err) {
       setError('Errore nel caricamento dei casi');
-      console.error('Error loading cases:', err);
+      console.error('Error loading review cases:', err);
     } finally {
       setDashboardLoading(false);
     }
-  }, [tenant, currentLimit, showClusterView, hideOutliers, hideRepresentatives]);
-
-  // 🆕 Funzione per gestire il toggle della vista
-  const handleViewToggle = () => {
-    setShowClusterView(!showClusterView);
-  };
+  }, [tenant.tenant_id, currentLimit, hideOutliers, hideRepresentatives]);
 
   // 🆕 Gestori per i nuovi flag di esclusione
   const handleHideOutliersToggle = () => {
@@ -202,13 +240,17 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
   };
 
   const handleRefreshCases = useCallback(() => {
-    loadCases();
-  }, [loadCases]);
+    if (isClusterTab) {
+      loadClusterCases();
+    } else if (isReviewTab) {
+      loadReviewCases();
+    }
+  }, [isClusterTab, isReviewTab, loadClusterCases, loadReviewCases]);
 
   // Prefetch di altri rappresentanti per cluster dalla vista "Tutte le sessioni"
   useEffect(() => {
     const prefetchExtraRepresentatives = async () => {
-      if (!showClusterView) return;
+      if (!isClusterTab) return;
       try {
         const allSess = await apiService.getAllSessions(tenant.tenant_id, true);
         const map: Record<string, ReviewCase[]> = {};
@@ -242,7 +284,7 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
       }
     };
     prefetchExtraRepresentatives();
-  }, [showClusterView, tenant]);
+  }, [isClusterTab, tenant]);
 
   const handleStartSupervisedTraining = async () => {
     setTrainingLoading(true);
@@ -289,7 +331,7 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
       
       // Ricarica i casi dopo il training
       setTimeout(() => {
-        loadCases();
+        handleRefreshCases();
       }, 1000);
 
     } catch (err: any) {
@@ -350,7 +392,7 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
       
       // Ricarica i casi dopo la classificazione
       setTimeout(() => {
-        loadCases();
+        handleRefreshCases();
       }, 1000);
 
     } catch (err: any) {
@@ -362,17 +404,20 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
   };
 
   useEffect(() => {
-    if (uiConfig) {
-      loadCases();
+    if (!uiConfig) return;
+    if (isClusterTab) {
+      loadClusterCases();
+    } else if (isReviewTab) {
+      loadReviewCases();
     }
-  }, [loadCases, refreshTrigger, uiConfig]);
+  }, [uiConfig, isClusterTab, isReviewTab, loadClusterCases, loadReviewCases]);
 
   // Ricarica casi quando necessario
   useEffect(() => {
-    if (refreshTrigger > 0) {
+    if (refreshTrigger > 0 && uiConfig) {
       handleRefreshCases();
     }
-  }, [refreshTrigger, handleRefreshCases]);
+  }, [refreshTrigger, handleRefreshCases, uiConfig]);
 
   // Callback quando viene aggiunta una sessione alla queue dal componente AllSessionsView
   const handleSessionAddedToQueue = useCallback(() => {
@@ -507,61 +552,54 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
       {/* Tabs Navigation */}
       <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
         <Tabs value={activeTab} onChange={(e, newValue) => setActiveTab(newValue)}>
-          <Tab 
+          <Tab
+            label={
+              <Box display="flex" alignItems="center" gap={1}>
+                <GroupIcon />
+                {`Cluster Focus (${clusters.length})`}
+              </Box>
+            }
+          />
+          <Tab
             label={
               <Box display="flex" alignItems="center" gap={1}>
                 <AssignmentIcon />
-                {showClusterView 
-                  ? `Review Queue - Cluster (${clusters.length} cluster)`
-                  : `Review Queue - Lista (${cases.length} casi)`
-                }
+                {`Review Queue (${cases.length})`}
               </Box>
-            } 
+            }
           />
-          <Tab 
+          <Tab
             label={
               <Box display="flex" alignItems="center" gap={1}>
                 <ListIcon />
                 Tutte le Sessioni
               </Box>
-            } 
+            }
           />
         </Tabs>
       </Box>
 
       {/* Tab Content */}
-      {activeTab === 0 && (
+      {activeTab === CLUSTER_TAB && (
         // Review Queue Content (existing content)
         <div>
 
           {/* 🆕 Controlli Vista Cluster e Filtri Review Queue */}
           <Card sx={{ mb: 3, backgroundColor: '#f0f8ff', borderLeft: '4px solid #1976d2' }}>
             <CardContent>
-              <Box display="flex" justifyContent="space-between" alignItems="center">
-                <Box display="flex" alignItems="center" gap={2}>
-                  <GroupIcon color="primary" />
-                  <Typography variant="h6" color="primary">
-                    {showClusterView ? "👑 Vista per Cluster - Solo Rappresentanti" : "📋 Review Queue - Tutti i Casi da Rivedere"}
-                  </Typography>
-                </Box>
-                <Box display="flex" alignItems="center" gap={2}>
-                  <FormControlLabel
-                    control={
-                      <Switch
-                        checked={showClusterView}
-                        onChange={handleViewToggle}
-                        disabled={dashboardLoading}
-                      />
-                    }
-                    label={showClusterView ? "Cluster View" : "Lista Completa"}
-                  />
-                </Box>
+              <Box display="flex" alignItems="center" gap={2}>
+                <GroupIcon color="primary" />
+                <Typography variant="h6" color="primary">
+                  👑 Vista Cluster Focus
+                </Typography>
               </Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                Analizza rappresentanti e sessioni propagate dello stesso cluster per verificare la coerenza delle etichette.
+              </Typography>
 
-              {/* 🆕 FILTRI GRANULARI: Sempre visibili, applicabili in entrambe le viste */}
               <Box sx={{ mt: 2, p: 2, bgcolor: 'rgba(25, 118, 210, 0.05)', borderRadius: 1 }}>
                 <Typography variant="subtitle2" gutterBottom color="primary">
-                  🎛️ Filtri di Esclusione (di base vedi tutti i casi da rivedere):
+                  🎛️ Filtri cluster
                 </Typography>
                 <Box display="flex" alignItems="center" gap={3} flexWrap="wrap">
                   <FormControlLabel
@@ -574,7 +612,7 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
                         color="warning"
                       />
                     }
-                    label={<Typography variant="body2">🚫 Nascondi Outliers</Typography>}
+                    label={<Typography variant="body2">🚫 Escludi outlier (-1)</Typography>}
                   />
                   <FormControlLabel
                     control={
@@ -586,42 +624,28 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
                         color="success"
                       />
                     }
-                    label={<Typography variant="body2">🚫 Nascondi Rappresentanti</Typography>}
+                    label={<Typography variant="body2">🙈 Nascondi rappresentanti</Typography>}
                   />
                 </Box>
               </Box>
-
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                {showClusterView 
-                  ? "📊 Vista cluster: Raggruppa per cluster con rappresentanti espandibili. Applica i filtri per personalizzare cosa vedere."
-                  : "📋 Vista lista: Mostra tutti i casi da rivedere in ordine cronologico. Usa i filtri per nascondere categorie specifiche."
-                }
-              </Typography>
             </CardContent>
           </Card>
 
           {/* Rimossa sezione "Configurazione Coda Revisione" ridondante */}
           {/* I parametri di analisi sono configurabili nel dialogo Training Supervisionado */}
           
-          {/* Info Card per guidare l'utente - aggiornato per cluster view */}
-          {(showClusterView ? clusters.length > 0 : cases.length > 0) && (
+          {/* Info Card per guidare l'utente - cluster */}
+          {clusters.length > 0 && (
             <Card sx={{ mb: 3, backgroundColor: '#e8f5e8' }}>
               <CardContent>
                 <Box display="flex" alignItems="center" gap={2}>
                   <CheckCircleIcon color="success" />
                   <Box>
                     <Typography variant="body1" fontWeight="bold">
-                      {showClusterView 
-                        ? `🎯 Cluster Pronti per Revisione (${clusters.length} cluster)`
-                        : `🎯 Casi Pronti per Revisione (${cases.length})`
-                      }
+                      🎯 Cluster pronti per revisione ({clusters.length})
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
-                      {showClusterView 
-                        ? "Il training supervisionato ha organizzato i casi in cluster. Ogni cluster ha un rappresentante e sessioni propagate. Clicca sui rappresentanti o espandi per vedere il dettaglio."
-                        : "Il training supervisionado ha identificato questi casi per la revisione umana."
-                      }
-                      <strong>Prossimo passo:</strong> Rivedi i casi selezionati, poi usa "Riaddestra Modello" per aggiornare l'AI.
+                      Ogni cluster include il rappresentante principale e le sessioni propagate. Confronta le decisioni per assicurarti che la propagazione sia corretta e usa "Conferma maggioranza" quando le etichette coincidono.
                     </Typography>
                   </Box>
                 </Box>
@@ -656,8 +680,8 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
             </Card>
           )}
 
-          {/* Info Card per quando non ci sono casi (ma ci sono i prompt) */}
-          {hasPrompts && (showClusterView ? clusters.length === 0 : cases.length === 0) && !dashboardLoading && (
+          {/* Info Card per quando non ci sono cluster (ma ci sono i prompt) */}
+          {hasPrompts && clusters.length === 0 && !dashboardLoading && (
             <Card sx={{ mb: 3, backgroundColor: '#f5f5f5' }}>
               <CardContent>
                 <Box display="flex" alignItems="center" gap={2}>
@@ -670,371 +694,434 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
             </Card>
           )}
 
-          {/* 🆕 CONDITIONAL RENDERING: Cluster View vs Traditional View */}
-          {showClusterView ? (
-            // 🆕 CLUSTER VIEW - Mostra solo rappresentanti con opzione per espandere
-            <>
-              {clusters.length === 0 && !dashboardLoading ? (
-                <Card>
-                  <CardContent sx={{ textAlign: 'center', py: 6 }}>
-                    <GroupIcon sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
-                    <Typography variant="h5" gutterBottom>
-                      Nessun cluster da rivedere
-                    </Typography>
-                    <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-                      Non ci sono cluster organizzati per la revisione. Prova ad eseguire il Training Supervisionado.
-                    </Typography>
-                    <Button
-                      variant="contained"
-                      startIcon={<ScienceIcon />}
-                      onClick={() => {
-                        onCreateMockCases();
-                      }}
-                      disabled={loading || classificationLoading || !uiConfig}
-                    >
-                      Crea Casi Mock per Test
-                    </Button>
-                  </CardContent>
-                </Card>
-              ) : (
-                <Box display="flex" flexDirection="column" gap={2}>
-                  {/* Nuova Cluster View: mostra tutti i rappresentanti subito */}
-                  {clusters.map((cluster) => (
-                    <ClusterGroupAccordion
-                      key={cluster.cluster_id}
-                      clusterId={cluster.cluster_id}
-                      representatives={extraRepsByCluster[cluster.cluster_id] && extraRepsByCluster[cluster.cluster_id].length > 0
-                        ? extraRepsByCluster[cluster.cluster_id]
-                        : (cluster.representative ? [cluster.representative] : [])}
-                      propagated={cluster.propagated_sessions || []}
-                      onConfirmMajority={async (cid) => {
-                        try {
-                          const res = await apiService.resolveClusterMajority(tenant.tenant_id, cid, {});
-                          setSuccessMessage(`✅ Cluster ${cid}: applicata maggioranza '${res.majority_label}'. Risolti ${res.resolved_count}/${res.total_candidates}.`);
-                          // refresh lista
-                          setTimeout(() => loadCases(), 500);
-                        } catch (e: any) {
-                          setError(e?.message || 'Errore Conferma maggioranza');
-                        }
-                      }}
-                    />
-                  ))}
-                </Box>
-              )}
-            </>
+          {/* Cluster Focus */}
+          {clusters.length === 0 && !dashboardLoading ? (
+            <Card>
+              <CardContent sx={{ textAlign: 'center', py: 6 }}>
+                <GroupIcon sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
+                <Typography variant="h5" gutterBottom>
+                  Nessun cluster da rivedere
+                </Typography>
+                <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
+                  Non ci sono cluster organizzati per la revisione. Esegui il training supervisionato o la classificazione completa per popolare la coda.
+                </Typography>
+                <Button
+                  variant="contained"
+                  startIcon={<ScienceIcon />}
+                  onClick={onCreateMockCases}
+                  disabled={loading || classificationLoading || !uiConfig}
+                >
+                  Crea Casi Mock per Test
+                </Button>
+              </CardContent>
+            </Card>
           ) : (
-            // TRADITIONAL VIEW - Rendering esistente
-            <>
-              {cases.length === 0 && !dashboardLoading ? (
-                <Card>
-                  <CardContent sx={{ textAlign: 'center', py: 6 }}>
-                    <AssignmentIcon sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
-                    <Typography variant="h5" gutterBottom>
-                      Nessun caso da rivedere
-                    </Typography>
-                    <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-                      Tutti i casi sono stati processati correttamente o non ci sono nuovi casi che richiedono supervisione umana.
-                    </Typography>
-                    <Button
-                      variant="contained"
-                      startIcon={<ScienceIcon />}
-                      onClick={() => {
-                        onCreateMockCases();
-                      }}
-                      disabled={loading || classificationLoading || !uiConfig}
-                    >
-                      Crea Casi Mock per Test
-                    </Button>
-                  </CardContent>
-                </Card>
-              ) : (
-                <Box display="flex" flexWrap="wrap" gap={3}>
-                  {cases.map((caseItem) => (
-                    <Box key={caseItem.case_id} flex="1 1 calc(50% - 12px)" minWidth="300px">
-                      <Card 
-                        sx={{ 
-                          height: '100%',
-                          cursor: 'pointer',
-                          transition: 'all 0.2s',
-                          // 🆕 Indicatore visivo per rappresentanti vs propagate
-                          border: caseItem.is_representative === false 
-                            ? '2px dashed #ff9800' 
-                            : '2px solid #1976d2',
-                          backgroundColor: caseItem.is_representative === false 
-                            ? '#fff8e1' 
-                            : 'white',
-                          '&:hover': {
-                            transform: 'translateY(-2px)',
-                            boxShadow: 3
-                          }
-                        }}
-                        onClick={() => onCaseSelect(caseItem)}
-                      >
-                        <CardContent>
-                          {/* Header con indicatore propagazione */}
-                          <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-                            <Box display="flex" alignItems="center" gap={1}>
-                              {caseItem.is_representative === false ? <LinkIcon color="secondary" /> : <StarIcon color="primary" />}
-                              <Box>
-                                <Typography variant="h6" component="div">
-                                  Sessione: {(caseItem.session_id || '').substring(0, 12)}...
-                                </Typography>
-                                {/* 🆕 CLUSTER INFO */}
-                                {(caseItem.cluster_id !== undefined && caseItem.cluster_id !== null) && (
-                                  <Typography variant="body2" color="primary" fontWeight="bold">
-                                    📊 CLUSTER: {caseItem.cluster_id}
-                                  </Typography>
-                                )}
-                              </Box>
-                            </Box>
-                            <Box display="flex" flexDirection="column" alignItems="end">
-                              <Typography variant="body2" color="text.secondary">
-                                {caseItem.created_at}
-                              </Typography>
-                              {/* 🆕 Indicatore di propagazione */}
-                              <Chip
-                                icon={caseItem.is_representative === false ? <LinkIcon /> : <StarIcon />}
-                                label={caseItem.is_representative === false ? "🔗 Ereditata" : "👑 Rappresentante"}
-                                color={caseItem.is_representative === false ? "secondary" : "primary"}
-                                size="small"
-                                variant={caseItem.is_representative === false ? "outlined" : "filled"}
-                              />
-                            </Box>
-                          </Box>
-
-                          {/* Reason */}
-                          <Box mb={2}>
-                            {(caseItem.reason || '').split(';').map((reason: string, index: number) => (
-                              <Chip
-                                key={index}
-                                label={reason.trim()}
-                                color={getReasonColor(reason)}
-                                size="small"
-                                sx={{ mr: 0.5, mb: 0.5 }}
-                              />
-                            ))}
-                          </Box>
-
-                          {/* Classification Type Indicator */}
-                          <Box 
-                            sx={{ 
-                              border: '1px solid',
-                              borderColor: 'info.main',
-                              borderRadius: 1,
-                              p: 1,
-                              mb: 2,
-                              backgroundColor: 'info.light',
-                              color: 'info.contrastText'
-                            }}
-                          >
-                            <Typography variant="subtitle2" fontWeight="bold">
-                              🏷️  Tipo: <Chip 
-                                label={caseItem.classification_type || 'NORMALE'} 
-                                color={
-                                  caseItem.classification_type === 'RAPPRESENTANTE' ? 'primary' :
-                                  caseItem.classification_type === 'PROPAGATO' ? 'success' :
-                                  caseItem.classification_type === 'OUTLIER' ? 'warning' : 'default'
-                                }
-                                size="small" 
-                                sx={{ ml: 1, fontWeight: 'bold' }}
-                              />
-                            </Typography>
-                          </Box>
-
-                          {/* 🚨 CLASSIFICAZIONE PRINCIPALE GRANDE + Predictions Secondarie */}
-                          {/* 1. CLASSIFICAZIONE PRINCIPALE - BEN VISIBILE */}
-                          <Box 
-                            sx={{ 
-                              border: '3px solid #2e7d32',
-                              borderRadius: 2,
-                              p: 2,
-                              mb: 2,
-                              backgroundColor: '#e8f5e8',
-                              textAlign: 'center'
-                            }}
-                          >
-                            <Typography variant="subtitle1" fontWeight="bold" color="success.dark" gutterBottom>
-                              🏷️ CLASSIFICAZIONE FINALE
-                            </Typography>
-                            <Typography 
-                              variant="h4" 
-                              color="success.dark" 
-                              sx={{ fontWeight: 'bold', mb: 1 }}
-                            >
-                              {caseItem.classification || 'N/A'}
-                            </Typography>
-                          </Box>
-
-                          {/* 2. PREDIZIONI MODELLI - PIÙ PICCOLE (solo se esistono) */}
-                          {(caseItem.ml_prediction || caseItem.llm_prediction) && (
-                            <Box 
-                              sx={{ 
-                                border: '1px solid #ccc',
-                                borderRadius: 2,
-                                p: 1.5,
-                                mb: 2,
-                                backgroundColor: '#f9f9f9'
-                              }}
-                            >
-                              <Box display="flex" alignItems="center" justifyContent="space-between" mb={1}>
-                                <Typography variant="body2" fontWeight="bold" color="text.secondary">
-                                  🤖 Dettagli Predizioni Modelli
-                                </Typography>
-                                <Chip
-                                  icon={caseItem.ml_prediction === caseItem.llm_prediction ? 
-                                    <CheckCircleIcon /> : <WarningIcon />}
-                                  label={caseItem.ml_prediction === caseItem.llm_prediction ? 
-                                    "ACCORDO" : "DISACCORDO"}
-                                  color={caseItem.ml_prediction === caseItem.llm_prediction ? 
-                                    "success" : "warning"}
-                                  size="small"
-                                />
-                              </Box>
-
-                              <Box display="flex" gap={1}>
-                                {/* Mostra ML solo se presente */}
-                                {caseItem.ml_prediction && (
-                                  <Box 
-                                    flex={1}
-                                    sx={{
-                                      border: '1px solid #1976d2',
-                                      borderRadius: 1,
-                                      p: 1,
-                                      backgroundColor: '#e3f2fd'
-                                    }}
-                                  >
-                                    <Typography variant="caption" fontWeight="bold" color="primary">
-                                      🧠 ML
-                                    </Typography>
-                                    <Typography 
-                                      variant="body2" 
-                                      color="primary" 
-                                      sx={{ fontWeight: 'bold' }}
-                                    >
-                                      {caseItem.ml_prediction}
-                                    </Typography>
-                                    <Typography variant="caption" color="text.secondary">
-                                      {((caseItem.ml_confidence || 0) * 100).toFixed(1)}%
-                                    </Typography>
-                                  </Box>
-                                )}
-                                
-                                {/* Mostra LLM solo se presente */}
-                                {caseItem.llm_prediction && (
-                                  <Box 
-                                    flex={1}
-                                    sx={{
-                                      border: '1px solid #ff9800',
-                                      borderRadius: 1,
-                                      p: 1,
-                                      backgroundColor: '#fff3e0'
-                                    }}
-                                  >
-                                    <Typography variant="caption" fontWeight="bold" color="warning.main">
-                                      🤖 LLM
-                                    </Typography>
-                                    <Typography 
-                                      variant="body2" 
-                                      color="warning.main" 
-                                      sx={{ fontWeight: 'bold' }}
-                                    >
-                                      {caseItem.llm_prediction}
-                                    </Typography>
-                                    <Typography variant="caption" color="text.secondary">
-                                      {((caseItem.llm_confidence || 0) * 100).toFixed(1)}%
-                                    </Typography>
-                                  </Box>
-                                )}
-
-                                {/* Messaggio per solo LLM */}
-                                {!caseItem.ml_prediction && !caseItem.llm_prediction && (
-                                  <Box 
-                                    sx={{
-                                      border: '1px solid #9e9e9e',
-                                      borderRadius: 1,
-                                      p: 1,
-                                      backgroundColor: '#f5f5f5',
-                                      width: '100%',
-                                      textAlign: 'center'
-                                    }}
-                                  >
-                                    <Typography variant="caption" color="text.secondary">
-                                      🤖 Classificazione: {caseItem.classification_method || 'LLM'}
-                                    </Typography>
-                                  </Box>
-                                )}
-                              </Box>
-                            </Box>
-                          )}
-
-                          {/* Messaggio se nessuna predizione separata disponibile */}
-                          {!caseItem.ml_prediction && !caseItem.llm_prediction && (
-                            <Box 
-                              sx={{ 
-                                border: '1px solid #e0e0e0',
-                                borderRadius: 2,
-                                p: 1,
-                                mb: 2,
-                                backgroundColor: '#fafafa',
-                                textAlign: 'center'
-                              }}
-                            >
-                              <Typography variant="body2" color="text.secondary">
-                                📋 Metodo: {caseItem.classification_method || 'Non specificato'}
-                              </Typography>
-                            </Box>
-                          )}
-
-                          {/* Conversation Preview */}
-                          <Box 
-                            sx={{ 
-                              backgroundColor: 'grey.100',
-                              borderRadius: 1,
-                              p: 2,
-                              mb: 2,
-                              maxHeight: 100,
-                              overflow: 'hidden'
-                            }}
-                          >
-                            <Typography variant="body2">
-                              {caseItem.conversation_text.length > 200
-                                ? `${caseItem.conversation_text.substring(0, 200)}...`
-                                : caseItem.conversation_text}
-                            </Typography>
-                          </Box>
-
-                          {/* Metrics */}
-                          <Box display="flex" justifyContent="space-between" alignItems="center">
-                            <Box>
-                              <Typography variant="caption" color="text.secondary">
-                                Uncertainty: {caseItem.uncertainty_score.toFixed(3)}
-                              </Typography>
-                            </Box>
-                            <Box>
-                              <Typography variant="caption" color="text.secondary">
-                                Novelty: {caseItem.novelty_score.toFixed(3)}
-                              </Typography>
-                            </Box>
-                            <Button 
-                              size="small" 
-                              variant="outlined"
-                              onClick={() => onCaseSelect(caseItem)}
-                            >
-                              {caseItem.is_representative === false ? "🔗 Rivedi Ereditata" : "👑 Rivedi Rappresentante"}
-                            </Button>
-                          </Box>
-                        </CardContent>
-                      </Card>
-                    </Box>
-                  ))}
-                </Box>
-              )}
-            </>
+            <Box display="flex" flexDirection="column" gap={2}>
+              {clusters.map((cluster) => (
+                <ClusterGroupAccordion
+                  key={cluster.cluster_id}
+                  clusterId={cluster.cluster_id}
+                  representatives={
+                    extraRepsByCluster[cluster.cluster_id] && extraRepsByCluster[cluster.cluster_id].length > 0
+                      ? extraRepsByCluster[cluster.cluster_id]
+                      : (cluster.representative ? [cluster.representative] : [])
+                  }
+                  propagated={cluster.propagated_sessions || []}
+                  onConfirmMajority={async (cid, chosenLabel) => {
+                    try {
+                      const trimmedLabel = (chosenLabel || '').trim();
+                      if (!trimmedLabel) {
+                        setError('Seleziona o inserisci un\'etichetta valida prima di confermare.');
+                        return;
+                      }
+                      const res = await apiService.resolveClusterMajority(tenant.tenant_id, cid, {
+                        selected_label: trimmedLabel
+                      });
+                      const appliedLabel = res.applied_label || trimmedLabel.toUpperCase();
+                      setSuccessMessage(`✅ Cluster ${cid}: applicata etichetta '${appliedLabel}'. Risolti ${res.resolved_count}/${res.total_candidates}.`);
+                      setTimeout(() => loadClusterCases(), 500);
+                    } catch (e: any) {
+                      setError(e?.message || 'Errore Conferma maggioranza');
+                    }
+                  }}
+                />
+              ))}
+            </Box>
           )}
         </div>
       )}
 
-      {activeTab === 1 && (
+      {activeTab === REVIEW_TAB && (
+        <>
+          <Card sx={{ mb: 3, backgroundColor: '#f4f7ff', borderLeft: '4px solid #5e35b1' }}>
+            <CardContent>
+              <Box display="flex" alignItems="center" gap={2}>
+                <AssignmentIcon color="primary" />
+                <Typography variant="h6" color="primary">
+                  📋 Review Queue - Lista Cronologica
+                </Typography>
+              </Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                Esamina tutti i casi in coda con il dettaglio completo della classificazione automatica.
+              </Typography>
+
+              <Box sx={{ mt: 2, p: 2, bgcolor: 'rgba(94, 53, 177, 0.08)', borderRadius: 1 }}>
+                <Typography variant="subtitle2" gutterBottom color="primary">
+                  🎛️ Filtri lista
+                </Typography>
+                <Box display="flex" alignItems="center" gap={3} flexWrap="wrap">
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={hideOutliers}
+                        onChange={handleHideOutliersToggle}
+                        disabled={dashboardLoading}
+                        size="small"
+                        color="warning"
+                      />
+                    }
+                    label={<Typography variant="body2">🚫 Escludi outlier (-1)</Typography>}
+                  />
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={hideRepresentatives}
+                        onChange={handleHideRepresentativesToggle}
+                        disabled={dashboardLoading}
+                        size="small"
+                        color="success"
+                      />
+                    }
+                    label={<Typography variant="body2">🙈 Nascondi rappresentanti</Typography>}
+                  />
+                </Box>
+              </Box>
+            </CardContent>
+          </Card>
+
+          {!hasPrompts && !promptsLoading && (
+            <Card sx={{ mb: 3, backgroundColor: '#fff3e0', border: '1px solid #ff9800' }}>
+              <CardContent>
+                <Box display="flex" alignItems="center" gap={2}>
+                  <WarningIcon color="warning" />
+                  <Box>
+                    <Typography variant="h6" color="warning.dark" gutterBottom>
+                      ⚠️ Configurazione Incompleta
+                    </Typography>
+                    <Typography variant="body1" sx={{ mb: 2 }}>
+                      <strong>Prima di poter utilizzare il sistema di training e classificazione, devi configurare i prompt.</strong>
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      📋 <strong>VAI NELLA SEZIONE CONFIGURAZIONE E CREA IL PRIMO PROMPT</strong>
+                    </Typography>
+                    {promptStatus && promptStatus.missingCount > 0 && (
+                      <Typography variant="body2" color="error" sx={{ mt: 1 }}>
+                        Mancano {promptStatus.missingCount} prompt richiesti per questo tenant.
+                      </Typography>
+                    )}
+                  </Box>
+                </Box>
+              </CardContent>
+            </Card>
+          )}
+
+          {hasPrompts && cases.length === 0 && !dashboardLoading && (
+            <Card sx={{ mb: 3, backgroundColor: '#f5f5f5' }}>
+              <CardContent>
+                <Box display="flex" alignItems="center" gap={2}>
+                  <SchoolIcon color="secondary" />
+                  <Typography variant="body1">
+                    <strong>La coda è vuota:</strong> esegui il training supervisionato o avvia una classificazione per generare nuovi casi.
+                  </Typography>
+                </Box>
+              </CardContent>
+            </Card>
+          )}
+
+          {cases.length === 0 && !dashboardLoading ? (
+            <Card>
+              <CardContent sx={{ textAlign: 'center', py: 6 }}>
+                <AssignmentIcon sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
+                <Typography variant="h5" gutterBottom>
+                  Nessun caso da rivedere
+                </Typography>
+                <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
+                  Tutti i casi sono stati processati correttamente o non ci sono nuove discussioni con bassa confidenza.
+                </Typography>
+                <Button
+                  variant="contained"
+                  startIcon={<ScienceIcon />}
+                  onClick={onCreateMockCases}
+                  disabled={loading || classificationLoading || !uiConfig}
+                >
+                  Crea Casi Mock per Test
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            <Box display="flex" flexWrap="wrap" gap={3}>
+              {cases.map((caseItem) => (
+                <Box key={caseItem.case_id} flex="1 1 calc(50% - 12px)" minWidth="300px">
+                  <Card
+                    sx={{
+                      height: '100%',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                      border: caseItem.is_representative === false
+                        ? '2px dashed #ff9800'
+                        : '2px solid #1976d2',
+                      backgroundColor: caseItem.is_representative === false
+                        ? '#fff8e1'
+                        : 'white',
+                      '&:hover': {
+                        transform: 'translateY(-2px)',
+                        boxShadow: 3
+                      }
+                    }}
+                    onClick={() => onCaseSelect(caseItem)}
+                  >
+                    <CardContent>
+                      <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+                        <Box display="flex" alignItems="center" gap={1}>
+                          {caseItem.is_representative === false ? <LinkIcon color="secondary" /> : <StarIcon color="primary" />}
+                          <Box>
+                            <Typography variant="h6" component="div">
+                              Sessione: {(caseItem.session_id || '').substring(0, 12)}...
+                            </Typography>
+                            {(caseItem.cluster_id !== undefined && caseItem.cluster_id !== null) && (
+                              <Typography variant="body2" color="primary" fontWeight="bold">
+                                📊 CLUSTER: {caseItem.cluster_id}
+                              </Typography>
+                            )}
+                          </Box>
+                        </Box>
+                        <Box display="flex" flexDirection="column" alignItems="end">
+                          <Typography variant="body2" color="text.secondary">
+                            {caseItem.created_at}
+                          </Typography>
+                          <Chip
+                            icon={caseItem.is_representative === false ? <LinkIcon /> : <StarIcon />}
+                            label={caseItem.is_representative === false ? "🔗 Ereditata" : "👑 Rappresentante"}
+                            color={caseItem.is_representative === false ? "secondary" : "primary"}
+                            size="small"
+                            variant={caseItem.is_representative === false ? "outlined" : "filled"}
+                          />
+                        </Box>
+                      </Box>
+
+                      <Box mb={2}>
+                        {(caseItem.reason || '').split(';').map((reason: string, index: number) => (
+                          <Chip
+                            key={index}
+                            label={reason.trim()}
+                            color={getReasonColor(reason)}
+                            size="small"
+                            sx={{ mr: 0.5, mb: 0.5 }}
+                          />
+                        ))}
+                      </Box>
+
+                      <Box
+                        sx={{
+                          border: '1px solid',
+                          borderColor: 'info.main',
+                          borderRadius: 1,
+                          p: 1,
+                          mb: 2,
+                          backgroundColor: 'info.light',
+                          color: 'info.contrastText'
+                        }}
+                      >
+                        <Typography variant="subtitle2" fontWeight="bold">
+                          🏷️  Tipo: <Chip
+                            label={caseItem.classification_type || 'NORMALE'}
+                            color={
+                              caseItem.classification_type === 'RAPPRESENTANTE' ? 'primary' :
+                              caseItem.classification_type === 'PROPAGATO' ? 'success' :
+                              caseItem.classification_type === 'OUTLIER' ? 'warning' : 'default'
+                            }
+                            size="small"
+                            sx={{ ml: 1, fontWeight: 'bold' }}
+                          />
+                        </Typography>
+                      </Box>
+
+                      <Box
+                        sx={{
+                          border: '3px solid #2e7d32',
+                          borderRadius: 2,
+                          p: 2,
+                          mb: 2,
+                          backgroundColor: '#e8f5e8',
+                          textAlign: 'center'
+                        }}
+                      >
+                        <Typography variant="subtitle1" fontWeight="bold" color="success.dark" gutterBottom>
+                          🏷️ CLASSIFICAZIONE FINALE
+                        </Typography>
+                        <Typography
+                          variant="h4"
+                          color="success.dark"
+                          sx={{ fontWeight: 'bold', mb: 1 }}
+                        >
+                          {caseItem.classification || 'N/A'}
+                        </Typography>
+                      </Box>
+
+                      {(caseItem.ml_prediction || caseItem.llm_prediction) && (
+                        <Box
+                          sx={{
+                            border: '1px solid #ccc',
+                            borderRadius: 2,
+                            p: 1.5,
+                            mb: 2,
+                            backgroundColor: '#f9f9f9'
+                          }}
+                        >
+                          <Box display="flex" alignItems="center" justifyContent="space-between" mb={1}>
+                            <Typography variant="body2" fontWeight="bold" color="text.secondary">
+                              🤖 Dettagli Predizioni Modelli
+                            </Typography>
+                            <Chip
+                              icon={caseItem.ml_prediction === caseItem.llm_prediction ?
+                                <CheckCircleIcon /> : <WarningIcon />}
+                              label={caseItem.ml_prediction === caseItem.llm_prediction ?
+                                "ACCORDO" : "DISACCORDO"}
+                              color={caseItem.ml_prediction === caseItem.llm_prediction ?
+                                "success" : "warning"}
+                              size="small"
+                            />
+                          </Box>
+
+                          <Box display="flex" gap={1}>
+                            {caseItem.ml_prediction && (
+                              <Box flex={1} p={1} sx={{ border: '1px solid #e0e0e0', borderRadius: 1 }}>
+                                <Typography variant="caption" color="text.secondary">
+                                  🤖 ML Model
+                                </Typography>
+                                <Typography variant="subtitle1" fontWeight="bold">
+                                  {caseItem.ml_prediction}
+                                </Typography>
+                                <Chip
+                                  label={`Conf ${(caseItem.ml_confidence * 100).toFixed(1)}%`}
+                                  color={
+                                    caseItem.ml_confidence > 0.8 ? 'success' :
+                                    caseItem.ml_confidence > 0.6 ? 'warning' : 'error'
+                                  }
+                                  size="small"
+                                />
+                              </Box>
+                            )}
+
+                            {caseItem.llm_prediction && (
+                              <Box
+                                flex={1}
+                                sx={{
+                                  border: '1px solid #ff9800',
+                                  borderRadius: 1,
+                                  p: 1,
+                                  backgroundColor: '#fff3e0'
+                                }}
+                              >
+                                <Typography variant="caption" fontWeight="bold" color="warning.main">
+                                  🤖 LLM
+                                </Typography>
+                                <Typography
+                                  variant="body2"
+                                  color="warning.main"
+                                  sx={{ fontWeight: 'bold' }}
+                                >
+                                  {caseItem.llm_prediction}
+                                </Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                  {(caseItem.llm_confidence * 100).toFixed(1)}%
+                                </Typography>
+                              </Box>
+                            )}
+
+                            {!caseItem.ml_prediction && !caseItem.llm_prediction && (
+                              <Box
+                                sx={{
+                                  border: '1px solid #9e9e9e',
+                                  borderRadius: 1,
+                                  p: 1,
+                                  backgroundColor: '#f5f5f5',
+                                  width: '100%',
+                                  textAlign: 'center'
+                                }}
+                              >
+                                <Typography variant="caption" color="text.secondary">
+                                  🤖 Classificazione: {caseItem.classification_method || 'LLM'}
+                                </Typography>
+                              </Box>
+                            )}
+                          </Box>
+                        </Box>
+                      )}
+
+                      {!caseItem.ml_prediction && !caseItem.llm_prediction && (
+                        <Box
+                          sx={{
+                            border: '1px solid #e0e0e0',
+                            borderRadius: 2,
+                            p: 1,
+                            mb: 2,
+                            backgroundColor: '#fafafa',
+                            textAlign: 'center'
+                          }}
+                        >
+                          <Typography variant="body2" color="text.secondary">
+                            📋 Metodo: {caseItem.classification_method || 'Non specificato'}
+                          </Typography>
+                        </Box>
+                      )}
+
+                      <Box
+                        sx={{
+                          backgroundColor: 'grey.100',
+                          borderRadius: 1,
+                          p: 2,
+                          mb: 2,
+                          maxHeight: 100,
+                          overflow: 'hidden'
+                        }}
+                      >
+                        <Typography variant="body2">
+                          {caseItem.conversation_text.length > 200
+                            ? `${caseItem.conversation_text.substring(0, 200)}...`
+                            : caseItem.conversation_text}
+                        </Typography>
+                      </Box>
+
+                      <Box display="flex" justifyContent="space-between" alignItems="center">
+                        <Box>
+                          <Typography variant="caption" color="text.secondary">
+                            Uncertainty: {caseItem.uncertainty_score.toFixed(3)}
+                          </Typography>
+                        </Box>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary">
+                            Novelty: {caseItem.novelty_score.toFixed(3)}
+                          </Typography>
+                        </Box>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => onCaseSelect(caseItem)}
+                        >
+                          {caseItem.is_representative === false ? "🔗 Rivedi Ereditata" : "👑 Rivedi Rappresentante"}
+                        </Button>
+                      </Box>
+                    </CardContent>
+                  </Card>
+                </Box>
+              ))}
+            </Box>
+          )}
+        </>
+      )}
+
+      {activeTab === SESSIONS_TAB && (
         // All Sessions Content
         <AllSessionsView 
           tenantIdentifier={tenant.tenant_slug || tenant.tenant_id || tenant.tenant_name}

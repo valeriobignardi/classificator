@@ -724,6 +724,76 @@ class QualityGateEngine:
         except Exception as _outer_upd_e:
             self.logger.debug(f"Update training file skipped: {_outer_upd_e}")
         
+        # 🆕 Sincronizza subito su MySQL remoto solo le sessioni revisionate dall'umano
+        try:
+            updated_session_ids = result.get("updated_session_ids") or []
+            if updated_session_ids:
+                from Database.remote_tag_sync import RemoteTagSyncService
+
+                class _HumanReviewedDoc:
+                    def __init__(self, session_id: str, label: str, confidence: float,
+                                 method: str, classified_by: str):
+                        self.session_id = session_id
+                        self.predicted_label = label
+                        self.confidence = confidence
+                        self.classification_method = method
+                        self.classified_by = classified_by
+                        self.human_reviewed = True
+                        self.propagated_label = None
+                        self.llm_prediction = None
+                        self.ml_prediction = None
+
+                propagated_session_ids = set(result.get("propagated_session_ids") or [])
+                propagation_confidence = result.get("propagation_confidence")
+
+                docs_for_sync = []
+                seen_ids = set()
+                for session_id in updated_session_ids:
+                    if not session_id or session_id in seen_ids:
+                        continue
+                    seen_ids.add(session_id)
+                    if session_id in propagated_session_ids and session_id != true_session_id:
+                        conf_value = propagation_confidence
+                        if conf_value is None:
+                            base_conf = human_confidence if human_confidence is not None else 1.0
+                            conf_value = max(base_conf * 0.9, 0.1)
+                        docs_for_sync.append(
+                            _HumanReviewedDoc(
+                                session_id=session_id,
+                                label=human_decision,
+                                confidence=conf_value,
+                                method="human_review_propagated",
+                                classified_by="human_review_propagation"
+                            )
+                        )
+                    else:
+                        base_conf = human_confidence if human_confidence is not None else 1.0
+                        docs_for_sync.append(
+                            _HumanReviewedDoc(
+                                session_id=session_id,
+                                label=human_decision,
+                                confidence=base_conf,
+                                method="human_review",
+                                classified_by="human_reviewer"
+                            )
+                        )
+
+                if docs_for_sync:
+                    sync_service = RemoteTagSyncService()
+                    sync_result = sync_service.sync_session_tags(self.tenant, docs_for_sync)
+                    if sync_result.get("success"):
+                        self.logger.info(
+                            "✅ RemoteTagSync aggiornato per %d sessioni human-reviewed",
+                            len(docs_for_sync)
+                        )
+                    else:
+                        self.logger.warning(
+                            "⚠️ RemoteTagSync post-review fallito: %s",
+                            sync_result.get("error")
+                        )
+        except Exception as sync_exc:
+            self.logger.error(f"❌ Errore sincronizzazione RemoteTagSync post-review: {sync_exc}")
+        
         # Aggiorna cache dei tag umani
         self._update_human_tags_cache(human_decision)
         

@@ -956,6 +956,9 @@ class MongoClassificationReader:
                 "propagated_cases": int,
                 "cluster_id": str,
                 "is_representative": bool,
+                "propagated_session_ids": List[str],
+                "updated_session_ids": List[str],
+                "propagation_confidence": Optional[float],
                 "error": str (se presente)
               }
             
@@ -973,7 +976,7 @@ class MongoClassificationReader:
             # Converte case_id in ObjectId se necessario
             try:
                 object_id = ObjectId(case_id)
-            except:
+            except Exception:
                 object_id = case_id
             
             # Prepara il filtro per trovare il documento
@@ -1001,14 +1004,18 @@ class MongoClassificationReader:
             cluster_metadata = metadata.get("cluster_metadata", {})
             is_representative = cluster_metadata.get("is_representative", False)
             cluster_id = cluster_metadata.get("cluster_id")
-            current_confidence = case_doc.get("confidence", 0)
-            # Estrai session_id e testo conversazione per training log
             resolved_session_id = case_doc.get("session_id")
             resolved_conversation_text = (
                 case_doc.get("testo_completo")
                 or case_doc.get("testo")
                 or case_doc.get("conversazione")
             )
+            
+            updated_session_ids: List[str] = []
+            propagated_session_ids: List[str] = []
+            if resolved_session_id:
+                updated_session_ids.append(resolved_session_id)
+            propagation_confidence: Optional[float] = None
             
             print(f"🔍 Risoluzione caso {case_id}: rappresentante={is_representative}, cluster_id={cluster_id}")
             
@@ -1033,28 +1040,40 @@ class MongoClassificationReader:
                 }
                 # CON OGGETTO TENANT: Non serve più filtro client, usiamo collection specifica
                 
+                cluster_members = list(collection.find(cluster_filter, {"session_id": 1}))
+                propagated_session_ids = [
+                    doc.get("session_id") for doc in cluster_members if doc.get("session_id")
+                ]
+                
                 # Applica la propagazione con confidenza leggermente ridotta
                 propagation_confidence = max(human_confidence * 0.9, 0.1)  # Minimo 0.1
                 current_timestamp = datetime.now().isoformat()
                 
-                propagation_result = collection.update_many(
-                    cluster_filter,
-                    {
-                        "$set": {
-                            "classificazione": human_decision,
-                            "confidence": propagation_confidence,
-                            "metadata.cluster_metadata.propagated_from_human_review": True,
-                            "metadata.cluster_metadata.human_review_case_id": str(object_id),
-                            "metadata.cluster_metadata.human_review_propagated_at": current_timestamp,
-                            "metadata.cluster_metadata.human_review_decision": human_decision,
-                            "metadata.cluster_metadata.human_review_confidence": human_confidence,
-                            "human_reviewed_by_propagation": True,
-                            "human_review_propagation_notes": f"Propagato da rappresentante {case_id}: {human_notes}" if human_notes else f"Propagato da rappresentante {case_id}"
+                if propagated_session_ids:
+                    propagation_result = collection.update_many(
+                        cluster_filter,
+                        {
+                            "$set": {
+                                "classificazione": human_decision,
+                                "confidence": propagation_confidence,
+                                "metadata.cluster_metadata.propagated_from_human_review": True,
+                                "metadata.cluster_metadata.human_review_case_id": str(object_id),
+                                "metadata.cluster_metadata.human_review_propagated_at": current_timestamp,
+                                "metadata.cluster_metadata.human_review_decision": human_decision,
+                                "metadata.cluster_metadata.human_review_confidence": human_confidence,
+                                "human_reviewed_by_propagation": True,
+                                "human_review_propagation_notes": (
+                                    f"Propagato da rappresentante {case_id}: {human_notes}"
+                                    if human_notes else f"Propagato da rappresentante {case_id}"
+                                )
+                            }
                         }
-                    }
-                )
+                    )
+                    propagated_count = propagation_result.modified_count
+                    updated_session_ids.extend(propagated_session_ids)
+                else:
+                    propagated_count = 0
                 
-                propagated_count = propagation_result.modified_count
                 print(f"✅ Propagata decisione a {propagated_count} membri del cluster {cluster_id}")
                 
                 # Log dettagliato per debugging
@@ -1070,7 +1089,10 @@ class MongoClassificationReader:
                 "human_decision": human_decision,
                 "human_confidence": human_confidence,
                 "session_id": resolved_session_id,
-                "conversation_text": resolved_conversation_text
+                "conversation_text": resolved_conversation_text,
+                "updated_session_ids": updated_session_ids,
+                "propagated_session_ids": propagated_session_ids,
+                "propagation_confidence": propagation_confidence
             }
             
         except Exception as e:

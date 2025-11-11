@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Card,
   CardContent,
@@ -9,8 +9,8 @@ import {
   Slider,
   Chip,
   Alert,
-  Divider,
-  IconButton
+  IconButton,
+  Grid
 } from '@mui/material';
 import {
   ArrowBack as ArrowBackIcon,
@@ -19,22 +19,27 @@ import {
   ThumbUp as ThumbUpIcon
 } from '@mui/icons-material';
 import { apiService } from '../services/apiService';
-import { ReviewCase } from '../types/ReviewCase';
+import { ReviewCase, ClusterContextCase, ClusterContextSummary } from '../types/ReviewCase';
 import { Tenant } from '../types/Tenant';
 import TagSuggestions from './TagSuggestions';
+import ClusterCaseStrip from './ClusterCaseStrip';
+import ClusterContextPanel from './ClusterContextPanel';
+import { formatLabelForDisplay, normalizeLabel } from '../utils/labelUtils';
 
 interface CaseDetailProps {
   case: ReviewCase;
   tenant: Tenant;
   onCaseResolved: () => void;
   onBack: () => void;
+  onNavigateCase: (caseItem: ReviewCase) => void;
 }
 
 const CaseDetail: React.FC<CaseDetailProps> = ({
   case: caseItem,
   tenant,
   onCaseResolved,
-  onBack
+  onBack,
+  onNavigateCase
 }) => {
   const [humanDecision, setHumanDecision] = useState('');
   const [confidence, setConfidence] = useState(0.8);
@@ -46,6 +51,14 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
   // Stati per tag suggestions
   const [availableTags, setAvailableTags] = useState<Array<{tag: string, count: number, source: string, avg_confidence: number}>>([]);
   const [tagsLoading, setTagsLoading] = useState(true);
+
+  // Cluster context state
+  const [clusterSessions, setClusterSessions] = useState<ClusterContextCase[]>([]);
+  const [clusterSummary, setClusterSummary] = useState<ClusterContextSummary | null>(null);
+  const [clusterLoading, setClusterLoading] = useState(false);
+  const [clusterError, setClusterError] = useState<string | null>(null);
+  const [selectedClusterSessionId, setSelectedClusterSessionId] = useState<string>(caseItem.session_id);
+  const [navigatingSessionId, setNavigatingSessionId] = useState<string | null>(null);
 
   // Carica tag disponibili al mount del componente
   useEffect(() => {
@@ -68,6 +81,240 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
 
     loadAvailableTags();
   }, [tenant]);
+
+  const clusterId = useMemo(() => {
+    if (caseItem.cluster_id === undefined || caseItem.cluster_id === null) {
+      return null;
+    }
+    return caseItem.cluster_id.toString();
+  }, [caseItem.cluster_id]);
+
+  useEffect(() => {
+    setSelectedClusterSessionId(caseItem.session_id);
+  }, [caseItem.session_id]);
+
+  useEffect(() => {
+    if (!clusterId || clusterId === '-1') {
+      setClusterSessions([]);
+      setClusterSummary(null);
+      setClusterError(null);
+      return;
+    }
+
+    let isMounted = true;
+
+    const loadClusterContext = async () => {
+      setClusterLoading(true);
+      setClusterError(null);
+
+      try {
+        const [sessionsResp, reviewCasesResp] = await Promise.all([
+          apiService.getAllSessions(tenant.tenant_id, true),
+          apiService.getReviewCases(tenant.tenant_id, 500, true, false, true)
+        ]);
+
+        const sessionList = sessionsResp.sessions || [];
+        const reviewCases = (reviewCasesResp.cases || []) as ReviewCase[];
+
+        const reviewCaseBySession = new Map<string, ReviewCase>();
+        reviewCases.forEach((rc) => {
+          if (rc.session_id) {
+            reviewCaseBySession.set(rc.session_id, rc);
+          }
+        });
+
+        const normalized: ClusterContextCase[] = [];
+
+        sessionList.forEach((session: any) => {
+          const sessionClusterId =
+            session.cluster_id !== undefined && session.cluster_id !== null
+              ? session.cluster_id.toString()
+              : session.classifications?.find(
+                  (cls: any) => cls.cluster_id !== undefined && cls.cluster_id !== null
+                )?.cluster_id?.toString();
+
+          if (sessionClusterId !== clusterId) {
+            return;
+          }
+
+          if (sessionClusterId === '-1') {
+            return;
+          }
+
+        const reviewCase = reviewCaseBySession.get(session.session_id);
+        const classificationEntry = session.classifications?.[0];
+
+        const rawLabelInput =
+          (reviewCase?.classification ||
+            classificationEntry?.tag_name ||
+            session.tag_name ||
+            '')?.toString() || '';
+        const normalizedLabel = normalizeLabel(rawLabelInput);
+        const displayLabel = formatLabelForDisplay(normalizedLabel);
+        const confidence = classificationEntry?.confidence;
+        const method = classificationEntry?.method;
+        const isRepresentative =
+          reviewCase?.is_representative === true ||
+          session.is_representative === true ||
+          reviewCase?.classification_type === 'RAPPRESENTANTE';
+        const classificationType =
+          reviewCase?.classification_type ||
+          (isRepresentative
+            ? 'RAPPRESENTANTE'
+            : session.is_representative === false
+            ? 'PROPAGATO'
+            : undefined);
+
+        const conversationText =
+          reviewCase?.conversation_text ||
+          session.conversation_text ||
+          session.full_conversation ||
+          (Array.isArray(session.messages)
+            ? session.messages
+                .map((message: any) => {
+                  const speaker = message.role || message.speaker;
+                  const content = message.content || message.text || '';
+                  if (!content) {
+                    return '';
+                  }
+                  return `${speaker ? `[${speaker.toString().toUpperCase()}] ` : ''}${content}`;
+                })
+                .filter(Boolean)
+                .join('\n')
+            : '');
+
+        normalized.push({
+          case_id: reviewCase?.case_id,
+          session_id: session.session_id,
+          label: normalizedLabel,
+          raw_label: rawLabelInput || normalizedLabel,
+          display_label: displayLabel,
+          status: session.status,
+          is_representative: isRepresentative,
+          classification_type: classificationType,
+          propagated_from: reviewCase?.propagated_from,
+          confidence,
+          method,
+          human_decision: undefined,
+          created_at: session.created_at,
+          conversation_text: conversationText
+        });
+      });
+
+      if (!normalized.some((item) => item.session_id === caseItem.session_id)) {
+        const fallbackLabelNormalized = normalizeLabel(caseItem.classification);
+        normalized.push({
+          case_id: caseItem.case_id,
+          session_id: caseItem.session_id,
+          label: fallbackLabelNormalized,
+          raw_label: caseItem.classification,
+          display_label: formatLabelForDisplay(fallbackLabelNormalized),
+          status: 'in_review_queue',
+          is_representative: caseItem.is_representative,
+          classification_type: caseItem.classification_type,
+          propagated_from: caseItem.propagated_from,
+          confidence: caseItem.ml_confidence,
+          method: caseItem.classification_method,
+          conversation_text: caseItem.conversation_text
+        });
+      }
+
+      const counts = normalized.reduce<Record<string, number>>((acc, item) => {
+        const key = item.label || 'N/A';
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {});
+
+      const majorityLabelRaw = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0];
+      const majorityLabelDisplay = majorityLabelRaw
+        ? formatLabelForDisplay(majorityLabelRaw)
+        : undefined;
+      const reviewedCount = normalized.filter((item) => item.status === 'reviewed').length;
+
+      const summary: ClusterContextSummary = {
+        cluster_id: clusterId,
+        majority_label: majorityLabelDisplay || majorityLabelRaw,
+        majority_label_raw: majorityLabelRaw,
+        majority_label_display: majorityLabelDisplay,
+        total_cases: normalized.length,
+        reviewed_cases: reviewedCount,
+        pending_cases: normalized.length - reviewedCount,
+        representatives: normalized.filter((item) => item.is_representative).length,
+        propagated: normalized.filter((item) => !item.is_representative).length
+        };
+
+        const sorted = normalized.sort((a, b) => {
+          if (a.is_representative && !b.is_representative) return -1;
+          if (!a.is_representative && b.is_representative) return 1;
+          if (a.status === 'in_review_queue' && b.status !== 'in_review_queue') return -1;
+          if (a.status !== 'in_review_queue' && b.status === 'in_review_queue') return 1;
+          return (b.confidence || 0) - (a.confidence || 0);
+        });
+
+        if (isMounted) {
+          setClusterSessions(sorted);
+          setClusterSummary(summary);
+        }
+      } catch (err) {
+        console.error('Errore caricamento contesto cluster:', err);
+        if (isMounted) {
+          setClusterError('Impossibile caricare il contesto del cluster');
+        }
+      } finally {
+        if (isMounted) {
+          setClusterLoading(false);
+        }
+      }
+    };
+
+    loadClusterContext();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [
+    tenant.tenant_id,
+    clusterId,
+    caseItem.case_id,
+    caseItem.session_id,
+    caseItem.classification,
+    caseItem.is_representative,
+    caseItem.classification_type,
+    caseItem.ml_confidence,
+    caseItem.propagated_from
+  ]);
+
+  const handleClusterCaseSelect = useCallback(
+    async (sessionId: string) => {
+      setSelectedClusterSessionId(sessionId);
+
+      if (sessionId === caseItem.session_id) {
+        return;
+      }
+
+      const target = clusterSessions.find((item) => item.session_id === sessionId);
+      if (!target) {
+        return;
+      }
+
+      if (!target.case_id) {
+        return;
+      }
+
+      try {
+        setClusterError(null);
+        setNavigatingSessionId(sessionId);
+        const response = await apiService.getCaseDetail(tenant.tenant_id, target.case_id);
+        onNavigateCase(response.case);
+      } catch (err) {
+        console.error('Errore apertura caso cluster:', err);
+        setClusterError('Impossibile aprire il caso selezionato. Verifica che sia ancora in coda.');
+      } finally {
+        setNavigatingSessionId(null);
+      }
+    },
+    [clusterSessions, caseItem.session_id, tenant.tenant_id, onNavigateCase]
+  );
 
   const handleQuickDecision = (decision: string) => {
     setHumanDecision(decision);
@@ -154,9 +401,25 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
         </Alert>
       )}
 
-      <Box display="flex" gap={3} sx={{ overflow: 'hidden' }}>
-        {/* Case Information */}
-        <Box flex={2} sx={{ minWidth: 0, overflow: 'hidden' }}>
+      <Box
+        display="flex"
+        gap={3}
+        sx={{
+          overflow: 'hidden',
+          flexWrap: { xs: 'wrap', lg: 'nowrap' },
+          alignItems: 'flex-start'
+        }}
+      >
+        {/* Case Information + Cluster Strip */}
+        <Box flex={{ xs: '1 1 100%', lg: 3 }} sx={{ minWidth: 0, overflow: 'hidden' }}>
+          <ClusterCaseStrip
+            cases={clusterSessions}
+            selectedSessionId={selectedClusterSessionId}
+            openedSessionId={caseItem.session_id}
+            onSelectCase={handleClusterCaseSelect}
+            summary={clusterSummary}
+          />
+
           <Card sx={{ mb: 3 }}>
             <CardContent>
               <Typography variant="h6" gutterBottom>
@@ -276,7 +539,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
           </Card>
 
           {/* Conversation */}
-          <Card>
+          <Card sx={{ mb: 3 }}>
             <CardContent>
               <Typography variant="h6" gutterBottom>
                 Testo Conversazione
@@ -297,12 +560,121 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
               </Box>
             </CardContent>
           </Card>
+
+          {/* Human Decision Form */}
+          <Card>
+            <CardContent>
+              <Typography variant="h6" gutterBottom>
+                Decisione Umana
+              </Typography>
+
+              <Grid container spacing={3} alignItems="flex-start">
+                <Grid item xs={12} md={7}>
+                  <Box display="flex" flexDirection="column" gap={2}>
+                    <Box>
+                      <Typography variant="subtitle2" gutterBottom>
+                        Scelte Rapide
+                      </Typography>
+                      <Box display="flex" flexWrap="wrap" gap={1}>
+                        {!isClusterPropagated && (
+                          <Button
+                            variant={humanDecision === caseItem.ml_prediction ? 'contained' : 'outlined'}
+                            color="primary"
+                            size="small"
+                            startIcon={<ThumbUpIcon />}
+                            onClick={() => handleQuickDecision(caseItem.ml_prediction)}
+                          >
+                            Conferma ML
+                          </Button>
+                        )}
+                        <Button
+                          variant={humanDecision === caseItem.llm_prediction ? 'contained' : 'outlined'}
+                          color="warning"
+                          size="small"
+                          startIcon={<ThumbUpIcon />}
+                          onClick={() => handleQuickDecision(caseItem.llm_prediction)}
+                        >
+                          Conferma LLM
+                        </Button>
+                      </Box>
+                    </Box>
+
+                    <TextField
+                      fullWidth
+                      label="Classificazione Corretta"
+                      value={humanDecision}
+                      onChange={(e) => setHumanDecision(e.target.value)}
+                      placeholder="Inserisci classificazione corretta o seleziona dai suggerimenti"
+                      required
+                    />
+
+                    <Box>
+                      <Typography variant="subtitle2" gutterBottom>
+                        Confidenza della Decisione: {confidence.toFixed(1)}
+                      </Typography>
+                      <Slider
+                        value={confidence}
+                        onChange={(_, value) => setConfidence(value as number)}
+                        min={0.1}
+                        max={1.0}
+                        step={0.1}
+                        marks
+                        valueLabelDisplay="auto"
+                      />
+                    </Box>
+
+                    <TextField
+                      fullWidth
+                      multiline
+                      rows={3}
+                      label="Note (opzionale)"
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      placeholder="Aggiungi note sulla decisione..."
+                    />
+
+                    <Button
+                      fullWidth
+                      variant="contained"
+                      color="success"
+                      size="large"
+                      onClick={handleSubmit}
+                      disabled={loading || !humanDecision.trim()}
+                      startIcon={<CheckCircleIcon />}
+                    >
+                      {loading ? 'Conferma in corso...' : 'Conferma Decisione'}
+                    </Button>
+                  </Box>
+                </Grid>
+                <Grid item xs={12} md={5}>
+                  <TagSuggestions
+                    tags={availableTags as any}
+                    onTagSelect={handleTagSelect}
+                    currentValue={humanDecision}
+                    loading={tagsLoading}
+                  />
+                </Grid>
+              </Grid>
+            </CardContent>
+          </Card>
         </Box>
 
-        {/* Decision Panel */}
-        <Box flex={1} sx={{ minWidth: 0, maxWidth: '400px', position: 'sticky', top: 20, alignSelf: 'flex-start' }}>
+        {/* Model + Cluster Column */}
+        <Box
+          flex={{ xs: '1 1 100%', lg: 1 }}
+          sx={{
+            minWidth: 280,
+            maxWidth: { lg: 360 },
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 3,
+            position: { lg: 'sticky' },
+            top: { lg: 20 },
+            alignSelf: 'flex-start'
+          }}
+        >
           {/* Model Predictions */}
-          <Card sx={{ mb: 3 }}>
+          <Card>
             <CardContent>
               <Typography variant="h6" gutterBottom>
                 Predizioni Modelli
@@ -360,111 +732,16 @@ const CaseDetail: React.FC<CaseDetailProps> = ({
             </CardContent>
           </Card>
 
-          {/* Human Decision Form */}
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Decisione Umana
-              </Typography>
-
-              {/* Quick Buttons */}
-              <Box mb={2}>
-                <Typography variant="subtitle2" gutterBottom>
-                  Scelte Rapide:
-                </Typography>
-                {!isClusterPropagated && (
-                  <Button
-                    variant={humanDecision === caseItem.ml_prediction ? 'contained' : 'outlined'}
-                    color="primary"
-                    size="small"
-                    startIcon={<ThumbUpIcon />}
-                    onClick={() => handleQuickDecision(caseItem.ml_prediction)}
-                    sx={{ mr: 1, mb: 1 }}
-                  >
-                    Conferma ML
-                  </Button>
-                )}
-                <Button
-                  variant={humanDecision === caseItem.llm_prediction ? 'contained' : 'outlined'}
-                  color="warning"
-                  size="small"
-                  startIcon={<ThumbUpIcon />}
-                  onClick={() => handleQuickDecision(caseItem.llm_prediction)}
-                  sx={{ mb: 1 }}
-                >
-                  Conferma LLM
-                </Button>
-              </Box>
-
-              <Divider sx={{ my: 2 }} />
-
-              {/* Manual Input and Tag Suggestions */}
-              <Box display="flex" gap={2} flexDirection={{ xs: 'column', md: 'row' }}>
-                <Box flex={1}>
-                  <TextField
-                    fullWidth
-                    label="Classificazione Corretta"
-                    value={humanDecision}
-                    onChange={(e) => setHumanDecision(e.target.value)}
-                    placeholder="Inserisci classificazione corretta o seleziona dai suggerimenti"
-                    required
-                    sx={{ mb: 2 }}
-                  />
-
-                  {/* Confidence Slider */}
-                  <Box mb={2}>
-                    <Typography variant="subtitle2" gutterBottom>
-                      Confidenza della Decisione: {confidence}
-                    </Typography>
-                    <Slider
-                      value={confidence}
-                      onChange={(_, value) => setConfidence(value as number)}
-                      min={0.1}
-                      max={1.0}
-                      step={0.1}
-                      marks
-                      valueLabelDisplay="auto"
-                    />
-                  </Box>
-                </Box>
-                
-                <Box flex={1}>
-                  {/* Tag Suggestions */}
-                  <TagSuggestions
-                    tags={availableTags as any}
-                    onTagSelect={handleTagSelect}
-                    currentValue={humanDecision}
-                    loading={tagsLoading}
-                  />
-                </Box>
-              </Box>
-
-              {/* Notes */}
-              <TextField
-                fullWidth
-                multiline
-                rows={3}
-                label="Note (opzionale)"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Aggiungi note sulla decisione..."
-                sx={{ mb: 2 }}
-              />
-
-              {/* Submit Button */}
-              <Button
-                fullWidth
-                variant="contained"
-                color="success"
-                size="large"
-                onClick={handleSubmit}
-                disabled={loading || !humanDecision.trim()}
-                startIcon={<CheckCircleIcon />}
-              >
-                {loading ? 'Conferma in corso...' : 'Conferma Decisione'}
-              </Button>
-            </CardContent>
-          </Card>
+          <ClusterContextPanel
+            summary={clusterSummary}
+            cases={clusterSessions}
+            loading={clusterLoading}
+            error={clusterError}
+            selectedSessionId={selectedClusterSessionId}
+            openedSessionId={caseItem.session_id}
+            onSelectCase={handleClusterCaseSelect}
+            navigatingSessionId={navigatingSessionId}
+          />
         </Box>
       </Box>
     </Box>

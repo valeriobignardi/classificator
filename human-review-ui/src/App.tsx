@@ -312,6 +312,7 @@ function AppContent() {
                 tenant={tenant}
                 onCaseResolved={handleCaseResolved}
                 onBack={() => setCurrentTab(0)}
+                onNavigateCase={handleCaseSelect}
               />
             </TabPanel>
           )}

@@ -1,7 +1,7 @@
 import os
 import yaml
 import mysql.connector
-from mysql.connector import Error
+from mysql.connector import Error, errorcode
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -157,9 +157,17 @@ class RemoteTagSyncService:
 
         # Ensure schema and connect
         try:
-            self._ensure_schema(tenant_slug)
             conn = self._connect_schema(tenant_slug)
         except Error as e:
+            # Se lo schema non esiste o l'utente non ha permessi, restituiamo un messaggio chiaro
+            if getattr(e, 'errno', None) == errorcode.ER_BAD_DB_ERROR:
+                return {
+                    'success': False,
+                    'error': (
+                        f"Schema '{tenant_slug}' non trovato. "
+                        "Crealo manualmente o abilita i permessi necessari."
+                    ),
+                }
             return {'success': False, 'error': f"Connessione schema remoto fallita: {e}"}
 
         try:
@@ -265,4 +273,3 @@ class RemoteTagSyncService:
                 conn.close()
             except Exception:
                 pass
-

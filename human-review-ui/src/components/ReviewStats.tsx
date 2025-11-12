@@ -52,6 +52,7 @@ interface GeneralStats {
   total_sessions: number;
   total_labels: number;
   avg_confidence_overall: number;
+  total_messages?: number;
 }
 
 interface ReviewStatsProps {
@@ -340,15 +341,19 @@ const ReviewStats: React.FC<ReviewStatsProps> = ({ tenant, refreshTrigger }) => 
                         {generalStats.total_classifications}
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
-                        Classificazioni Totali
+                        Sessioni Classificate
                       </Typography>
                     </div>
                     <div style={{ flex: '1 1 200px', textAlign: 'center' }}>
                       <Typography variant="h4" color="success.main">
-                        {generalStats.total_sessions}
+                        {generalStats.total_messages !== undefined
+                          ? generalStats.total_messages
+                          : generalStats.total_sessions}
                       </Typography>
                       <Typography variant="body2" color="text.secondary">
-                        Sessioni Uniche
+                        {generalStats.total_messages !== undefined
+                          ? 'Frasi Analizzate'
+                          : 'Sessioni Uniche'}
                       </Typography>
                     </div>
                     <div style={{ flex: '1 1 200px', textAlign: 'center' }}>

@@ -69,42 +69,31 @@ class RemoteTagSyncService:
                 conn.close()
 
     # --------------- DDL ---------------
-    def _ensure_tables(self, connection) -> None:
-        """Create required tables if not present in the current schema."""
+    def _ensure_tables(self, connection) -> List[str]:
+        """
+        Verify that required tables exist in the current schema.
+
+        Returns:
+            List of missing table names (empty if all tables are present).
+        """
+        required_tables = ('conversations_tags', 'ai_session_tags')
         cur = connection.cursor()
+        try:
+            cur.execute(
+                """
+                SELECT table_name
+                  FROM information_schema.tables
+                 WHERE table_schema = %s
+                   AND table_name IN (%s, %s)
+                """,
+                (connection.database, *required_tables),
+            )
+            existing = {row[0] for row in cur.fetchall()}
+        finally:
+            cur.close()
 
-        # conversations_tags: tag_id unique, description, system flag, timestamps
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS conversations_tags (
-                tag_id VARCHAR(191) NOT NULL,
-                tag_description TEXT NULL,
-                is_system_tag TINYINT(1) NOT NULL DEFAULT 1,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                PRIMARY KEY (tag_id)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            """
-        )
-
-        # ai_session_tags: one tag per session (update on duplicate)
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS ai_session_tags (
-                session_id VARCHAR(191) NOT NULL,
-                tag_id VARCHAR(191) NOT NULL,
-                confidence_score FLOAT NULL,
-                classification_method VARCHAR(100) NULL,
-                classified_by VARCHAR(100) NULL,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                PRIMARY KEY (session_id),
-                KEY idx_tag_id (tag_id)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            """
-        )
-
-        cur.close()
+        missing = [tbl for tbl in required_tables if tbl not in existing]
+        return missing
 
     # --------------- Data helpers ---------------
     @staticmethod
@@ -170,20 +159,34 @@ class RemoteTagSyncService:
                 }
             return {'success': False, 'error': f"Connessione schema remoto fallita: {e}"}
 
+        cur = None
         try:
-            self._ensure_tables(conn)
+            missing_tables = self._ensure_tables(conn)
+            if missing_tables:
+                error_msg = (
+                    "Tabelle mancanti nello schema remoto "
+                    f"'{tenant_slug}': {', '.join(missing_tables)}. "
+                    "Creale manualmente prima di rieseguire il sync."
+                )
+                print(f"   ❌ TABELLE MANCANTI: {error_msg}")
+                return {'success': False, 'error': error_msg}
+
             cur = conn.cursor()
 
             upsert_tag_sql = (
                 "INSERT INTO conversations_tags (tag_id, tag_description, is_system_tag) "
                 "VALUES (%s, %s, 1) "
-                "ON DUPLICATE KEY UPDATE tag_description=VALUES(tag_description), is_system_tag=VALUES(is_system_tag), updated_at=CURRENT_TIMESTAMP"
+                "ON DUPLICATE KEY UPDATE "
+                "tag_description=VALUES(tag_description), "
+                "is_system_tag=VALUES(is_system_tag)"
             )
             upsert_session_sql = (
                 "INSERT INTO ai_session_tags (session_id, tag_id, confidence_score, classification_method, classified_by) "
                 "VALUES (%s, %s, %s, %s, %s) "
-                "ON DUPLICATE KEY UPDATE tag_id=VALUES(tag_id), confidence_score=VALUES(confidence_score), "
-                "classification_method=VALUES(classification_method), classified_by=VALUES(classified_by), updated_at=CURRENT_TIMESTAMP"
+                "ON DUPLICATE KEY UPDATE "
+                "confidence_score=VALUES(confidence_score), "
+                "classification_method=VALUES(classification_method), "
+                "classified_by=VALUES(classified_by)"
             )
 
             tag_inserts = 0
@@ -239,8 +242,8 @@ class RemoteTagSyncService:
                     elif cur.rowcount == 2:
                         session_updates += 1
 
-                except Exception:
-                    # Continue with other documents without failing the whole batch
+                except Exception as doc_error:
+                    print(f"   ⚠️  ERRORE documento session_id={getattr(doc, 'session_id', 'N/A')}: {doc_error}")
                     continue
 
             conn.commit()

@@ -98,6 +98,7 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ tenantIdentifier, ten
     force_retrain: true,
     max_sessions: null as number | null,
     force_review: false,
+    force_reprocess: false,
     force_reprocess_all: false
   });
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -180,9 +181,10 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ tenantIdentifier, ten
     try {
       const response = await apiService.startFullClassification(tenantIdentifier, {
         confidence_threshold: classificationOptions.confidence_threshold,
-        force_retrain: classificationOptions.force_retrain,
+        force_retrain_ml: classificationOptions.force_retrain,
         max_sessions: classificationOptions.max_sessions || undefined,
         force_review: classificationOptions.force_review,
+        force_reprocess: classificationOptions.force_reprocess,
         force_reprocess_all: classificationOptions.force_reprocess_all  // NUOVO parametro
       });
 
@@ -880,10 +882,26 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ tenantIdentifier, ten
               <FormControlLabel
                 control={
                   <Switch
+                    checked={classificationOptions.force_reprocess}
+                    onChange={(e) => setClassificationOptions({
+                      ...classificationOptions,
+                      force_reprocess: e.target.checked,
+                      force_reprocess_all: e.target.checked ? classificationOptions.force_reprocess_all : false
+                    })}
+                    color="warning"
+                  />
+                }
+                label="🔄 Rigenera i cluster e riclassifica (svuota cache MongoDB)"
+              />
+              
+              <FormControlLabel
+                control={
+                  <Switch
                     checked={classificationOptions.force_reprocess_all}
                     onChange={(e) => setClassificationOptions({
                       ...classificationOptions,
-                      force_reprocess_all: e.target.checked
+                      force_reprocess_all: e.target.checked,
+                      force_reprocess: e.target.checked ? true : classificationOptions.force_reprocess
                     })}
                     color="error"
                   />
@@ -904,6 +922,15 @@ const AllSessionsView: React.FC<AllSessionsViewProps> = ({ tenantIdentifier, ten
                 <Typography variant="body2">
                   <strong>⚠️ ATTENZIONE:</strong> Hai scelto di processare <strong>TUTTE LE SESSIONI</strong> del database.
                   Questa operazione potrebbe richiedere molto tempo e risorse computazionali.
+                </Typography>
+              </Alert>
+            )}
+
+            {classificationOptions.force_reprocess && !classificationOptions.force_reprocess_all && (
+              <Alert severity="warning">
+                <Typography variant="body2">
+                  🔄 Verranno rigenerati cluster e classificazioni dopo aver svuotato la collection MongoDB del tenant.
+                  Assicurati di avere un backup se necessario.
                 </Typography>
               </Alert>
             )}

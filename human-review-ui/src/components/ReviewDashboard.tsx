@@ -17,7 +17,15 @@ import {
   DialogContent,
   DialogActions,
   Tabs,
-  Tab
+  Tab,
+  TextField,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  Stack,
+  Divider,
+  Grid
 } from '@mui/material';
 import {
   Refresh as RefreshIcon,
@@ -39,6 +47,38 @@ import { ReviewCase, ClusterCase } from '../types/ReviewCase';
 import { Tenant } from '../types/Tenant';
 import AllSessionsView from './AllSessionsView';
 import { useTenant } from '../contexts/TenantContext';
+
+type SchedulerUnit = 'minutes' | 'hours' | 'days' | 'weeks';
+
+interface ClassificationOptionsState {
+  confidence_threshold: number;
+  force_retrain_ml: boolean;
+  max_sessions: number | null;
+  force_review: boolean;
+  force_reprocess: boolean;
+  force_reprocess_all: boolean;
+  schedule_changes: boolean;
+  scheduler_enabled: boolean;
+  scheduler_unit: SchedulerUnit;
+  scheduler_value: number;
+  scheduler_start_at: string;
+}
+
+const isoToLocalInput = (iso?: string | null): string => {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    const mm = pad(d.getMonth() + 1);
+    const dd = pad(d.getDate());
+    const hh = pad(d.getHours());
+    const mi = pad(d.getMinutes());
+    return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+  } catch {
+    return '';
+  }
+};
 
 interface ReviewDashboardProps {
   tenant: Tenant;
@@ -70,9 +110,24 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [uiConfig, setUiConfig] = useState<any>(null);
   const [currentLimit, setCurrentLimit] = useState<number>(2000);  // AUMENTATO LIMITE INIZIALE: ora parte con 2000 per vedere tutte le sessioni
-
-  // Stato per force_review toggle
-  const [forceReview, setForceReview] = useState(false);
+  const tenantId = tenant.tenant_id;
+  const tenantIdentifier = tenant.tenant_slug || tenant.tenant_id || tenant.tenant_name;
+  const [classificationDialogOpen, setClassificationDialogOpen] = useState(false);
+  const [classificationOptions, setClassificationOptions] = useState<ClassificationOptionsState>({
+    confidence_threshold: 0.7,
+    force_retrain_ml: true,
+    max_sessions: null,
+    force_review: false,
+    force_reprocess: false,
+    force_reprocess_all: false,
+    schedule_changes: false,
+    scheduler_enabled: false,
+    scheduler_unit: 'hours',
+    scheduler_value: 24,
+    scheduler_start_at: ''
+  });
+  const [schedulerLoading, setSchedulerLoading] = useState(false);
+  const [schedulerError, setSchedulerError] = useState<string | null>(null);
   
   // 🔍 Context per gestire tenant e prompt status
   const { promptStatus } = useTenant();
@@ -179,13 +234,25 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
 
       const clusterArr: ClusterCase[] = Object.values(grouped)
         .filter((cluster) => cluster.cluster_id !== '-1')
-        .map((g) => ({
-          cluster_id: g.cluster_id,
-          representative: g.representative || g.representatives_list[0] || g.propagated_sessions[0],
-          propagated_sessions: g.propagated_sessions,
-          total_sessions: (g.representatives_list?.length || 0) + (g.propagated_sessions?.length || 0),
-          cluster_size: (g.representatives_list?.length || 0) + (g.propagated_sessions?.length || 0)
-        }));
+        .map((g) => {
+          const representatives = (g.representatives_list || []).filter(Boolean);
+          const fallbackRepresentative = g.representative || representatives[0] || g.propagated_sessions[0];
+          if (!fallbackRepresentative) {
+            return null;
+          }
+
+          const totalSessions = representatives.length + (g.propagated_sessions?.length || 0);
+
+          return {
+            cluster_id: g.cluster_id,
+            representative: fallbackRepresentative,
+            representatives,
+            propagated_sessions: g.propagated_sessions,
+            total_sessions: totalSessions,
+            cluster_size: totalSessions
+          };
+        })
+        .filter(Boolean) as ClusterCase[];
 
       setClusters(clusterArr);
       setCases([]);
@@ -254,30 +321,95 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
       try {
         const allSess = await apiService.getAllSessions(tenant.tenant_id, true);
         const map: Record<string, ReviewCase[]> = {};
+        const normalizeConfidence = (value: any): number => {
+          if (typeof value !== 'number' || Number.isNaN(value)) {
+            return 0;
+          }
+          if (value > 1) {
+            return Math.min(1, value / 100);
+          }
+          if (value < 0) {
+            return 0;
+          }
+          return value;
+        };
+        const asBool = (value: any): boolean => value === true || value === 'true' || value === 1;
+
         (allSess.sessions || []).forEach((s: any) => {
-          const cid = (s.cluster_id !== undefined && s.cluster_id !== null) ? s.cluster_id.toString() : undefined;
-          if (!cid) return;
-          if (s.is_representative !== true) return;
+          const metadata = s.metadata || {};
+          const rawClusterId =
+            metadata.cluster_id ??
+            s.cluster_id ??
+            (s.classifications && s.classifications[0]?.cluster_id);
+          const cid = rawClusterId !== undefined && rawClusterId !== null ? rawClusterId.toString() : undefined;
+          if (!cid || cid === '-1') return;
+
+          const isRepresentative =
+            asBool(s.is_representative) ||
+            asBool(metadata.representative) ||
+            asBool(metadata.is_representative) ||
+            asBool(metadata?.cluster_metadata?.is_representative);
+
+          if (!isRepresentative) return;
+
+          const primaryClassification = (s.classifications && s.classifications[0]) || {};
+          const classificationLabel =
+            s.classification ||
+            primaryClassification.tag_name ||
+            primaryClassification.label ||
+            'N/A';
+
+          const rawConfidence =
+            primaryClassification.confidence ??
+            s.confidence ??
+            s.ml_confidence ??
+            0;
+          const confidence = normalizeConfidence(rawConfidence);
+          const mlConfidence = normalizeConfidence(
+            typeof s.ml_confidence === 'number' ? s.ml_confidence : primaryClassification.ml_confidence
+          );
+          const llmConfidence = normalizeConfidence(
+            typeof s.llm_confidence === 'number' ? s.llm_confidence : primaryClassification.llm_confidence
+          );
+
           const rc: ReviewCase = {
-            case_id: s.session_id,
-            session_id: s.session_id,
-            conversation_text: s.conversation_text,
-            classification: (s.classifications && s.classifications[0]?.tag_name) || 'N/A',
-            ml_prediction: '',
-            ml_confidence: 0,
-            llm_prediction: '',
-            llm_confidence: 0,
-            uncertainty_score: 0,
+            case_id: s.session_id || s.id,
+            session_id: s.session_id || s.id,
+            conversation_text: s.conversation_text || s.full_text || '',
+            classification: classificationLabel || 'N/A',
+            classification_method: primaryClassification.method || s.method,
+            ml_prediction: s.ml_prediction || primaryClassification.ml_prediction || '',
+            ml_confidence: mlConfidence,
+            llm_prediction: s.llm_prediction || primaryClassification.llm_prediction || '',
+            llm_confidence: llmConfidence,
+            uncertainty_score: Math.max(0, 1 - confidence),
             novelty_score: 0,
-            reason: '',
-            created_at: s.created_at,
+            reason: s.review_reason || '',
+            created_at: s.created_at || primaryClassification.created_at || s.timestamp || '',
             tenant: tenant.tenant_slug || tenant.tenant_name || tenant.tenant_id,
             cluster_id: cid,
             is_representative: true
           };
-          if (!map[cid]) map[cid] = [];
-          map[cid].push(rc);
+
+          if (!map[cid]) {
+            map[cid] = [];
+          }
+
+          const duplicate = map[cid].some((existing) => {
+            const existingKey = existing.session_id || existing.case_id;
+            const newKey = rc.session_id || rc.case_id;
+            return existingKey && newKey && existingKey === newKey;
+          });
+
+          if (!duplicate) {
+            map[cid].push(rc);
+          }
         });
+
+        Object.keys(map).forEach((cid) => {
+          map[cid].sort((a, b) => (b.ml_confidence ?? 0) - (a.ml_confidence ?? 0));
+        });
+
         setExtraRepsByCluster(map);
       } catch (e) {
         console.error('Errore prefetch rappresentanti', e);
@@ -369,26 +501,87 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
     }
   };
 
-  const handleStartClassification = async () => {
+  const loadSchedulerConfig = useCallback(async () => {
+    if (!tenantId) return;
+    setSchedulerLoading(true);
+    setSchedulerError(null);
+
+    try {
+      const response = await apiService.getSchedulerConfig(tenantId);
+      const cfg = (response as any).config || {};
+
+      setClassificationOptions(prev => ({
+        ...prev,
+        schedule_changes: !cfg?.enabled,
+        scheduler_enabled: Boolean(cfg?.enabled),
+        scheduler_unit: (cfg?.frequency_unit || 'hours') as SchedulerUnit,
+        scheduler_value: Number(cfg?.frequency_value || 24),
+        scheduler_start_at: isoToLocalInput(cfg?.start_at)
+      }));
+    } catch (err: any) {
+      setSchedulerError(err?.message || 'Errore caricamento configurazione scheduler');
+      setClassificationOptions(prev => ({
+        ...prev,
+        schedule_changes: true,
+        scheduler_enabled: true,
+        scheduler_unit: prev.scheduler_unit,
+        scheduler_value: prev.scheduler_value,
+        scheduler_start_at: ''
+      }));
+    } finally {
+      setSchedulerLoading(false);
+    }
+  }, [tenantId]);
+
+  const handleOpenClassificationDialog = () => {
+    const config = uiConfig?.classification || {};
+    setClassificationOptions(prev => ({
+      ...prev,
+      confidence_threshold: config?.confidence_threshold ?? 0.7,
+      force_retrain_ml: config?.force_retrain !== false,
+      max_sessions: config?.max_sessions ?? null,
+      force_review: config?.force_review ?? false,
+      force_reprocess: false,
+      force_reprocess_all: false,
+      schedule_changes: prev.schedule_changes,
+      scheduler_enabled: prev.scheduler_enabled,
+      scheduler_unit: prev.scheduler_unit,
+      scheduler_value: prev.scheduler_value,
+      scheduler_start_at: prev.scheduler_start_at
+    }));
+    setClassificationDialogOpen(true);
+    loadSchedulerConfig();
+  };
+
+  const handleStartClassification = async (options: ClassificationOptionsState) => {
     setClassificationLoading(true);
     setError(null);
     setSuccessMessage(null);
 
     try {
-      const config = uiConfig?.classification || {};
-      const tenantIdentifier = tenant.tenant_slug || tenant.tenant_id || tenant.tenant_name;
+      if (options.schedule_changes && tenantId) {
+        await apiService.setSchedulerConfig(tenantId, {
+          enabled: options.scheduler_enabled,
+          frequency_unit: options.scheduler_unit,
+          frequency_value: options.scheduler_value,
+          start_at: options.scheduler_start_at ? options.scheduler_start_at : null
+        });
+      }
+
       const response = await apiService.startFullClassification(tenantIdentifier, {
-        confidence_threshold: config.confidence_threshold || 0.7,
-        force_retrain: config.force_retrain !== false,
-        max_sessions: config.max_sessions || null,
-        debug_mode: config.debug_mode || false,
-        force_review: forceReview
+        confidence_threshold: options.confidence_threshold,
+        force_retrain_ml: options.force_retrain_ml,
+        max_sessions: options.max_sessions ?? undefined,
+        force_review: options.force_review,
+        force_reprocess: options.force_reprocess,
+        force_reprocess_all: options.force_reprocess_all
       });
 
       setSuccessMessage(
         `Classificazione completata: ${response.sessions_processed || 0} sessioni processate` +
         (response.forced_review_count > 0 ? `, ${response.forced_review_count} casi forzati in coda per revisione` : '')
       );
+      setClassificationDialogOpen(false);
       
       // Ricarica i casi dopo la classificazione
       setTimeout(() => {
@@ -508,7 +701,7 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
                 <Button
                   variant="contained"
                   startIcon={classificationLoading ? undefined : <PlayIcon />}
-                  onClick={handleStartClassification}
+                  onClick={handleOpenClassificationDialog}
                   disabled={!uiConfig || classificationLoading || trainingLoading || retrainingLoading || !hasPrompts}
                   sx={{ mb: 0.5 }}
                 >
@@ -516,18 +709,6 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
                 </Button>
               </span>
             </Tooltip>
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={forceReview}
-                  onChange={(e) => setForceReview(e.target.checked)}
-                  disabled={classificationLoading || trainingLoading || retrainingLoading}
-                  size="small"
-                />
-              }
-              label="Force Review"
-              sx={{ fontSize: '0.75rem', color: 'text.secondary' }}
-            />
           </Box>
         </Box>
       </Box>
@@ -717,35 +898,59 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
             </Card>
           ) : (
             <Box display="flex" flexDirection="column" gap={2}>
-              {clusters.map((cluster) => (
-                <ClusterGroupAccordion
-                  key={cluster.cluster_id}
-                  clusterId={cluster.cluster_id}
-                  representatives={
-                    extraRepsByCluster[cluster.cluster_id] && extraRepsByCluster[cluster.cluster_id].length > 0
-                      ? extraRepsByCluster[cluster.cluster_id]
-                      : (cluster.representative ? [cluster.representative] : [])
+              {clusters.map((cluster) => {
+                const baseRepresentatives =
+                  cluster.representatives && cluster.representatives.length > 0
+                    ? cluster.representatives
+                    : cluster.representative
+                      ? [cluster.representative]
+                      : [];
+
+                const extraCandidates = extraRepsByCluster[cluster.cluster_id] || [];
+                const seenIds = new Set<string>();
+                baseRepresentatives.forEach((rep) => {
+                  const key = (rep.session_id || rep.case_id || '').toString();
+                  if (key) {
+                    seenIds.add(key);
                   }
-                  propagated={cluster.propagated_sessions || []}
-                  onConfirmMajority={async (cid, chosenLabel) => {
-                    try {
-                      const trimmedLabel = (chosenLabel || '').trim();
-                      if (!trimmedLabel) {
-                        setError('Seleziona o inserisci un\'etichetta valida prima di confermare.');
-                        return;
+                });
+
+                const dedupedExtraRepresentatives = extraCandidates.filter((rep) => {
+                  const key = (rep.session_id || rep.case_id || '').toString();
+                  if (!key || seenIds.has(key)) {
+                    return false;
+                  }
+                  seenIds.add(key);
+                  return true;
+                });
+
+                return (
+                  <ClusterGroupAccordion
+                    key={cluster.cluster_id}
+                    clusterId={cluster.cluster_id}
+                    representatives={baseRepresentatives}
+                    extraRepresentatives={dedupedExtraRepresentatives}
+                    propagated={cluster.propagated_sessions || []}
+                    onConfirmMajority={async (cid, chosenLabel) => {
+                      try {
+                        const trimmedLabel = (chosenLabel || '').trim();
+                        if (!trimmedLabel) {
+                          setError('Seleziona o inserisci un\'etichetta valida prima di confermare.');
+                          return;
+                        }
+                        const res = await apiService.resolveClusterMajority(tenant.tenant_id, cid, {
+                          selected_label: trimmedLabel
+                        });
+                        const appliedLabel = res.applied_label || trimmedLabel.toUpperCase();
+                        setSuccessMessage(`✅ Cluster ${cid}: applicata etichetta '${appliedLabel}'. Risolti ${res.resolved_count}/${res.total_candidates}.`);
+                        setTimeout(() => loadClusterCases(), 500);
+                      } catch (e: any) {
+                        setError(e?.message || 'Errore Conferma maggioranza');
                       }
-                      const res = await apiService.resolveClusterMajority(tenant.tenant_id, cid, {
-                        selected_label: trimmedLabel
-                      });
-                      const appliedLabel = res.applied_label || trimmedLabel.toUpperCase();
-                      setSuccessMessage(`✅ Cluster ${cid}: applicata etichetta '${appliedLabel}'. Risolti ${res.resolved_count}/${res.total_candidates}.`);
-                      setTimeout(() => loadClusterCases(), 500);
-                    } catch (e: any) {
-                      setError(e?.message || 'Errore Conferma maggioranza');
-                    }
-                  }}
-                />
-              ))}
+                    }}
+                  />
+                );
+              })}
             </Box>
           )}
         </div>
@@ -1129,6 +1334,288 @@ const ReviewDashboard: React.FC<ReviewDashboardProps> = ({
           onSessionAdd={handleSessionAddedToQueue}
         />
       )}
+
+      <Dialog
+        open={classificationDialogOpen}
+        onClose={() => {
+          if (!classificationLoading) {
+            setClassificationDialogOpen(false);
+          }
+        }}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>
+          <Box display="flex" alignItems="center" gap={1}>
+            <PlayIcon color="primary" />
+            {`Classificazione Completa - ${tenant.tenant_name}`}
+          </Box>
+        </DialogTitle>
+        <DialogContent dividers>
+          {classificationLoading && <LinearProgress sx={{ mb: 2 }} />}
+          <Alert severity="info" sx={{ mb: 3 }}>
+            <Typography variant="body2">
+              <strong>🎯 Classificazione Automatica Completa</strong><br />
+              Personalizza i parametri della pipeline e, se necessario, programma la prossima esecuzione automatica.
+            </Typography>
+          </Alert>
+
+          <Stack spacing={3}>
+            <TextField
+              label="Soglia di confidenza"
+              type="number"
+              value={classificationOptions.confidence_threshold}
+              onChange={(e) =>
+                setClassificationOptions(prev => ({
+                  ...prev,
+                  confidence_threshold: parseFloat(e.target.value) || 0.7
+                }))
+              }
+              inputProps={{ min: 0.1, max: 1.0, step: 0.1 }}
+              helperText="Soglia minima per accettare una decisione automatica (0.1 - 1.0)"
+            />
+
+            <FormControl fullWidth>
+              <InputLabel>Numero massimo sessioni</InputLabel>
+              <Select
+                label="Numero massimo sessioni"
+                value={classificationOptions.max_sessions ?? 'all'}
+                onChange={(e) =>
+                  setClassificationOptions(prev => ({
+                    ...prev,
+                    max_sessions: e.target.value === 'all' ? null : Number(e.target.value)
+                  }))
+                }
+              >
+                <MenuItem value="all">🌟 Tutte le sessioni</MenuItem>
+                <MenuItem value={100}>📊 100 sessioni</MenuItem>
+                <MenuItem value={500}>📈 500 sessioni</MenuItem>
+                <MenuItem value={1000}>🔥 1000 sessioni</MenuItem>
+                <MenuItem value={2000}>⚡ 2000 sessioni</MenuItem>
+                <MenuItem value={5000}>🚀 5000 sessioni</MenuItem>
+              </Select>
+            </FormControl>
+
+            <Box>
+              <Typography variant="h6" gutterBottom>
+                Opzioni avanzate
+              </Typography>
+              <Stack spacing={1}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={classificationOptions.force_retrain_ml}
+                      onChange={(e) =>
+                        setClassificationOptions(prev => ({
+                          ...prev,
+                          force_retrain_ml: e.target.checked
+                        }))
+                      }
+                    />
+                  }
+                  label="Riaddestra il modello ML prima della classificazione"
+                />
+
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={classificationOptions.force_reprocess}
+                      onChange={(e) =>
+                        setClassificationOptions(prev => ({
+                          ...prev,
+                          force_reprocess: e.target.checked,
+                          force_reprocess_all: e.target.checked ? prev.force_reprocess_all : false
+                        }))
+                      }
+                      color="warning"
+                    />
+                  }
+                  label="🔄 Rigenera i cluster (svuota cache MongoDB del tenant)"
+                />
+
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={classificationOptions.force_reprocess_all}
+                      onChange={(e) =>
+                        setClassificationOptions(prev => ({
+                          ...prev,
+                          force_reprocess_all: e.target.checked,
+                          force_reprocess: e.target.checked ? true : prev.force_reprocess
+                        }))
+                      }
+                      color="error"
+                    />
+                  }
+                  label="🧨 Riclassificazione totale (elimina classificazioni esistenti)"
+                />
+
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={classificationOptions.force_review}
+                      onChange={(e) =>
+                        setClassificationOptions(prev => ({
+                          ...prev,
+                          force_review: e.target.checked
+                        }))
+                      }
+                    />
+                  }
+                  label="👁️ Forza revisione umana per tutte le sessioni"
+                />
+              </Stack>
+
+              {classificationOptions.force_reprocess && !classificationOptions.force_reprocess_all && (
+                <Alert severity="warning" sx={{ mt: 2 }}>
+                  Verrà ricostruita l'intera pipeline di clustering e classificazione dopo aver azzerato i dati MongoDB.
+                </Alert>
+              )}
+
+              {classificationOptions.force_reprocess_all && (
+                <Alert severity="error" sx={{ mt: 2 }}>
+                  <Typography variant="body2">
+                    <strong>Attenzione:</strong> tutte le classificazioni esistenti saranno eliminate definitivamente prima di riprocessare ogni sessione.
+                  </Typography>
+                </Alert>
+              )}
+
+              {classificationOptions.force_review && (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  Ogni sessione classificata sarà aggiunta alla review queue per un controllo manuale.
+                </Alert>
+              )}
+            </Box>
+
+            <Divider />
+
+            <Box>
+              <Typography variant="h6" gutterBottom>
+                Scheduler automatico
+              </Typography>
+
+              {schedulerError && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  {schedulerError} — puoi impostare una nuova pianificazione qui sotto.
+                </Alert>
+              )}
+
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={classificationOptions.schedule_changes}
+                    onChange={(e) =>
+                      setClassificationOptions(prev => ({
+                        ...prev,
+                        schedule_changes: e.target.checked
+                      }))
+                    }
+                    disabled={classificationLoading || schedulerLoading}
+                  />
+                }
+                label="Aggiorna configurazione scheduler dopo questa esecuzione"
+              />
+
+              {classificationOptions.schedule_changes && (
+                <Stack spacing={2} sx={{ mt: 1 }}>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={classificationOptions.scheduler_enabled}
+                        onChange={(e) =>
+                          setClassificationOptions(prev => ({
+                            ...prev,
+                            scheduler_enabled: e.target.checked
+                          }))
+                        }
+                        disabled={classificationLoading || schedulerLoading}
+                      />
+                    }
+                    label="Abilita scheduler automatico"
+                  />
+
+                  <Grid container spacing={2}>
+                    <Grid item xs={12} md={4}>
+                      <FormControl fullWidth disabled={classificationLoading || schedulerLoading}>
+                        <InputLabel>Unità</InputLabel>
+                        <Select
+                          label="Unità"
+                          value={classificationOptions.scheduler_unit}
+                          onChange={(e) =>
+                            setClassificationOptions(prev => ({
+                              ...prev,
+                              scheduler_unit: e.target.value as SchedulerUnit
+                            }))
+                          }
+                        >
+                          <MenuItem value="minutes">Minuti</MenuItem>
+                          <MenuItem value="hours">Ore</MenuItem>
+                          <MenuItem value="days">Giorni</MenuItem>
+                          <MenuItem value="weeks">Settimane</MenuItem>
+                        </Select>
+                      </FormControl>
+                    </Grid>
+                    <Grid item xs={12} md={4}>
+                      <TextField
+                        label="Frequenza"
+                        type="number"
+                        fullWidth
+                        disabled={classificationLoading || schedulerLoading}
+                        value={classificationOptions.scheduler_value}
+                        onChange={(e) =>
+                          setClassificationOptions(prev => ({
+                            ...prev,
+                            scheduler_value: Math.max(1, Number(e.target.value) || 1)
+                          }))
+                        }
+                        inputProps={{ min: 1 }}
+                        helperText="Numero di unità tra due esecuzioni"
+                      />
+                    </Grid>
+                    <Grid item xs={12} md={4}>
+                      <TextField
+                        label="Inizio (opzionale)"
+                        type="datetime-local"
+                        fullWidth
+                        disabled={classificationLoading || schedulerLoading}
+                        value={classificationOptions.scheduler_start_at}
+                        onChange={(e) =>
+                          setClassificationOptions(prev => ({
+                            ...prev,
+                            scheduler_start_at: e.target.value
+                          }))
+                        }
+                        InputLabelProps={{ shrink: true }}
+                        helperText="Lascia vuoto per iniziare subito"
+                      />
+                    </Grid>
+                  </Grid>
+                </Stack>
+              )}
+
+              {schedulerLoading && <LinearProgress sx={{ mt: 2 }} />}
+            </Box>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              if (!classificationLoading) {
+                setClassificationDialogOpen(false);
+              }
+            }}
+          >
+            Annulla
+          </Button>
+          <Button
+            variant="contained"
+            onClick={() => handleStartClassification(classificationOptions)}
+            disabled={classificationLoading}
+          >
+            {classificationLoading ? 'Avvio...' : 'Avvia classificazione'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Dialogo Training Supervisionato SEMPLIFICATO - 4 PARAMETRI */}
       <Dialog open={trainingDialogOpen} onClose={() => setTrainingDialogOpen(false)} maxWidth="sm" fullWidth>

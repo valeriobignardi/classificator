@@ -25,6 +25,7 @@ export interface ReviewCase {
 export interface ClusterCase {
   cluster_id: string;
   representative: ReviewCase;
+  representatives?: ReviewCase[];
   propagated_sessions: ReviewCase[];
   total_sessions: number;
   cluster_size: number;

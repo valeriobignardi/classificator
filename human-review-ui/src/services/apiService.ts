@@ -160,13 +160,29 @@ class ApiService {
   async startFullClassification(tenant: string, options?: {
     confidence_threshold?: number;
     force_retrain?: boolean;
+    force_retrain_ml?: boolean;
     max_sessions?: number;
     debug_mode?: boolean;
     force_review?: boolean;
-    force_reprocess_all?: boolean;  // NUOVO: Riclassifica tutto dall'inizio
+    force_reprocess?: boolean;
+    force_reprocess_all?: boolean;
+    scheduler?: {
+      apply_changes: boolean;
+      enabled: boolean;
+      frequency_unit: 'minutes' | 'hours' | 'days' | 'weeks';
+      frequency_value: number;
+      start_at?: string | null;
+    };
   }): Promise<any> {
+    const payload: any = { ...(options || {}) };
+
+    if (payload.force_retrain !== undefined && payload.force_retrain_ml === undefined) {
+      payload.force_retrain_ml = payload.force_retrain;
+    }
+    delete payload.force_retrain;
+
     return this.handleRequest(
-      axios.post(`${DEV_BASE_URL}/classify/all/${tenant}`, options || {})
+      axios.post(`${API_BASE_URL}/classify/all/${tenant}`, payload)
     );
   }
 

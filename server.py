@@ -1849,6 +1849,7 @@ def health_check():
     })
 
 @app.route('/classify/all/<client_name>', methods=['POST'])
+@app.route('/api/classify/all/<client_name>', methods=['POST'])
 def classify_all_sessions(client_name: str):
     """
     Rotta 1: Classifica tutte le sessioni di un cliente
@@ -3711,16 +3712,19 @@ def get_label_statistics(tenant_name: str):
             {
                 '$group': {
                     '_id': None,
-                    'total_classifications': {'$sum': 1},
-                    'total_sessions': {'$addToSet': '$session_id'},
-                    'total_labels': {'$addToSet': '$classification'},
+                    'total_messages': {'$sum': 1},
+                    'unique_sessions': {'$addToSet': '$session_id'},
+                    'unique_labels': {'$addToSet': '$classification'},
                     'avg_confidence_overall': {'$avg': '$confidence'}
                 }
             },
             {
-                '$addFields': {
-                    'total_sessions_count': {'$size': '$total_sessions'},
-                    'total_labels_count': {'$size': '$total_labels'}
+                '$project': {
+                    '_id': 0,
+                    'total_messages': 1,
+                    'total_sessions_count': {'$size': '$unique_sessions'},
+                    'total_labels_count': {'$size': '$unique_labels'},
+                    'avg_confidence_overall': 1
                 }
             }
         ]
@@ -3758,17 +3762,19 @@ def get_label_statistics(tenant_name: str):
         if general_results and len(general_results) > 0:
             general_result = general_results[0]
             general_stats = {
-                'total_classifications': general_result.get('total_classifications', 0),
+                'total_classifications': general_result.get('total_sessions_count', 0),
                 'total_sessions': general_result.get('total_sessions_count', 0),
                 'total_labels': general_result.get('total_labels_count', 0),
-                'avg_confidence_overall': round(general_result.get('avg_confidence_overall', 0) or 0, 3)
+                'avg_confidence_overall': round(general_result.get('avg_confidence_overall', 0) or 0, 3),
+                'total_messages': general_result.get('total_messages', 0)
             }
         else:
             general_stats = {
                 'total_classifications': 0,
                 'total_sessions': 0,
                 'total_labels': 0,
-                'avg_confidence_overall': 0
+                'avg_confidence_overall': 0,
+                'total_messages': 0
             }
         
         return jsonify({
@@ -5337,12 +5343,14 @@ def api_get_all_tenants_stats():
                 # Recupera statistiche specifiche del tenant
                 stats = mongo_reader.get_classification_stats()
                 
+                total_sessions = stats.get('total_sessions', stats.get('total_classifications', 0))
                 tenant_stat = {
                     'tenant_id': tenant_obj.tenant_id,
                     'tenant_name': tenant_obj.tenant_name,
                     'tenant_slug': tenant_obj.tenant_slug,
-                    'session_count': stats.get('total_classifications', 0),  # Per ora usiamo questo
-                    'classification_count': stats.get('total_classifications', 0),
+                    'session_count': total_sessions,
+                    'classification_count': total_sessions,
+                    'total_messages': stats.get('total_messages', 0),
                     'unique_labels': stats.get('unique_labels', 0),
                     'is_active': tenant_obj.tenant_status == 1
                 }

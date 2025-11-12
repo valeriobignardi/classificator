@@ -603,45 +603,86 @@ class MongoClassificationReader:
             if not self.ensure_connection():
                 return {}
                 
-            # Usa la collection del tenant
             collection = self.db[self.collection_name]
             
             print(f"📊 Calcolo statistiche per tenant: {self.tenant.tenant_name}")
             
-            # Pipeline semplificata: usa collection per tenant (non serve filtro client)
+            classification_filter = {
+                '$and': [
+                    {'session_id': {'$nin': [None, '']}},
+                    {
+                        '$or': [
+                            {'classification': {'$exists': True, '$ne': None}},
+                            {'classificazione': {'$exists': True, '$ne': None}}
+                        ]
+                    }
+                ]
+            }
+            
             pipeline = [
-                {"$match": {}},  # Nessun filtro necessario
+                {'$match': classification_filter},
                 {
-                    "$group": {
-                        "_id": {"$ifNull": ["$classification", "$classificazione"]},  # Supporta entrambi i campi
-                        "count": {"$sum": 1},
-                        "avg_confidence": {"$avg": "$confidence"},
-                        "min_confidence": {"$min": "$confidence"},
-                        "max_confidence": {"$max": "$confidence"}
+                    '$addFields': {
+                        'label': {'$ifNull': ['$classification', '$classificazione']},
+                        'confidence': {'$ifNull': ['$confidence', 0]}
                     }
                 },
-                {"$sort": {"count": -1}}
+                {'$match': {'label': {'$ne': None}}},
+                {
+                    '$group': {
+                        '_id': {
+                            'label': '$label',
+                            'session_id': '$session_id'
+                        },
+                        'session_confidence': {'$avg': '$confidence'}
+                    }
+                },
+                {
+                    '$group': {
+                        '_id': '$_id.label',
+                        'session_count': {'$sum': 1},
+                        'avg_confidence': {'$avg': '$session_confidence'},
+                        'min_confidence': {'$min': '$session_confidence'},
+                        'max_confidence': {'$max': '$session_confidence'}
+                    }
+                },
+                {'$sort': {'session_count': -1}}
             ]
             
             results = list(collection.aggregate(pipeline))
             
-            # Calcola statistiche totali
-            total_classifications = sum(r['count'] for r in results)
+            distinct_sessions = [
+                session for session in collection.distinct('session_id', classification_filter)
+                if session not in (None, '')
+            ]
+            total_sessions = len(distinct_sessions)
+            total_messages = collection.count_documents(classification_filter)
             
-            # Formatta risultati
             label_stats = []
             for result in results:
+                session_count = result.get('session_count', 0) or 0
+                avg_confidence = result.get('avg_confidence', 0) or 0
+                min_confidence = result.get('min_confidence', 0) or 0
+                max_confidence = result.get('max_confidence', 0) or 0
+                
+                percentage = 0
+                if total_sessions > 0:
+                    percentage = round((session_count / total_sessions) * 100, 2)
+                
                 label_stats.append({
                     'label': result['_id'],
-                    'count': result['count'],
-                    'percentage': round((result['count'] / total_classifications) * 100, 2),
-                    'avg_confidence': round(result['avg_confidence'], 3),
-                    'min_confidence': round(result['min_confidence'], 3),
-                    'max_confidence': round(result['max_confidence'], 3)
+                    'count': session_count,
+                    'session_count': session_count,
+                    'percentage': percentage,
+                    'avg_confidence': round(avg_confidence, 3),
+                    'min_confidence': round(min_confidence, 3),
+                    'max_confidence': round(max_confidence, 3)
                 })
             
             return {
-                'total_classifications': total_classifications,
+                'total_classifications': total_sessions,
+                'total_sessions': total_sessions,
+                'total_messages': total_messages,
                 'unique_labels': len(results),
                 'label_distribution': label_stats,
                 'tenant_name': self.tenant.tenant_name,

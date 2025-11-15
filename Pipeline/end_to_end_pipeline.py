@@ -5208,25 +5208,46 @@ class EndToEndPipeline:
         """
         try:
             import os
-            import glob            
-            models_dir = "models"
-            if not os.path.exists(models_dir):
-                print("⚠️ Directory models/ non trovata, nessun modello da caricare")
+            import glob
+
+            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+            candidate_dirs = []
+
+            # Directory relative al repository e alla working directory corrente
+            repo_models_dir = os.path.join(project_root, 'models')
+            legacy_models_dir = os.path.abspath('models')
+            for path in (repo_models_dir, legacy_models_dir):
+                if path and path not in candidate_dirs:
+                    candidate_dirs.append(path)
+
+            # Directory derivata dalla variabile TRAINING_DATA_DIR / TRAINING_LOG_DIR (per QualityGate)
+            env_dir = os.getenv('TRAINING_DATA_DIR') or os.getenv('TRAINING_LOG_DIR')
+            if env_dir:
+                env_models_dir = os.path.join(os.path.abspath(env_dir), 'models')
+                if env_models_dir not in candidate_dirs:
+                    candidate_dirs.append(env_models_dir)
+
+            existing_dirs = [d for d in candidate_dirs if d and os.path.isdir(d)]
+            if not existing_dirs:
+                print("⚠️ Nessuna directory modelli disponibile; salto il caricamento ML")
                 return
-            
-            # 🔧 FIX: Cerca modelli con entrambi i pattern (slug minuscolo E name capitalizzato)
-            # Pattern 1: tenant_slug (es. "humanitas_*")
-            pattern_slug = os.path.join(models_dir, f"{self.tenant_slug}_*_config.json")
-            # Pattern 2: tenant_name capitalizzato (es. "Humanitas_*")
-            pattern_name = os.path.join(models_dir, f"{self.tenant.tenant_name}_*_config.json")
-            
-            config_files = glob.glob(pattern_slug) + glob.glob(pattern_name)
-            
+
+            config_files = []
+            for models_dir in existing_dirs:
+                # 🔧 FIX: Cerca modelli con entrambi i pattern (slug minuscolo E name capitalizzato)
+                pattern_slug = os.path.join(models_dir, f"{self.tenant_slug}_*_config.json")
+                pattern_name = os.path.join(models_dir, f"{self.tenant.tenant_name}_*_config.json")
+                config_files.extend(glob.glob(pattern_slug))
+                config_files.extend(glob.glob(pattern_name))
+
             # Rimuovi duplicati mantenendo l'ordine
             config_files = list(dict.fromkeys(config_files))
             
             if not config_files:
-                print(f"⚠️ Nessun modello trovato per tenant '{self.tenant_slug}' (o '{self.tenant.tenant_name}') nella directory models/")
+                print(
+                    f"⚠️ Nessun modello trovato per tenant '{self.tenant_slug}' "
+                    f"(directories cercate: {', '.join(existing_dirs)})"
+                )
                 print(f"🚀 ATTIVAZIONE AUTO-TRAINING: Tentativo di addestramento automatico...")
                 
                 # Verifica se auto-training è possibile
@@ -5235,8 +5256,15 @@ class EndToEndPipeline:
                     auto_training_result = self._execute_auto_training()
                     if auto_training_result:
                         print(f"✅ Auto-training completato con successo!")
+                        # Aggiorna la lista delle directory disponibili perché l'auto-training può aver creato nuovi percorsi
+                        existing_dirs = [d for d in candidate_dirs if d and os.path.isdir(d)]
                         # Ri-tenta il caricamento del modello appena creato
-                        config_files = glob.glob(pattern_slug) + glob.glob(pattern_name)
+                        config_files = []
+                        for models_dir in existing_dirs:
+                            pattern_slug = os.path.join(models_dir, f"{self.tenant_slug}_*_config.json")
+                            pattern_name = os.path.join(models_dir, f"{self.tenant.tenant_name}_*_config.json")
+                            config_files.extend(glob.glob(pattern_slug))
+                            config_files.extend(glob.glob(pattern_name))
                         config_files = list(dict.fromkeys(config_files))
                         if config_files:
                             print(f"🔄 Ricaricamento modello auto-addestrato...")

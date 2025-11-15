@@ -38,6 +38,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'Pipeline'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'TagDatabase'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'QualityGate'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'Utils'))
+sys.path.append(os.path.join(os.path.dirname(__file__), 'Database'))
 
 # Import centralizzato di trace_all per evitare import circolari
 from Utils.tracing import trace_all
@@ -54,6 +55,14 @@ from mongo_classification_reader import MongoClassificationReader
 from prompt_manager import PromptManager
 from tool_manager import ToolManager
 from tenant import Tenant
+from tenant_db_connection_service import tenant_db_connection_service
+
+try:
+    _loaded_db_connections = tenant_db_connection_service.load_all_connections()
+    print(f"🗄️ [DB CONNECTIONS] Caricate {len(_loaded_db_connections)} configurazioni database tenant all'avvio")
+except Exception as exc:
+    print(f"⚠️ [DB CONNECTIONS] Impossibile caricare configurazioni tenant: {exc}")
+    _loaded_db_connections = {}
 
 # Import del blueprint per validazione prompt
 sys.path.append(os.path.join(os.path.dirname(__file__), 'APIServer'))
@@ -366,6 +375,89 @@ def resolve_tenant_from_identifier(identifier: str) -> Tenant:
         print("   2. Il tenant sia attivo")
         print("   3. L'identificatore sia nel formato corretto")
         raise ValueError(error_msg)
+
+
+def _parse_bool(value: Any, default: bool = False) -> bool:
+    """Parsing robusto per valori booleani provenienti da JSON/UI."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {'true', '1', 'yes', 'y', 'on'}:
+            return True
+        if normalized in {'false', '0', 'no', 'n', 'off'}:
+            return False
+    return default
+
+
+def _sanitize_db_connection_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Rimuove i segreti dal payload prima di restituirlo al frontend."""
+    sanitized = dict(config or {})
+    for secret in ('ssh_password', 'db_password', 'ssh_key', 'ssh_key_passphrase'):
+        sanitized[secret] = None
+    return sanitized
+
+
+def _merge_db_connection_payload(
+    existing: Dict[str, Any],
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Unisce payload in ingresso con configurazione esistente preservando i campi non aggiornati."""
+
+    def _pick(field: str, preserve_newlines: bool = False):
+        if field in payload:
+            value = payload[field]
+            if value is None:
+                return None
+            if isinstance(value, str):
+                if preserve_newlines:
+                    candidate = value
+                    if candidate.strip() == '':
+                        return None
+                else:
+                    candidate = value.strip()
+                    if candidate == '':
+                        return None
+                return candidate
+            return value
+        return existing.get(field)
+
+    merged: Dict[str, Any] = {}
+    merged['use_ssh_tunnel'] = _parse_bool(
+        payload.get('use_ssh_tunnel'),
+        existing.get('use_ssh_tunnel', False)
+    )
+
+    merged['ssh_host'] = _pick('ssh_host')
+    merged['ssh_username'] = _pick('ssh_username')
+    merged['ssh_auth_method'] = (_pick('ssh_auth_method') or 'password').lower()
+    merged['ssh_password'] = _pick('ssh_password')
+    merged['ssh_key_name'] = _pick('ssh_key_name')
+    merged['ssh_key'] = _pick('ssh_key', preserve_newlines=True)
+    merged['ssh_key_passphrase'] = _pick('ssh_key_passphrase')
+
+    merged['db_host'] = _pick('db_host')
+    merged['db_database'] = _pick('db_database')
+    merged['db_user'] = _pick('db_user')
+    merged['db_password'] = _pick('db_password')
+
+    merged['ssh_port'] = payload.get('ssh_port', existing.get('ssh_port'))
+    merged['db_port'] = payload.get('db_port', existing.get('db_port'))
+
+    for field in ('ssh_port', 'db_port'):
+        value = merged.get(field)
+        if value is None:
+            continue
+        try:
+            merged[field] = int(value)
+        except (TypeError, ValueError):
+            merged[field] = value
+
+    return merged
 
 # Registrazione blueprint per validazione prompt
 app.register_blueprint(prompt_validation_bp, url_prefix='/api/prompt-validation')
@@ -911,6 +1003,32 @@ class ClassificationService:
                 print(f"✅ Pipeline {cache_key} inizializzata")
         
         return self.pipelines[cache_key]
+
+    def reload_pipeline_models(self, client_name: str) -> bool:
+        """
+        Forza il ricaricamento dei modelli ML per il tenant richiesto, se la pipeline è già in cache.
+        
+        Returns:
+            True se il reload è andato a buon fine, False altrimenti.
+        """
+        try:
+            tenant, cache_key = self._resolve_tenant(client_name)
+        except Exception as e:
+            print(f"⚠️ Impossibile risolvere tenant '{client_name}' per reload modelli: {e}")
+            return False
+
+        pipeline = self.pipelines.get(cache_key)
+        if not pipeline:
+            print(f"ℹ️ Nessuna pipeline cache trovata per {client_name} ({cache_key}), salto reload")
+            return False
+
+        try:
+            pipeline._try_load_latest_model()
+            print(f"🔁 Modelli ML ricaricati per tenant {tenant.tenant_name}")
+            return True
+        except Exception as e:
+            print(f"⚠️ Errore reload modelli per {tenant.tenant_name}: {e}")
+            return False
     
     def get_quality_gate(self, client_name: str, user_thresholds: Dict[str, float] = None) -> QualityGateEngine:
         """
@@ -3298,6 +3416,71 @@ def api_get_review_stats(client_name: str):
             'client': client_name
         }), 500
 
+@app.route('/api/tenants/<tenant_identifier>/db-connection', methods=['GET'])
+def api_get_tenant_db_connection(tenant_identifier: str):
+    """Recupera la configurazione database (con eventuale tunnel SSH) per un tenant."""
+    try:
+        tenant = resolve_tenant_from_identifier(tenant_identifier)
+        config = tenant_db_connection_service.get_connection_config(
+            tenant.tenant_id,
+            tenant.tenant_slug,
+        ) or {}
+
+        return jsonify({
+            'success': True,
+            'configuration': _sanitize_db_connection_config(config),
+            'metadata': {
+                'tenant_id': tenant.tenant_id,
+                'tenant_slug': tenant.tenant_slug,
+                'tenant_name': tenant.tenant_name,
+            }
+        })
+    except ValueError as ve:
+        return jsonify({'success': False, 'error': str(ve)}), 404
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': 'Errore recupero configurazione database'}), 500
+
+
+@app.route('/api/tenants/<tenant_identifier>/db-connection', methods=['POST'])
+def api_save_tenant_db_connection(tenant_identifier: str):
+    """Salva (o aggiorna) la configurazione database/SSH per un tenant."""
+    try:
+        tenant = resolve_tenant_from_identifier(tenant_identifier)
+        payload = request.get_json(silent=True)
+
+        if payload is None or not isinstance(payload, dict):
+            return jsonify({'success': False, 'error': 'Payload JSON non valido'}), 400
+
+        existing = tenant_db_connection_service.get_connection_config(
+            tenant.tenant_id,
+            tenant.tenant_slug,
+        ) or {}
+
+        merged_payload = _merge_db_connection_payload(existing, payload)
+
+        updated = tenant_db_connection_service.save_connection_config(
+            tenant_id=tenant.tenant_id,
+            tenant_slug=tenant.tenant_slug,
+            payload=merged_payload,
+        )
+
+        return jsonify({
+            'success': True,
+            'configuration': _sanitize_db_connection_config(updated),
+            'metadata': {
+                'tenant_id': tenant.tenant_id,
+                'tenant_slug': tenant.tenant_slug,
+                'tenant_name': tenant.tenant_name,
+            }
+        })
+    except ValueError as ve:
+        return jsonify({'success': False, 'error': str(ve)}), 400
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': 'Errore salvataggio configurazione database'}), 500
+
+
 @app.route('/api/tenants', methods=['GET'])
 def get_tenants():
     """
@@ -4498,6 +4681,9 @@ def api_retrain_model(client_name: str):
         # Avvia riaddestramento manuale
         result = quality_gate.trigger_manual_retraining()
         
+        if result.get('success'):
+            classification_service.reload_pipeline_models(client_name)
+        
         status_code = 200 if result['success'] else 400
         
         print(f"🔄 Risultato riaddestramento {client_name}: {result['message']}")
@@ -5084,6 +5270,7 @@ def api_manual_retrain(client_name: str):
         success = pipeline.manual_retrain_model(force=force)
         
         if success:
+            classification_service.reload_pipeline_models(client_name)
             return jsonify({
                 'success': True,
                 'message': f'Riaddestramento del modello ML completato per {client_name}',

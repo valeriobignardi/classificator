@@ -8,6 +8,61 @@ const API_BASE_URL = '/api';
 
 const DEV_BASE_URL = '';
 
+export interface TenantDbConnectionConfig {
+  tenant_id?: string;
+  tenant_slug?: string;
+  tenant_name?: string;
+  use_ssh_tunnel: boolean;
+  ssh_host?: string | null;
+  ssh_port?: number | null;
+  ssh_username?: string | null;
+  ssh_auth_method?: 'password' | 'key' | 'both';
+  ssh_password?: string | null;
+  ssh_key_name?: string | null;
+  ssh_key?: string | null;
+  ssh_key_passphrase?: string | null;
+  db_host?: string | null;
+  db_port?: number | null;
+  db_database?: string | null;
+  db_user?: string | null;
+  db_password?: string | null;
+  has_ssh_password?: boolean;
+  has_ssh_key?: boolean;
+  has_db_password?: boolean;
+  has_ssh_key_passphrase?: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface TenantDbConnectionMetadata {
+  tenant_id: string;
+  tenant_slug: string;
+  tenant_name: string;
+}
+
+export interface TenantDbConnectionResponse {
+  success: boolean;
+  configuration: TenantDbConnectionConfig;
+  metadata: TenantDbConnectionMetadata;
+}
+
+export type TenantDbConnectionSavePayload = {
+  use_ssh_tunnel?: boolean;
+  ssh_host?: string | null;
+  ssh_port?: number | string | null;
+  ssh_username?: string | null;
+  ssh_auth_method?: 'password' | 'key' | 'both';
+  ssh_password?: string | null;
+  ssh_key_name?: string | null;
+  ssh_key?: string | null;
+  ssh_key_passphrase?: string | null;
+  db_host?: string | null;
+  db_port?: number | string | null;
+  db_database?: string | null;
+  db_user?: string | null;
+  db_password?: string | null;
+};
+
 class ApiService {
   private async handleRequest<T>(request: Promise<any>): Promise<T> {
     try {
@@ -133,6 +188,18 @@ class ApiService {
       axios.get(`${API_BASE_URL}/tenants`)
     );
     return response.tenants;
+  }
+
+  async getTenantDbConnection(tenantId: string): Promise<TenantDbConnectionResponse> {
+    return this.handleRequest(
+      axios.get(`${API_BASE_URL}/tenants/${tenantId}/db-connection`)
+    );
+  }
+
+  async saveTenantDbConnection(tenantId: string, payload: TenantDbConnectionSavePayload): Promise<TenantDbConnectionResponse> {
+    return this.handleRequest(
+      axios.post(`${API_BASE_URL}/tenants/${tenantId}/db-connection`, payload)
+    );
   }
 
   async getLabelStatistics(tenant_id: string): Promise<any> {

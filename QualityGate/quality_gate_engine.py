@@ -679,7 +679,7 @@ class QualityGateEngine:
         with open(self.training_log_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(decision_log, ensure_ascii=False) + '\n')
 
-        # 🆕 Aggiorna il file di training ML con la correzione umana (sostituisce la label LLM)
+        # 🆕 Aggiorna il file di training ML con tutte le sessioni toccate (rappresentante + propagati)
         try:
             project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
             training_dir = os.path.join(project_root, 'training_files')
@@ -691,19 +691,52 @@ class QualityGateEngine:
                 if files:
                     latest_training_file = max(files, key=os.path.getmtime)
                     try:
+                        session_updates = []
+                        _now = datetime.now().isoformat()
+
+                        # Aggiornamento per il rappresentante revisionato
+                        session_updates.append({
+                            'session_id': true_session_id,
+                            'label': human_decision,
+                            'review_source': 'human_review_representative',
+                            'propagation_confidence': None,
+                            'timestamp': _now
+                        })
+
+                        # Aggiornamento per le sessioni propagate (stessa etichetta)
+                        for propagated_id in (result.get("propagated_session_ids") or []):
+                            if not propagated_id:
+                                continue
+                            session_updates.append({
+                                'session_id': propagated_id,
+                                'label': human_decision,
+                                'review_source': 'human_review_propagation',
+                                'propagation_confidence': propagation_confidence,
+                                'timestamp': _now
+                            })
+
                         with open(latest_training_file, 'r', encoding='utf-8') as _f:
                             _data = json.load(_f)
                         _records = _data.get('training_records', [])
                         _updated = False
-                        _now = datetime.now().isoformat()
+                        update_map = {entry['session_id']: entry for entry in session_updates if entry.get('session_id')}
+
                         for _rec in _records:
-                            if _rec.get('session_id') == true_session_id:
-                                _rec['human_corrected_label'] = human_decision
-                                _rec['human_reviewed'] = True
-                                _rec['needs_review'] = False
-                                _rec['last_updated'] = _now
-                                _updated = True
-                                break
+                            sid = _rec.get('session_id')
+                            if not sid or sid not in update_map:
+                                continue
+
+                            entry = update_map[sid]
+                            _rec['human_corrected_label'] = entry['label']
+                            _rec['human_reviewed'] = True
+                            _rec['needs_review'] = False
+                            _rec['last_updated'] = entry['timestamp']
+                            if entry.get('review_source'):
+                                _rec['review_source'] = entry['review_source']
+                            if entry.get('propagation_confidence') is not None:
+                                _rec['propagation_confidence'] = entry['propagation_confidence']
+                            _updated = True
+
                         if _updated:
                             _meta = _data.get('metadata', {})
                             _meta['last_human_update'] = _now
@@ -711,11 +744,11 @@ class QualityGateEngine:
                             with open(latest_training_file, 'w', encoding='utf-8') as _f:
                                 json.dump(_data, _f, indent=2, ensure_ascii=False)
                             self.logger.info(
-                                f"✅ Training file aggiornato con correzione per {true_session_id}: {latest_training_file}"
+                                f"✅ Training file aggiornato con {len(update_map)} sessioni corrette: {latest_training_file}"
                             )
                         else:
                             self.logger.info(
-                                f"ℹ️ Sessione {true_session_id} non presente in {latest_training_file} (nessun update)"
+                                f"ℹ️ Nessuna delle sessioni aggiornate è presente in {latest_training_file}"
                             )
                     except Exception as _upd_e:
                         self.logger.warning(
@@ -1548,10 +1581,17 @@ class QualityGateEngine:
                         
                         # Valida che la decisione abbia i campi necessari
                         required_fields = ['session_id', 'human_decision']
-                        if all(field in decision for field in required_fields):
-                            training_data.append(decision)
-                        else:
+                        if not all(field in decision for field in required_fields):
                             self.logger.debug(f"Decisione incompleta alla riga {line_num}: campi mancanti")
+                            continue
+
+                        # Escludi classificazioni automatiche/log generate senza intervento umano
+                        source = str(decision.get('source', '')).lower()
+                        reason = str(decision.get('reason', '')).lower()
+                        if 'automatic' in source or 'automatic_classification' in reason:
+                            continue
+
+                        training_data.append(decision)
                             
                     except json.JSONDecodeError as e:
                         self.logger.warning(f"Errore parsing JSON alla riga {line_num}: {e}")

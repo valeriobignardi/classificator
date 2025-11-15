@@ -28,6 +28,7 @@ import ReviewQueueThresholdManager from './components/ReviewQueueThresholdManage
 import AIConfigurationManager from './components/AIConfigurationManager';
 import TrainingFilesViewer from './components/TrainingFilesViewer';
 import TenantSelector from './components/TenantSelector';
+import TenantDbConnectionPanel from './components/TenantDbConnectionPanel';
 import { TenantProvider, useTenant } from './contexts/TenantContext';
 import { apiService } from './services/apiService';
 import { ReviewCase } from './types/ReviewCase';
@@ -256,6 +257,17 @@ function AppContent() {
                   ⚙️ Configurazione AI
                 </Typography>
                 <AIConfigurationManager open={true} />
+              </Box>
+
+              {/* Separatore */}
+              <Box sx={{ borderTop: '1px solid #e0e0e0', my: 2 }} />
+
+              {/* Sezione Connessione Database Tenant */}
+              <Box>
+                <Typography variant="h5" sx={{ mb: 2, fontWeight: 600 }}>
+                  🔐 Connessione Database Tenant
+                </Typography>
+                <TenantDbConnectionPanel />
               </Box>
 
               {/* Separatore */}

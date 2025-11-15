@@ -35,10 +35,43 @@ class LettoreConversazioni:
             
         Ultima modifica: 2025-08-29 - Convertito a principio universale
         """
-        self.connettore = MySqlConnettore()
         self.tenant = tenant
         self.tenant_id = tenant.tenant_id if tenant else None  # Estrae tenant_id dall'oggetto
-        self.schema = schema
+        tenant_slug = getattr(tenant, 'tenant_slug', None)
+        self.connettore = MySqlConnettore(
+            tenant=tenant,
+            tenant_id=self.tenant_id,
+            tenant_slug=tenant_slug or schema
+        )
+
+        # Determina lo schema/database da utilizzare
+        default_schema = schema or tenant_slug
+        dynamic_config = self.connettore.get_dynamic_config()
+        if dynamic_config and dynamic_config.get('db_database'):
+            self.schema = dynamic_config['db_database']
+            if default_schema and self.schema != default_schema:
+                print(
+                    f"ℹ️ [LETTORE] Override schema: '{default_schema}' → '{self.schema}' "
+                    f"in base alla configurazione tenant"
+                )
+        else:
+            self.schema = default_schema or self.connettore.get_database_name()
+
+        if not self.schema:
+            # Fallback finale per evitare query senza schema
+            self.schema = self.connettore.get_database_name()
+
+        if dynamic_config and dynamic_config.get('use_ssh_tunnel'):
+            print(
+                f"🔐 [LETTORE] SSH tunnel attivo per tenant {self.tenant_id} - "
+                f"DB remoto {dynamic_config.get('db_host')}:{dynamic_config.get('db_port')}/"
+                f"{dynamic_config.get('db_database')}"
+            )
+        else:
+            print(
+                f"🔗 [LETTORE] Connessione diretta schema '{self.schema}' "
+                f"per tenant {self.tenant_id or 'default'}"
+            )
         
         # Carica configurazione
         if not config_path:

@@ -226,6 +226,22 @@ class AdvancedEnsembleClassifier:
         print(f"   🎯 Confidence threshold: {confidence_threshold}")
         print(f"   🔄 Adaptive weights: {adaptive_weights}")
         print(f"   👤 Disaccordi gestiti da QualityGateEngine")
+
+    def has_trained_ml_model(self) -> bool:
+        """
+        Indica se l'ensemble ha un modello ML allenato e pronto all'uso.
+
+        Returns:
+            True se è presente un classificatore ML con classi addestrate.
+        """
+        try:
+            return (
+                self.ml_ensemble is not None and
+                hasattr(self.ml_ensemble, 'classes_') and
+                len(getattr(self.ml_ensemble, 'classes_', [])) > 0
+            )
+        except Exception:
+            return False
     
     def train_ml_ensemble_with_descriptions(self, X_train: np.ndarray, y_train: np.ndarray, 
                                            tag_descriptions: Dict[str, str] = None) -> Dict[str, Any]:

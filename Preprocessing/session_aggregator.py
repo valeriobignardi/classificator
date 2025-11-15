@@ -70,6 +70,9 @@ class SessionAggregator:
             print(f"🏥 [SESSION AGGREGATOR] Fallback completato: {self.tenant.tenant_name}")
         
         self.lettore = LettoreConversazioni(tenant=self.tenant, schema=self.schema)
+        # Allinea schema con quello effettivo usato dal lettore (può essere override da configurazione tenant)
+        self.schema = getattr(self.lettore, 'schema', self.schema)
+        print(f"📚 [SESSION AGGREGATOR] Utilizzerò schema '{self.schema}' per le query MySQL")
         
         # 🆕 NUOVA LOGICA: Usa helper tenant se tenant_id è fornito
         if tenant_id:
